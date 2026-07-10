@@ -15,15 +15,13 @@ const repos =
   Array.isArray(cfg.repos) && cfg.repos.length
     ? cfg.repos
     : cfg.repoRoot
-    ? [{ name: cfg.repoRoot.split('/').filter(Boolean).pop() || cfg.repoRoot, root: cfg.repoRoot, primary: true }]
+    ? [{ name: cfg.repoRoot.split('/').filter(Boolean).pop() || cfg.repoRoot, root: cfg.repoRoot }]
     : []
-const primaryRepo = repos.find(r => r.primary) || repos[0]
-const primaryRepoRoot = primaryRepo ? primaryRepo.root : cfg.repoRoot
 
 function repoList() {
   if (!repos.length) return `Repo root: ${cfg.repoRoot}`
   return repos
-    .map(r => `- ${r.name}${r.primary ? ' (primary)' : ''} → ${r.root}`)
+    .map(r => `- ${r.name} → ${r.root}`)
     .join('\n')
 }
 
@@ -137,7 +135,7 @@ ${repoList()}
 
 Read the original ask first, then the whole plan, then verify claims against the actual codebase(s) where they matter.
 
-Your lens (your primary hunting ground beyond the rules): ${LENSES[which]}.
+Your lens (your main hunting ground beyond the rules): ${LENSES[which]}.
 ${which === 'b' ? `\nSoundness — multi-repo checks specific to this run: verify each deliverable has a \`repo:\` field naming one of the target repos above; verify each deliverable's \`base:\` obeys the cross-repo base rule (it is a branch in the SAME repo as the deliverable, or that repo's \`main\` for roots and for cross-repo children — a deliverable can never base on a branch in a different repo); and verify that no cross-repo dep is a true code dependency (cross-repo deps are ordering-only — flag any cross-repo child that would need its parent's unmerged code, since it bases on its own repo's \`main\` and does not have that code).\n` : ''}
 
 Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
@@ -167,7 +165,7 @@ const plan = await agent(
   `You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
 
 Source plan (the original ask): ${cfg.sourcePlan}
-Target repos (the work spans these; the first-flagged is the primary repo whose namespace holds the run state):
+Target repos (the run state is keyed by the run slug, not by any repo; the work spans these repos — an unordered set):
 ${repoList()}
 Output directory (already scaffolded): ${cfg.dir}
 Conventions you MUST follow for every file format: ${cfg.conventionsFile}
@@ -178,7 +176,7 @@ Procedure:
 3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
 4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
 5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
-6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, the repos: map listing every target repo above per the conventions — name, root, config path, and primary: true on the primary; the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
+6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
 
 Return the deliverable list and a one-paragraph summary.`,
   { label: 'planner', schema: PLAN_SCHEMA }

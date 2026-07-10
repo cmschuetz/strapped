@@ -15,35 +15,32 @@ Create/update stacked PRs for `done` deliverables of one strapped run. Formats a
 
 ## Arguments
 
-`$ARGUMENTS`: `<slug> [--dry-run] [--no-push] [--update] [--primary-repo <name>]`
+`$ARGUMENTS`: `<slug> [--dry-run] [--no-push] [--update]`
 
 - `--dry-run`: print every git/gh command and every PR body; execute nothing.
 - `--no-push`: prepare bodies and print commands but skip `git push` and `gh pr create` (alias-level equivalent of `--dry-run`; both mean nothing leaves this machine).
 - `--update`: instead of creating PRs, propagate parent-branch changes down the stack (see below).
-- `--primary-repo <name>`: disambiguator used only when the `<slug>` resolves to more than one primary-repo namespace under `<stateRoot>` (see below).
 
 ## Locating the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution*. **Never** derive the primary repo from `git rev-parse` on the cwd:
+Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd:
 
-- **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`. Zero → stop (`slug <slug> not found under <stateRoot>`); exactly one → use it; more than one → present the matched primary-repo namespaces via **AskUserQuestion** and select `<stateRoot>/<chosen>/<slug>/` from the answer, or use `--primary-repo <name>` directly when given (skipping the prompt).
-- **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<repoAbs>/<stateRoot>/` for the current repo; state at `<runRoot>/<slug>/`.
+- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`. Absent → stop (`slug <slug> not found under <stateRoot>`).
+- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe its `manifest.md` for the current repo.
 
 ## Resolving the repos map
 
-Read the manifest `repos:` map — each entry gives a repo `name`, absolute `root`, `config`, and `primary` flag. Resolve each deliverable's repo root via `repos[<deliverable.repo>]`; all of that deliverable's git/gh operations run in that repo (`git -C <repoRoot> …`).
-
-**Legacy on-disk back-compat** (per the conventions): when `repos:` is absent, synthesize a single-entry map whose sole entry is the primary repo derived from the resolved run root, flagged `primary: true`. When a deliverable has no `repo:`, default it to that synthesized primary. A pre-existing single-repo run thus still PRs unchanged.
+Read the manifest `repos:` map (**required**) — each entry gives a repo `name`, absolute `root`, and `config`. Resolve each deliverable's required `repo:` to its repo root via `repos[<deliverable.repo>]`; all of that deliverable's git/gh operations run in that repo (`git -C <repoRoot> …`).
 
 ## Create mode (default)
 
-1. Read the manifest and all deliverable frontmatter; resolve the `repos:` map (synthesizing per the back-compat rule when absent). Candidates: `status: done` nodes whose parents are all `done`, `pr-open`, or `merged`. Order them topologically (parents before children).
+1. Read the manifest and all deliverable frontmatter; resolve the `repos:` map. Candidates: `status: done` nodes whose parents are all `done`, `pr-open`, or `merged`. Order them topologically (parents before children).
 2. For each candidate, generate a PR body from the deliverable file:
    - One-paragraph summary (from the deliverable title + plan Context).
    - The acceptance criteria as a checklist.
    - A `## Stack` table of the whole DAG spanning **all** repos: id, title, **repo**, PR link (or `pending`), deps. Group or label rows by repo.
    - For non-roots **whose parent is in the same repo**: `Depends on #<parent PR number>` on its own line. A child in a *different* repo from its parent has no `Depends on #` line (there is no cross-repo branch stacking — it rooted on `main`). If a same-repo parent has no PR yet it is created earlier in this same topological pass, so the number exists by the time the child body is built.
-3. Per node, resolve `<repoRoot>` = `repos[<deliverable.repo>].root` and run push/create **from that deliverable's own repo** (not the worktree, not "the primary repo"). Base is the parent's branch **only when the parent is in the same repo**; a cross-repo child (or a root) bases on that repo's `main`:
+3. Per node, resolve `<repoRoot>` = `repos[<deliverable.repo>].root` and run push/create **from that deliverable's own repo** (not the worktree, not some other repo). Base is the parent's branch **only when the parent is in the same repo**; a cross-repo child (or a root) bases on that repo's `main`:
    ```bash
    git -C <repoRoot> push -u origin <branch>
    gh -C <repoRoot> pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>
