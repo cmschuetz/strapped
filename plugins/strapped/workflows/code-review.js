@@ -95,7 +95,7 @@ Procedure:
 3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
 ${cfg.validations && cfg.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${cfg.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
 
-Your lens (your primary hunting ground beyond the rules): ${LENSES[which]}.
+Your lens (your main hunting ground beyond the rules): ${LENSES[which]}.
 
 Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly:
 ${ruleBlock(rules)}

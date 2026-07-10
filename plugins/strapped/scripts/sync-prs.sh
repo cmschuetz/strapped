@@ -16,25 +16,17 @@ state_root="${STRAPPED_STATE_ROOT:-}"
 
 case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
 
-# Absolute stateRoot → shared mode (run root <stateRoot>/<repo>). Relative → legacy repo-relative.
+# Absolute stateRoot → shared mode. Relative → repo-relative. Run state lives under <stateRoot>/runs/.
 case "$state_root" in
-  /*)
-    shared=1
-    run_root="$state_root"
-    ;;
+  /*) ;;
   *)
-    shared=0
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-    run_root="$state_root"
     ;;
 esac
-[ -d "$run_root" ] || exit 0
+runs_root="$state_root/runs"
+[ -d "$runs_root" ] || exit 0
 
-if [ "$shared" = 1 ]; then
-  files=$(grep -l '^status: pr-open$' "$run_root"/*/*/deliverables/*.md 2>/dev/null) || exit 0
-else
-  files=$(grep -l '^status: pr-open$' "$run_root"/*/deliverables/*.md 2>/dev/null) || exit 0
-fi
+files=$(grep -l '^status: pr-open$' "$runs_root"/*/deliverables/*.md 2>/dev/null) || exit 0
 [ -n "$files" ] || exit 0
 
 gh auth status >/dev/null 2>&1 || exit 0
@@ -69,11 +61,7 @@ for f in $files; do
 done
 
 if [ "$flipped_any" = 1 ]; then
-  if [ "$shared" = 1 ]; then
-    slug_dirs=("$run_root"/*/*/)
-  else
-    slug_dirs=("$run_root"/*/)
-  fi
+  slug_dirs=("$runs_root"/*/)
   for d in "${slug_dirs[@]}"; do
     [ -d "$d" ] || continue
     slug=$(basename "$d")
