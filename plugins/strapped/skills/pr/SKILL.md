@@ -51,7 +51,7 @@ Read the manifest `repos:` map (**required**) — each entry gives a repo `name`
 
 ## Update mode (`--update`)
 
-For when a parent branch changed after children branched (the only sanctioned way per the conventions' freeze rule):
+For when a parent branch changed after children branched (the only sanctioned way per the conventions' freeze rule). This is also the sanctioned cascade after `/strapped:feedback <slug>` applies review-feedback fixes on a parent branch: run `--update` ONCE for the whole batch to rebase/re-push the stacked children — the feedback flow changes no branches beyond the fix commits and never rebases itself.
 
 The rebase applies to **same-repo parent→child edges only**. A cross-repo child (its `repo:` differs from its parent's) bases on its own repo's `main` — it never stacked on the parent's branch, so there is nothing to rebase. **Skip cross-repo edges entirely** in staleness detection and rebasing.
 

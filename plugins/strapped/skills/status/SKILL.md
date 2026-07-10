@@ -40,7 +40,7 @@ Read the manifest `repos:` map (**required**) — each entry gives a repo `name`
    - An ASCII DAG sketch with per-node status markers, grouped or labeled by repo where it aids reading.
    - A table: id, title, status, **repo**, deps, branch, worktree (✓/missing), PR, rounds used.
    - Parked nodes with `parked_reason` and their blocked descendants.
-   - Latest review-round outcomes (plan rounds and per-deliverable code rounds) from `reviews/`.
+   - Latest review-round outcomes (plan rounds and per-deliverable code rounds) from `reviews/`. If a run has had feedback applied, also surface the feedback rounds — `feedback-round-<N>.md` and `<Did>-code-round-<N>-feedback.md` records — and each node's `feedback_rounds_used` count alongside `review_rounds_used`, plus whether any deliverable carries a `## Feedback addendum` section.
    - Unsynthesized critique count from `critiques/user-critiques.md`.
 ## No-slug mode
 

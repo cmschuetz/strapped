@@ -9,6 +9,8 @@ export const meta = {
 
 const cfg = typeof args === 'string' ? JSON.parse(args) : args
 
+const recordSuffix = cfg.recordSuffix || ''
+
 const IMPLEMENT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -27,6 +29,22 @@ function digest(seen) {
 }
 
 function implementPrompt(item) {
+  if (cfg.addendumMode) {
+    return `You are the fix agent applying PR-review feedback to deliverable ${item.id} of strapped run "${cfg.slug}". This deliverable was ALREADY implemented on its branch; you are NOT re-implementing it from scratch.
+
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
+
+1. Read your deliverable plan in full: ${item.planFile} — focus on its \`## Feedback addendum\` section, which lists the concrete fix tasks synthesized from the PR review comments.
+2. Read the shared research digest: ${cfg.dir}/research.md
+3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
+${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.resumeNote}\n` : ''}
+Apply ONLY the \`## Feedback addendum\` section to the EXISTING code on this branch — a targeted change addressing the review feedback. Do NOT re-implement the deliverable from scratch and do NOT touch anything outside the addendum's scope. Note side-discoveries in your summary instead of fixing them.
+
+Before finishing, ALL validations must pass inside the worktree:
+${item.validations.map(v => `- ${v}`).join('\n')}
+
+Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id} and the feedback fix. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+  }
   return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
 
 Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
@@ -50,7 +68,7 @@ Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, b
 
 1. Read the deliverable plan: ${item.planFile}
 2. Read the research digest: ${cfg.dir}/research.md
-3. Read the full round record: ${cfg.dir}/reviews/${item.id}-code-round-${round}.md
+3. Read the full round record: ${cfg.dir}/reviews/${item.id}-code-round-${round}${recordSuffix}.md
 
 Confirmed findings you must fix:
 ${JSON.stringify(findings.map(f => ({ id: f.id, key: f.key, severity: f.severity, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
@@ -101,6 +119,7 @@ async function reviewFixLoop(state) {
       rules: cfg.rulesByRound[round - 1],
       confidenceMin: cfg.confidenceMin,
       seenDigest: digest(seen),
+      recordSuffix,
     })
 
   let lastRoundFixedAll = false

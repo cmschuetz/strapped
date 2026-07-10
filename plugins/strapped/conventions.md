@@ -80,6 +80,7 @@ base: strapped/<slug>/D1-<kebab>          # a branch IN repo:; or main for roots
 worktree: /abs/path | null                # resumability marker
 pr: null | <url>
 review_rounds_used: 0
+feedback_rounds_used: 0                   # PR-feedback code-review rounds (see Feedback loop); separate from review_rounds_used
 parked_reason: null
 estimated_diff_lines: 450                 # estimate of MEANINGFUL diff (excludes generated code, dep bumps, fixtures)
 ---
@@ -102,7 +103,7 @@ Named tests mapped to ACs. Integration-style per CLAUDE.md: public interfaces, n
 
 `repo:` is **required** (no defaulting) and must be one of the manifest `repos[].name`. Every repo-scoped value for the deliverable derives from it: `manifest.repos[repo]` supplies the repo root and config path, and that config supplies `worktreeRoot`, `validations`, and `provisioning`. For a single-repo plan `repo:` is that one repo.
 
-Status lifecycle: `pending → ready → in-progress → implemented → in-review → (fixing ⇄ in-review) → done → pr-open → merged`, with `parked` reachable from any implementation state. `ready` = all deps `done`.
+Status lifecycle: `pending → ready → in-progress → implemented → in-review → (fixing ⇄ in-review) → done → pr-open → merged`, with `parked` reachable from any implementation state. `ready` = all deps `done`. The [Feedback loop](#feedback-loop) adds a **re-entry edge** `pr-open → fixing ⇄ in-review → pr-open`: an already-open PR whose review requested changes drops back into a `fixing`/`in-review` sub-cycle for the feedback fix, then returns to `pr-open` (the PR is still open; `/strapped:pr --update` re-pushes the branch, it does not reopen). Feedback re-entry never goes back through `pending`/`ready`/`in-progress`, and its rounds increment `feedback_rounds_used`, not `review_rounds_used`.
 
 ## Review round records
 
@@ -296,6 +297,25 @@ This is a hard rule reviewers and the planner enforce.
 Topological order over `done` deliverables. Per node: push/create in the **deliverable's own repo** — `git -C <deliverableRepoRoot> push -u origin <branch>`, then `gh pr create --head <branch> --base <parent-branch|main>` in that repo. Parent→child branch stacking only applies **within a single repo**; a cross-repo child roots on `main`, so its PR bases on `main` (not the parent branch) — no cross-repo rebase. PR body: summary + ACs + a `Stack:` table of the whole DAG with PR links + `Depends on #<parent-PR>` for same-repo non-roots. The `Stack:` table may span repos; group or label rows by repo. Record the URL in frontmatter, set status `pr-open`. `--dry-run` prints every git/gh command and PR body without pushing anything.
 
 The `pr-open → merged` transition is owned by `scripts/sync-prs.sh`, run automatically by the plugin's SessionStart hook (startup/resume only, never per subagent): it checks each `pr-open` deliverable's PR via `gh`, flips merged ones, warns on closed-unmerged or changes-requested PRs, and hints at newly unblocked children. `/strapped:pr` performs the same idempotent flip when invoked manually.
+
+## Feedback loop
+
+`/strapped:feedback <slug> [--deliverable <Did>]... [--pr <url>]... [--dry-run] [--max-rounds N]` closes the loop from PR review comments back into the plan→implement lifecycle. It is built ENTIRELY from existing building blocks — it hand-rolls no planning or fix logic.
+
+**GitHub via `gh`.** All PR data comes from `gh` (`gh api repos/{owner}/{repo}/pulls/{n}/comments|reviews`, `gh pr view --json comments`). There is no GitLab/`glab` code path and no provider-abstraction layer.
+
+Flow, **batched over the whole run** (stacked-PR comments are interdependent — never process one PR at a time as an isolated unit):
+
+1. **Fetch** review comments from every in-scope deliverable PR (default: every deliverable with a `pr:` URL that has review comments or a request-changes/comment review; `--deliverable`/`--pr` narrows). THREE categories: line-anchored review comments (`/pulls/{n}/comments`), review-SUBMISSION bodies (`/pulls/{n}/reviews` — `state` + `body`, where a CHANGES_REQUESTED reviewer states the overarching problem; fed into synthesis as GLOBAL feedback), and global/issue comments (`gh pr view --json comments`). The anchored `path` is carried so synthesis can reassign a comment cross-deliverable.
+2. **Synthesize cross-deliverable addenda** — ONE consolidated plan. A comment left on one PR can produce a fix task on a DIFFERENT deliverable (routed via each deliverable's `Files to touch` map); each fix is appended as a `## Feedback addendum` section on the CORRECT **existing** deliverable file. **No new deliverables, branches, or worktrees are minted.**
+3. **Adversarial review** the synthesized addenda through the SAME machinery — the plan-review loop, extracted into the standalone workflow `review-loop.js` and invoked via the ambient `workflow({ scriptPath })` helper (NOT a JS `import`; a workflow file is not a loadable module). Reviewers/refute/dedup/consolidate/revise + the final-round confirmation pass run bounded by the budget. Records land as `reviews/feedback-round-<N>.md` — **distinct from** the original run's `plan-round-<N>.md`.
+4. **Explicit user approval** — the same final-review gate `/strapped:plan` uses, before any implementation. `--dry-run` stops here after printing the plan and the would-run commands, mutating nothing.
+5. **Implement in topological (stack) order** so a parent's fixes land before children rebase. Reuse `implement-wave.js` on each affected deliverable's EXISTING branch/worktree via its `addendumMode` seam (the implement stage APPLIES the `## Feedback addendum` to the existing code instead of re-implementing), and `code-review.js` threaded with a `recordSuffix` so feedback code-review rounds write `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`); `implement-wave.js` derives the fix agent's round-record READ path from the SAME suffix so writer and reader agree. Freeze rule preserved. Never force-push or merge here.
+6. **Cascade** — after fixes change a parent branch, the stacked-child rebase/re-push is the existing `/strapped:pr <slug> --update` freeze-rule path, offered ONCE for the whole batch.
+
+**Reuse mechanism.** The plan-review loop lives in `review-loop.js` (its own `export const meta` + injected ambient helpers). BOTH `plan-loop.js`'s planner phase (ask = the source plan, `roundFilePrefix: plan-round`) and `feedback-synth.js` (ask = the fetched PR review comments, artifact = the amended deliverable set, `roundFilePrefix: feedback-round`) invoke it via `workflow(cfg.reviewLoopScript ? { scriptPath: cfg.reviewLoopScript } : 'strapped-review-loop', …)` — a bare-string NAME fallback, an absolute path only ever inside `{ scriptPath }`, exactly mirroring `implement-wave.js`'s `codeReviewScript` call to `code-review.js`. Both the plan flow and the feedback flow pass the explicit absolute scriptPath (never the name fallback), honoring "scriptPath, not name". Neither invokes `strapped-plan-loop` for feedback (that would run the planner phase and clobber the addenda).
+
+**Status re-entry & counters.** Feedback enters when a deliverable is already `pr-open` (triggered off `sync-prs.sh`'s `CHANGES_REQUESTED` warning). The re-entry edge is `pr-open → fixing ⇄ in-review → pr-open`: the deliverable drops into the `fixing`/`in-review` sub-cycle for the fix, then returns to `pr-open` (its PR stays open; `--update` re-pushes the branch, it does not reopen). It never returns to `pending`/`ready`/`in-progress`. Feedback rounds use a **separate counter** `feedback_rounds_used` (a frontmatter field, default 0), NOT the original `review_rounds_used`, mirroring the separate record-file naming — so the original run's round budget/audit stays intact.
 
 ## Cleanup recipe
 

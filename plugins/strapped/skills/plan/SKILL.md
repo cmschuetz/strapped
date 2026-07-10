@@ -111,12 +111,15 @@ Invoke the `strapped-plan-loop` workflow — invoke the Workflow tool with `scri
     { "name": "<targetRepo2>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }
   ],
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
+  "reviewLoopScript": "$PLUGIN_ROOT/workflows/review-loop.js",
   "rulesByRound": [<the per-round splits from step 2>],
   "maxRounds": 3,
   "confidenceMin": 70,
   "seed": 42
 }
 ```
+
+`reviewLoopScript` is an explicit absolute scriptPath for the extracted plan-review loop (`plan-loop.js` runs its planner phase, then delegates the review loop to `review-loop.js` via `workflow(...)`). Passing it explicitly honors the "scriptPath, not name" convention — name resolution can serve a stale registration — so the plan flow never depends on the bare-string `strapped-review-loop` name fallback.
 
 `repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses `repos` to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
 

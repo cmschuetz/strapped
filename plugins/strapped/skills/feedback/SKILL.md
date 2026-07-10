@@ -1,0 +1,143 @@
+---
+name: feedback
+description: Turn a strapped run's PR review comments into reviewed, approved, implemented fixes — fetch comments across all in-scope PRs, synthesize cross-deliverable addenda, run the adversarial plan-review loop, gate on explicit approval, then apply fixes on the existing branches and offer the --update cascade
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Glob
+  - Grep
+  - Workflow
+  - AskUserQuestion
+---
+
+Drive PR review comments back into the plan→implement lifecycle for one strapped run. This skill hand-rolls no planning or fix logic: it fetches review comments, synthesizes cross-deliverable **addenda** onto EXISTING deliverable files, runs them through the SAME adversarial plan-review loop the run's original plan used (via `review-loop.js`), gates on explicit user approval, then reuses `implement-wave.js`/`code-review.js` to apply the fixes on each affected deliverable's EXISTING branch/worktree. It mints NO new deliverables/branches/worktrees and never force-pushes or merges — shipping stays a user-approved `/strapped:pr <slug> --update`.
+
+**GitHub via `gh`.** All PR data comes from `gh`; there is no GitLab/`glab` path.
+
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time (in particular the **Feedback loop** section). This skill cold-starts entirely from the run root `<runRoot>/<slug>/` plus the per-repo config.
+
+## Arguments
+
+`$ARGUMENTS`: `<slug> [--deliverable <Did>]... [--pr <url>]... [--dry-run] [--max-rounds N]`
+
+- `--deliverable <Did>` — **repeatable**; narrows the in-scope set to the named deliverable(s).
+- `--pr <url>` — **repeatable**; narrows to the given PR URL(s).
+- When neither narrowing flag is given, the in-scope set is every deliverable with a `pr:` URL that has at least one review comment or a request-changes/comment review.
+- `--dry-run` — fetch, synthesize, review, print the plan and the commands that WOULD run, then stop; mutate nothing (no addenda written, no implementation, no branch changes).
+- `--max-rounds N` — overrides both the plan-review budget (for the addenda review) and the code-review budget (for the fix path); defaults to the manifest's `plan_rounds`/`code_rounds` (3).
+
+## Step 0 — Locate the run root (cwd-independent)
+
+Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd:
+
+- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
+- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe `<repoAbs>/<stateRoot>/runs/<slug>/manifest.md` for the current repo.
+
+If `manifest.md` is absent, stop with a helpful message (slug not found under `<stateRoot>`; point at `/strapped:plan`).
+
+## Step 1 — Cold-start from disk
+
+Read `manifest.md` and every `deliverables/*.md` frontmatter. Read the manifest `repos:` map (**required**); for **each** repo resolve its per-repo config per the conventions' Config resolution (shared mode `<stateRoot>/repos/<repo>/config.json`, repo-relative mode `<rAbs>/.claude/strapped-config.json`), building a lookup `repo → { root, validations, worktreeRoot, provisioning }`. Each deliverable's `repo:` field is required and names one of the `repos:` entries.
+
+Determine the **in-scope deliverable set**: every deliverable with a non-null `pr:` URL, intersected with `--deliverable`/`--pr` filters if given. A deliverable in scope is expected to be at `status: pr-open` (its PR is open, typically with changes requested — the same review `scripts/sync-prs.sh` warns on).
+
+## Step 2 — Rule snapshot and per-round assignments
+
+As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.random()`, so the split is computed skill-side):
+
+1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing).
+2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, a `{"a": [{"id","source","text"}...], "b": [...]}` pair shuffled with `random.Random(seed + round)` (seed from the manifest). Save the JSON — it becomes `rulesByRound`.
+
+This single `rulesByRound` (plus `seed`, `confidenceMin`, `maxRounds`) is threaded BOTH into `feedback-synth.js` (→ on into `review-loop.js` for the addenda review, consumed at `cfg.rulesByRound[round-1]`) AND into every `implement-wave.js` invocation in Step 6 (consumed by `reviewFixLoop` at `cfg.rulesByRound[round-1]`). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
+
+## Step 3 — Fetch PR review comments (GitHub via `gh`)
+
+For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:` URL and fetch ALL THREE categories:
+
+1. **Line-anchored review comments**:
+   ```bash
+   gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
+   ```
+   Capture `path`, `line`/`original_line`, `diff_hunk`, `body`, `user.login`, `in_reply_to_id`.
+2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
+   ```bash
+   gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate
+   ```
+   Capture `state` (APPROVED / CHANGES_REQUESTED / COMMENTED) and `body`. Feed each **non-empty** submission `body` — especially a CHANGES_REQUESTED one — into synthesis as GLOBAL feedback for that deliverable.
+3. **Global/issue comments**:
+   ```bash
+   gh pr view <url> --json comments
+   ```
+
+Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [...], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow.
+
+If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-scope PR has any comment/review, report that there is no feedback to process and stop.
+
+## Step 4 — Synthesize + review the addenda
+
+Dispatch the `strapped-feedback-synth` workflow — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/feedback-synth.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (all paths absolute):
+
+```json
+{
+  "slug": "<slug>",
+  "dir": "<runRoot>/<slug>",
+  "conventionsFile": "$PLUGIN_ROOT/conventions.md",
+  "reviewLoopScript": "$PLUGIN_ROOT/workflows/review-loop.js",
+  "repos": [ { "name": "<repo>", "root": "<abs>" } ],
+  "comments": [<the fetched comments from Step 3>],
+  "rulesByRound": [<per-round splits from Step 2>],
+  "maxRounds": 3,
+  "confidenceMin": 70,
+  "seed": 42
+}
+```
+
+The workflow (a) synthesizes ONE consolidated cross-deliverable plan — routing each comment to the deliverable that OWNS the anchored file (which may differ from the PR it was left on) via each deliverable's `Files to touch` map — writing a `## Feedback addendum` section into each affected EXISTING deliverable file, then (b) invokes `review-loop.js` via `workflow(cfg.reviewLoopScript ? { scriptPath: cfg.reviewLoopScript } : 'strapped-review-loop', feedbackCtx)` (ask = the fetched PR review comments; artifact = the amended deliverable set; `roundFilePrefix: feedback-round`), so the addenda pass through the SAME reviewers/refute/dedup/consolidate/revise cycle + the confirmation pass, writing `reviews/feedback-round-<N>.md` records (distinct from `plan-round-*`). It never invokes `strapped-plan-loop` (that would run the planner and clobber the addenda) and never `import`s another workflow. It returns `{ converged, rounds, outstanding, addenda, summary }`. Honor `--max-rounds`.
+
+**With `--dry-run`:** the synthesis/review still runs to produce the plan, but you must NOT let it mutate the run — pass `--dry-run` intent by NOT writing addenda: instead, run only the fetch + a synthesis DRAFT in-conversation, print the routed addenda plan and the commands that WOULD run, then stop. (Do not dispatch the mutating workflow under `--dry-run`.)
+
+If the review did **not** converge (budget exhausted), present `outstanding` with the `feedback-round-*.md` files and work through them with the user before proceeding.
+
+## Step 5 — Explicit user approval gate
+
+Present the converged feedback plan via **AskUserQuestion**: a per-deliverable summary of what will change, cross-deliverable reassignments called out explicitly (a comment left on PR X routed to deliverable Y), the topological (stack) implement order, and the anticipated `/strapped:pr <slug> --update` cascade. Apply the user's tweaks directly with Edit — **no subagents in this step**, same as `/strapped:plan` final review. For every generalizable correction, append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
+
+With `--dry-run`, you already stopped in Step 4 — never reach implementation.
+
+## Step 6 — Implement in topological (stack) order
+
+For each affected deliverable, in topological order (parents before children so a parent's fixes land before children rebase), reuse the EXISTING branch/worktree (idempotent — provisioning already applied; mint nothing new). Dispatch `strapped-implement-wave` — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/implement-wave.js` — with the NEW feedback seams turned on:
+
+```json
+{
+  "slug": "<slug>",
+  "dir": "<runRoot>/<slug>",
+  "conventionsFile": "$PLUGIN_ROOT/conventions.md",
+  "addendumMode": true,
+  "recordSuffix": "-feedback",
+  "codeReviewScript": "$PLUGIN_ROOT/workflows/code-review.js",
+  "items": [
+    { "id": "<Did>", "repo": "<repo>", "repoRoot": "<abs>", "validations": [<that repo's validations>], "planFile": "<abs>", "worktree": "<abs existing>", "branch": "strapped/<slug>/<Did>-...", "base": "<existing base>", "resumeNote": null }
+  ],
+  "codeRounds": 3,
+  "confidenceMin": 70,
+  "seed": 42,
+  "rulesByRound": [<per-round splits from Step 2>]
+}
+```
+
+- `addendumMode: true` swaps the implement stage's prompt to "apply the `## Feedback addendum` section to the EXISTING code on this branch, staying in scope" — a targeted change, NOT a re-implementation.
+- `recordSuffix: "-feedback"` makes `code-review.js` write feedback code-review rounds as `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`), and `implement-wave.js` derives its fix agent's round-record READ path from the same suffix — writer and reader agree.
+- `rulesByRound`/`seed`/`confidenceMin`/`codeReviewScript` are threaded exactly as `/strapped:implement` does, because `reviewFixLoop` reads `cfg.rulesByRound[round-1]` per code-review round.
+
+**Status transition (feedback re-entry).** An affected deliverable is at `pr-open` when feedback starts. Drive it into the `fixing` ⇄ `in-review` sub-cycle for the fix, and on convergence return it to `pr-open` (its PR stays open — the branch is re-pushed via the later `--update`, not reopened). It NEVER re-enters `pending`/`ready`/`in-progress`. Increment the NEW `feedback_rounds_used` frontmatter counter (default 0), NOT the original `review_rounds_used`. If a node parks (fix blocked / budget exhausted), set `status: parked` + `parked_reason` and report it — do not force through.
+
+Dispatch one wave per topological rank (parents before children) so a parent's fixes are committed before its children's fix wave runs.
+
+## Step 7 — Offer the cascade ONCE
+
+After all fixes land, since parent branches changed, tell the user the single sanctioned next step for the WHOLE batch: `/strapped:pr <slug> --update` — the freeze-rule rebase of stacked children + `gh pr edit` re-push. Do NOT perform any force-push or merge here yourself.
+
+Report: which deliverables got addenda (and any cross-deliverable routing), the review outcome (converged/parked, rounds used, `feedback-round-*` records), which nodes' fixes landed vs. parked (with resume via `/strapped:implement <slug> --only <Did>` where relevant), `feedback_rounds_used` per node, and the `--update` offer.
