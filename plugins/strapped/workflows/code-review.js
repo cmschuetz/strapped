@@ -86,13 +86,14 @@ function reviewerPrompt(which) {
   return `You are an adversarial code reviewer with fresh context. Review exactly one deliverable's implementation.
 
 Deliverable: ${cfg.deliverableId} of strapped run "${cfg.slug}".
-Worktree (the code under review lives here): ${cfg.worktree}
+Worktree (the code under review lives here): ${cfg.worktree}${cfg.repo ? `\nTarget repo: ${cfg.repo}${cfg.repoRoot ? ` (root ${cfg.repoRoot})` : ''}` : ''}
 Branch: ${cfg.branch}   Base: ${cfg.base}
 
 Procedure:
 1. Read the deliverable plan at ${cfg.planFile} — its acceptance criteria define what the code must do.
 2. In the worktree, run: git diff ${cfg.base}...${cfg.branch}
 3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
+${cfg.validations && cfg.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${cfg.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
 
 Your lens (your primary hunting ground beyond the rules): ${LENSES[which]}.
 

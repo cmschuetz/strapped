@@ -29,7 +29,7 @@ function digest(seen) {
 function implementPrompt(item) {
   return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
 
-Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). Never touch ${cfg.repoRoot} directly.
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
 
 1. Read your deliverable plan in full: ${item.planFile}
 2. Read the shared research digest: ${cfg.dir}/research.md
@@ -38,7 +38,7 @@ ${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.r
 Implement exactly what the plan specifies — its acceptance criteria are the contract. Write the tests the plan names (integration-style, public interfaces). Stay in scope: anything under "Out of scope" is off limits; note side-discoveries in your summary instead of fixing them.
 
 Before finishing, ALL validations must pass inside the worktree:
-${cfg.validations.map(v => `- ${v}`).join('\n')}
+${item.validations.map(v => `- ${v}`).join('\n')}
 
 Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id}. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
 }
@@ -46,7 +46,7 @@ Commit your work on ${item.branch} with a conventional-commit message referencin
 function fixPrompt(item, findings, round) {
   return `You are the fix agent for deliverable ${item.id} of strapped run "${cfg.slug}", code-review round ${round}. Fresh context — everything you need is below.
 
-Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}).
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
 
 1. Read the deliverable plan: ${item.planFile}
 2. Read the research digest: ${cfg.dir}/research.md
@@ -56,7 +56,7 @@ Confirmed findings you must fix:
 ${JSON.stringify(findings.map(f => ({ id: f.id, key: f.key, severity: f.severity, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
 
 Fix every finding. Then re-run ALL validations inside the worktree until green:
-${cfg.validations.map(v => `- ${v}`).join('\n')}
+${item.validations.map(v => `- ${v}`).join('\n')}
 
 Commit the fixes on ${item.branch}. Update the round record: flip each fixed finding's status from open to fixed. Return status "implemented" with validations_green true, or "blocked" with the blocker if a finding cannot be fixed as recommended (do not silently skip it).`
 }
@@ -91,6 +91,9 @@ async function reviewFixLoop(state) {
       dir: cfg.dir,
       conventionsFile: cfg.conventionsFile,
       worktree: item.worktree,
+      repo: item.repo,
+      repoRoot: item.repoRoot,
+      validations: item.validations,
       branch: item.branch,
       base: item.base,
       planFile: item.planFile,
