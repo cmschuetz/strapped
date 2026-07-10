@@ -189,10 +189,6 @@ let converged = false
 let roundsUsed = 0
 let outstanding = []
 
-// One review round: 2 reviewers → refute → consolidate-vs-seen. Writes its own
-// round record and returns the truly-NEW confirmed findings. `confirmation`
-// runs the same machinery as a determination-only pass (does not drive a fix)
-// with a distinct round label so its record does not clobber a fix round's.
 async function runReviewRound(round, confirmation) {
   const rules = cfg.rulesByRound[round - 1]
   const seedUsed = cfg.seed + round
@@ -284,11 +280,6 @@ For each finding: apply the fix (this may mean splitting a deliverable that mixe
   }
 }
 
-// The final budgeted round found and revised findings but never got a
-// zero-new round to prove convergence. Run ONE confirmation review (does not
-// consume budget, never loops) so a fully-revised final round is not falsely
-// reported as non-converged. Genuinely-open findings still leave converged
-// false with a real outstanding list.
 if (!converged && lastRoundFixedAll) {
   const { newConfirmed } = await runReviewRound(cfg.maxRounds, true)
   for (const f of newConfirmed) seen.push({ ...f, round: cfg.maxRounds, status: 'open' })

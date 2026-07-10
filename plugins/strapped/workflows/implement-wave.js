@@ -132,10 +132,6 @@ async function reviewFixLoop(state) {
     lastRoundFixedAll = true
   }
 
-  // Final budgeted round fixed all its findings but the loop never got a
-  // zero-new round to prove convergence. Run ONE confirmation review (does not
-  // consume budget, never loops) so a fully-fixed final round is not falsely
-  // parked as budget-exhausted.
   if (!converged && !parkedReason && lastRoundFixedAll) {
     const confirm = await runReview(cfg.codeRounds, true)
     if (!confirm) {
