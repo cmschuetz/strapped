@@ -63,7 +63,7 @@ For a single-repo run the map has one entry, flagged primary. Consumers derive e
 
 ## deliverables/D#-<kebab>.md
 
-The single channel from planning to implementation. A fresh implementer seeded with only this file (plus `research.md`) must be able to do the work. Target ~500 lines of complex diff per deliverable.
+The single channel from planning to implementation. A fresh implementer seeded with only this file (plus `research.md`) must be able to do the work. **Split deliverables by discrete theme, not by size** — keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR. Split a theme into multiple deliverables only when its estimated *meaningful* diff exceeds ~1,000 changed lines. Meaningful diff excludes mechanical churn: generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures/snapshots. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs.
 
 ```markdown
 ---
@@ -78,7 +78,7 @@ worktree: /abs/path | null                # resumability marker
 pr: null | <url>
 review_rounds_used: 0
 parked_reason: null
-estimated_diff_lines: 450
+estimated_diff_lines: 450                 # estimate of MEANINGFUL diff (excludes generated code, dep bumps, fixtures)
 ---
 ## Context
 Distilled research slice relevant to THIS node: architecture, decisions, pitfalls.
@@ -180,7 +180,7 @@ EOF
 
 Two reviewers per round, disjoint rule halves, plus a distinct lens each so the pair differs by concern:
 
-- Plan review — **A: completeness** (every element of the ask covered? missing requirements, edge cases, test-per-AC gaps). **B: soundness** (wrong assumptions, DAG dependency errors, deliverables over the ~500-line complexity target, undeclared cross-deliverable dependencies).
+- Plan review — **A: completeness** (every element of the ask covered? missing requirements, edge cases, test-per-AC gaps). **B: soundness** (wrong assumptions, DAG dependency errors, deliverables that mix unrelated themes or whose meaningful diff exceeds ~1,000 lines and should be split, undeclared cross-deliverable dependencies).
 - Code review — **A: correctness** (logic bugs, edge cases, race conditions, error paths, AC compliance). **B: convention & test fidelity** (guideline adherence, test quality: integration-style, no mocking, aiohttp test servers, polyfactory).
 
 ## Critique loop shape (both loops)

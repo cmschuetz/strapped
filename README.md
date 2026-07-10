@@ -6,7 +6,7 @@ Get strapped in. An agentic coding harness for Claude Code: a big themed `plan.m
 
 | Invocation | What it does |
 |---|---|
-| `/strapped:plan <plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]` | Research → DAG of ~500-line deliverables → adversarial plan-review loop (2 reviewers with disjoint CLAUDE.md rule halves + distinct lenses, refute pass, dedup-vs-seen, bounded at 3 rounds) → interactive final review. `--repo` names the target repo(s) the work lands in (repeatable); omit to be prompted. A run may span multiple repos. |
+| `/strapped:plan <plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]` | Research → DAG of theme-scoped deliverables → adversarial plan-review loop (2 reviewers with disjoint CLAUDE.md rule halves + distinct lenses, refute pass, dedup-vs-seen, bounded at 3 rounds) → interactive final review. `--repo` names the target repo(s) the work lands in (repeatable); omit to be prompted. A run may span multiple repos. |
 | `/strapped:implement <slug> [--only Did]` | Execute the DAG wave-by-wave: persistent worktree per deliverable, fresh implementer, validations, bounded code-review/fix loop, park-don't-spin |
 | `/strapped:pr <slug> [--dry-run] [--update]` | Stacked PRs via git + gh: child PRs based on their parent deliverable's branch, dependency-annotated bodies; `--update` rebases children after parent changes |
 | `/strapped:learn` | Cluster your captured critiques into proposed CLAUDE.md additions — shown as a diff, applied only on approval |
