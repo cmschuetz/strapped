@@ -6,6 +6,7 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+  - AskUserQuestion
 ---
 
 Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`)). Strictly read-only: no Edit/Write, no git mutations.
@@ -24,7 +25,7 @@ Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-in
 - **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`.
   - Zero matches → stop with a helpful message (`slug <slug> not found under <stateRoot>`).
   - Exactly one → use its directory as `<runRoot>/<slug>`.
-  - More than one (same slug under two primary-repo namespaces) → stop and ask the user to disambiguate; honor `--primary-repo <name>` to select `<stateRoot>/<name>/<slug>/`.
+  - More than one (same slug under two primary-repo namespaces) → present the matched primary-repo namespaces via **AskUserQuestion** and select `<stateRoot>/<chosen>/<slug>/` from the answer; `--primary-repo <name>` selects it directly when given (skipping the prompt). Prompting only — no state is written, so the skill stays read-only.
 - **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<repoAbs>/<stateRoot>/` for the current repo; state at `<runRoot>/<slug>/`.
 
 ## Resolving the repos map

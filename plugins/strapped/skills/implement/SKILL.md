@@ -9,6 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - Workflow
+  - AskUserQuestion
 ---
 
 Implement an approved strapped plan.
@@ -30,7 +31,7 @@ Implement an approved strapped plan.
 - **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`.
   - **Zero** matches — stop with a helpful message: the slug was not found under `<stateRoot>` (point at `/strapped:plan`).
   - **Exactly one** match — its directory is `<runRoot>/<slug>`; its parent is `<runRoot> = <stateRoot>/<primaryRepo>/`.
-  - **More than one** match (same slug under two primary-repo namespaces) — stop and ask the user to disambiguate; they may pass `--primary-repo <name>` to select `<stateRoot>/<name>/<slug>/`. When `--primary-repo` is given, use that path directly.
+  - **More than one** match (same slug under two primary-repo namespaces) — present the matched primary-repo namespaces via **AskUserQuestion** and select `<stateRoot>/<chosen>/<slug>/` from the answer. When `--primary-repo <name>` is given, skip the prompt and use that path directly.
 - **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>/<slug>` = `<repoAbs>/<stateRoot>/<slug>/` for the current repo (state is already repo-scoped, so cwd resolution is correct here).
 
 ## Step 1 — Cold-start from disk

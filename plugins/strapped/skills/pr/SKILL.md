@@ -8,6 +8,7 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+  - AskUserQuestion
 ---
 
 Create/update stacked PRs for `done` deliverables of one strapped run. Formats and naming are in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`) — read it first. Cold-starts from the run root `<runRoot>/<slug>/` alone.
@@ -25,7 +26,7 @@ Create/update stacked PRs for `done` deliverables of one strapped run. Formats a
 
 Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution*. **Never** derive the primary repo from `git rev-parse` on the cwd:
 
-- **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`. Zero → stop (`slug <slug> not found under <stateRoot>`); exactly one → use it; more than one → stop and ask the user to disambiguate, honoring `--primary-repo <name>` to select `<stateRoot>/<name>/<slug>/`.
+- **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`. Zero → stop (`slug <slug> not found under <stateRoot>`); exactly one → use it; more than one → present the matched primary-repo namespaces via **AskUserQuestion** and select `<stateRoot>/<chosen>/<slug>/` from the answer, or use `--primary-repo <name>` directly when given (skipping the prompt).
 - **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<repoAbs>/<stateRoot>/` for the current repo; state at `<runRoot>/<slug>/`.
 
 ## Resolving the repos map
