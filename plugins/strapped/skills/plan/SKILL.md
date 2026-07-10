@@ -9,6 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - Workflow
+  - AskUserQuestion
 ---
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
@@ -59,6 +60,8 @@ Resolve `stateRoot` per conventions, first match wins: `$STRAPPED_STATE_ROOT` �
 
 `<runRoot>/<slug>/` is where all run state lives — every path below uses it. If there is no anchor and no repo-local config, ask the user whether to set up a global anchor (`~/.claude/strapped.json` with their chosen `stateRoot`) or keep state repo-relative — only then finalize `<runRoot>` and where configs go.
 
+**Unconditional resume probe.** Once `<runRoot>` is known, probe `<runRoot>/<slug>/manifest.md` — **on every path, including `--repo` given**. If it exists, this is a **resume**: read its `repos:` map (its `primary: true` entry is the primary repo, the rest are target repos; apply the conventions' *Legacy on-disk back-compat* if the manifest predates the re-spec and has no `repos:` map), and jump to 1e as a resume. This matches the D1 baseline, where the manifest was probed after run-root computation regardless of how the repo was chosen — so re-invoking with an explicit `--repo` on an in-progress run resumes instead of re-scaffolding. (When `--repo` was omitted and 1a already found the run, that same manifest is the one probed here — no double work.)
+
 ### 1d — Per-repo config for EVERY target repo
 
 For **each** target repo (primary included), resolve its config per the conventions' *Resolving the per-repo config* rule, parameterized by that repo's name+root — never "the cwd repo":
@@ -80,7 +83,7 @@ Write each generated config colocated at `<stateRoot>/<repoName>/strapped-config
 
 ### 1e — Scaffold or resume
 
-If this is a **resume** (the 1a single/`--primary-repo` match found `<runRoot>/<slug>/manifest.md`), read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). The primary and target repos come straight off that manifest's `repos:` map (recovered in 1a) — the config-generation loop in 1d is skipped for repos whose config already resolves, and **no re-inference or AskUserQuestion fires**, so the user cannot land on a different run root by answering a confirm step differently.
+If this is a **resume** (either the 1a single/`--primary-repo` match on the `--repo`-omitted path, or the 1c unconditional `<runRoot>/<slug>/manifest.md` probe on the `--repo`-given path), read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). The primary and target repos come straight off that manifest's `repos:` map — the config-generation loop in 1d is skipped for repos whose config already resolves, and **no re-inference or AskUserQuestion fires**, so the user cannot land on a different run root by answering a confirm step differently.
 
 Otherwise scaffold a fresh run:
 
