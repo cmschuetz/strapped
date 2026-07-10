@@ -159,8 +159,8 @@ For each finding: apply the fix (this may mean splitting a deliverable that mixe
 function reviserPrompt(newConfirmed, roundFile) {
   if (cfg.reviserPrompt) {
     return cfg.reviserPrompt
-      .replace('{{findings}}', JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2))
-      .replace('{{roundFile}}', roundFile)
+      .replaceAll('{{findings}}', JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2))
+      .replaceAll('{{roundFile}}', roundFile)
   }
   return defaultReviserPrompt(newConfirmed, roundFile)
 }
