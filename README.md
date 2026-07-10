@@ -39,6 +39,10 @@ Add the marketplace by local path instead of GitHub so edits are live without pu
 
 Edit, then `/reload-plugins`. Push when happy; other machines pick it up via marketplace update.
 
+## PR tracking
+
+Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which checks every `pr-open` deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, and notes newly unblocked children. It exits silently in milliseconds when a project has no strapped state or nothing is `pr-open`, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.
+
 ## Per-project setup
 
 None required — `/strapped:plan` generates `.claude/strapped-config.json` (validation commands, worktree root, worktree provisioning) on first run and asks you to confirm it.

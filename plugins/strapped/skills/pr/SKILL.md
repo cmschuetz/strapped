@@ -53,4 +53,4 @@ For when a parent branch changed after children branched (the only sanctioned wa
 
 - Never push `main`, never merge PRs, never `--force` (only `--force-with-lease`).
 - If `gh` is unauthenticated or the branch has no commits beyond its base, report and skip that node rather than failing the whole run.
-- When a PR is merged externally, a later invocation should notice via `gh pr view --json state` and flip frontmatter to `merged`.
+- When a PR is merged externally, a later invocation should notice via `gh pr view --json state` and flip frontmatter to `merged`. This also happens automatically at session start: the plugin's SessionStart hook runs `scripts/sync-prs.sh`, which performs the same idempotent flip.
