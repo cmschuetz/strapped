@@ -11,8 +11,11 @@ export const meta = {
 const cfg = typeof args === 'string' ? JSON.parse(args) : args
 
 const roundFilePrefix = cfg.roundFilePrefix || 'plan-round'
-const artifactDescription =
-  cfg.artifactDescription || 'a produced implementation plan (manifest.md, research.md, and every file in deliverables/)'
+const artifactDescription = cfg.artifactDescription || 'a produced implementation plan'
+const artifactLocation =
+  cfg.artifactLocation || 'manifest.md, research.md, and every file in deliverables/'
+const artifactNoun = cfg.artifactNoun || 'plan'
+const askRef = cfg.ask !== undefined ? cfg.ask : cfg.sourcePlan
 
 const repos =
   Array.isArray(cfg.repos) && cfg.repos.length
@@ -104,16 +107,18 @@ function digest(seen) {
   return seen.map(f => `- [${f.severity}] ${f.key}: ${f.what} (round ${f.round}, ${f.status})`).join('\n')
 }
 
+const artifactNounCap = artifactNoun.charAt(0).toUpperCase() + artifactNoun.slice(1)
+
 function reviewerPrompt(which, rules, seen, round) {
   return `You are an adversarial plan reviewer with fresh context. Your job is to find real gaps between ${artifactDescription} and the original ask, before any code is written.
 
-Original ask: ${cfg.ask}
-Artifact under review, in ${cfg.dir}: ${artifactDescription}.
+Original ask: ${askRef}
+${artifactNounCap} under review, in ${cfg.dir}: ${artifactLocation}.
 Conventions the plan must follow: ${cfg.conventionsFile}
 Target repos (explore any of these as needed to check the plan's claims against reality):
 ${repoList()}
 
-Read the original ask first, then the whole artifact under review, then verify claims against the actual codebase(s) where they matter.
+Read the original ask first, then the whole ${artifactNoun}, then verify claims against the actual codebase(s) where they matter.
 
 Your lens (your main hunting ground beyond the rules): ${LENSES[which]}.
 ${which === 'b' ? `\nSoundness — multi-repo checks specific to this run: verify each deliverable has a \`repo:\` field naming one of the target repos above; verify each deliverable's \`base:\` obeys the cross-repo base rule (it is a branch in the SAME repo as the deliverable, or that repo's \`main\` for roots and for cross-repo children — a deliverable can never base on a branch in a different repo); and verify that no cross-repo dep is a true code dependency (cross-repo deps are ordering-only — flag any cross-repo child that would need its parent's unmerged code, since it bases on its own repo's \`main\` and does not have that code).\n` : ''}
@@ -129,15 +134,17 @@ Severity: "blocking" = the plan as written produces wrong or missing work; "conc
 You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), plus your findings. Round: ${round}.`
 }
 
+const refuteArtifactPhrase = cfg.refuteArtifactPhrase || 'the implementation plan'
+
 function refutePrompt(f) {
-  return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in ${artifactDescription} at ${cfg.dir} (original ask: ${cfg.ask}). Target repos you may explore to check the claim:
+  return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in ${refuteArtifactPhrase} at ${cfg.dir} (original ask: ${askRef}). Target repos you may explore to check the claim:
 ${repoList()}
 
 Claim [${f.severity}] at ${f.location}: ${f.what}
 Why: ${f.why}
 Evidence: ${f.evidence}
 
-Your stance: this is NOT a real gap unless the documents prove otherwise. Read the ask and the artifact files yourself — the claimed-missing item may be covered elsewhere, the assumption may actually hold in the codebase, or the claim may misread the ask. Return your verdict, a corrected confidence (0-100) that the gap is real, and one line of evidence.`
+Your stance: this is NOT a real gap unless the documents prove otherwise. Read the ask and the ${artifactNoun} files yourself — the claimed-missing item may be covered elsewhere in the ${artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Return your verdict, a corrected confidence (0-100) that the gap is real, and one line of evidence.`
 }
 
 const defaultReviserPrompt = (newConfirmed, roundFile) =>

@@ -78,7 +78,6 @@ const review = await workflow(
     slug: cfg.slug,
     dir: cfg.dir,
     ask: cfg.sourcePlan,
-    artifactDescription: 'a produced implementation plan (manifest.md, research.md, and every file in deliverables/)',
     conventionsFile: cfg.conventionsFile,
     repos,
     repoRoot: cfg.repoRoot,
