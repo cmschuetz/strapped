@@ -12,7 +12,7 @@ Get strapped in. An agentic coding harness for Claude Code: a big themed `plan.m
 | `/strapped:learn` | Cluster your captured critiques into proposed CLAUDE.md additions — shown as a diff, applied only on approval |
 | `/strapped:status [<slug>]` | Read-only dashboard: DAG, statuses, worktrees, PRs, parked reasons, next action |
 
-All run state lives in the consuming project (`plans/strapped/<slug>/`, `.claude/strapped-config.json`), never in the plugin. Design details: `plugins/strapped/conventions.md`.
+All run state lives in the consuming project (`<stateRoot>/<slug>/`, default `plans/strapped/`, plus `.claude/strapped-config.json`), never in the plugin. Design details: `plugins/strapped/conventions.md`.
 
 ## Setup (each machine)
 

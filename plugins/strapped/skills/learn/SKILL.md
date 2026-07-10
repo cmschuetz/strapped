@@ -15,7 +15,7 @@ Turn the user's recurring corrections into durable guidelines. Source format is 
 
 ## Step 1 — Collect
 
-Glob `plans/strapped/*/critiques/user-critiques.md` and collect every entry with `synthesized: false`. If there are none, say so and stop.
+Read `stateRoot` from `.claude/strapped-config.json` (default `plans/strapped`). Glob `<stateRoot>/*/critiques/user-critiques.md` and collect every entry with `synthesized: false`. If there are none, say so and stop.
 
 ## Step 2 — Cluster and filter
 

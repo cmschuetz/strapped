@@ -13,7 +13,7 @@ allowed-tools:
 
 Implement an approved strapped plan.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time. This skill cold-starts entirely from the project's `plans/strapped/<slug>/` plus `.claude/strapped-config.json` — it needs no memory of the planning session.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time. This skill cold-starts entirely from the project's `<stateRoot>/<slug>/` (from `.claude/strapped-config.json`, default `plans/strapped`) plus that config — it needs no memory of the planning session.
 
 ## Arguments
 
@@ -44,7 +44,7 @@ Repeat until no deliverable is runnable:
 ```json
 {
   "slug": "<slug>",
-  "dir": "<abs>/plans/strapped/<slug>",
+  "dir": "<abs>/<stateRoot>/<slug>",
   "repoRoot": "<abs repo root>",
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "items": [
