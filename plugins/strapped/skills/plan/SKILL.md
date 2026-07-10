@@ -9,6 +9,7 @@ allowed-tools:
   - Glob
   - Grep
   - Workflow
+  - AskUserQuestion
 ---
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
@@ -17,33 +18,81 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 
 ## Arguments
 
-`$ARGUMENTS`: `<path-to-plan.md> [--seed N] [--max-rounds N]`
+`$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--primary-repo <name>] [--seed N] [--max-rounds N]`
 
+- `--repo <path-or-name>` — **repeatable**; names the target repo(s) the work will change. The **first** `--repo` is the **primary repo** — its namespace holds the run root. Each value is either an absolute/relative path to a repo, or a bare name resolved under the user's repo-parent convention (e.g. `$WORK_DIR_PATH/<name>`, `~/chime/<name>`). When **omitted**, the skill first checks for an existing run to resume, and only if none exists infers candidate repos from the source plan text and confirms them with the user (see Step 1). Repo identity is **never** taken from the cwd.
+- `--primary-repo <name>` — used only to disambiguate a resume when the same slug exists under two primary-repo namespaces (see Step 1).
 - `--seed` defaults to 42; recorded in the manifest so reviews are reproducible.
 - `--max-rounds` defaults to the `plan_rounds` budget (3).
 
-## Step 1 — Config, then scaffold or resume
+## Step 1 — Resolve repos, config, then scaffold or resume
 
-Resolve `<repo>`, `stateRoot`, and the run root `<runRoot>` per the **Config resolution** section of the conventions (env → repo-local config → `~/.claude/strapped.json` anchor → `plans/strapped`; absolute → `<stateRoot>/<repo>/`, relative → `<stateRoot>/` in the repo). `<runRoot>` is where all run state lives — every path below uses it.
+Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). Everything below defers to the **Config resolution** section of the conventions — read it first.
 
-Ensure a per-repo config exists (repo-local `.claude/strapped-config.json`, else `<runRoot>/strapped-config.json`). If none does, generate one and confirm the values with the user before continuing:
+### 1a — Determine the target repos (never from cwd)
+
+Do **not** run `git rev-parse --show-toplevel` on the cwd to pick the repo — the cwd may be a plans repo, `~`, or anything unrelated. `git rev-parse` is used **only** to canonicalize an *input* repo path (and must run in that repo's primary checkout, not a worktree). Follow whichever branch applies:
+
+**`--repo` given** — for each value, resolve to an absolute git top-level: accept a path, or a bare name resolved under the user's repo-parent convention (`$WORK_DIR_PATH/<name>`, `~/chime/<name>`). Canonical `<repoName>` = basename of that root. The **first** `--repo` is the primary repo; the rest are additional target repos. Skip to 1b.
+
+**`--repo` omitted — resume-first, then infer.** The primary repo (hence the run root, hence the old `<runRoot>/<slug>/manifest.md` probe) is unknown until repos are chosen, so detect an existing run *before* inferring anything:
+
+1. Resolve `stateRoot` per conventions (`$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json` → default `plans/strapped`). The repo-local `.claude/strapped-config.json` source in the anchor chain cannot apply yet — no primary repo is chosen — so skip it here.
+2. Apply the conventions' **cwd-independent slug → run-root rule** to look for an existing run:
+   - **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/<slug>/manifest.md`.
+   - **Legacy repo-relative mode** (relative `stateRoot`): probe `<repoAbs>/<stateRoot>/<slug>/manifest.md` for the current repo.
+3. Handle the match count exactly per the rule:
+   - **Exactly one match** — this is a **resume**. Read that `manifest.md`'s `repos:` map: its `primary: true` entry is the primary repo, the rest are target repos. **Skip inference and AskUserQuestion entirely — do not re-prompt.** (If the manifest predates the re-spec and has **no** `repos:` map, apply the conventions' *Legacy on-disk back-compat*: synthesize a one-entry primary from the resolved run root — still no re-prompt.) Then jump to 1d with the recovered repos and run root.
+   - **Zero matches** — no existing run. Fall through to inference below.
+   - **More than one match** (same slug under two primary-repo namespaces) — **stop and ask the user to disambiguate**; accept `--primary-repo <name>` to select `<stateRoot>/<name>/<slug>/`, then resume from that manifest as in the single-match case.
+4. **Inference (zero matches only):** infer candidate target repos from the source plan text (repo names it mentions, resolved via the repo-parent convention) and present them via **AskUserQuestion** for the user to confirm or correct **before writing any state**. A single-repo plan confirms one repo. The first confirmed repo is the primary.
+
+### 1b — Designate the primary repo
+
+The **primary repo** = the first repo (on resume, the manifest's `primary: true` entry). `<repo>` for run-root purposes = the primary repo. Store each target repo's canonical `<repoName>` and absolute `root`.
+
+### 1c — Resolve stateRoot and the run root
+
+Resolve `stateRoot` per conventions, first match wins: `$STRAPPED_STATE_ROOT` → **primary repo's** repo-local `.claude/strapped-config.json`.stateRoot → `~/.claude/strapped.json`.stateRoot → default `plans/strapped`. Expand a leading `~`. Compute `<runRoot>` in the **primary repo's** namespace:
+
+- **Shared mode** (absolute `stateRoot`): `<runRoot>` = `<stateRoot>/<primaryRepo>/`.
+- **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<primaryRepoAbs>/<stateRoot>/`.
+
+`<runRoot>/<slug>/` is where all run state lives — every path below uses it. If there is no anchor and no repo-local config, ask the user whether to set up a global anchor (`~/.claude/strapped.json` with their chosen `stateRoot`) or keep state repo-relative — only then finalize `<runRoot>` and where configs go.
+
+**Unconditional resume probe.** Once `<runRoot>` is known, probe `<runRoot>/<slug>/manifest.md` — **on every path, including `--repo` given**. If it exists, this is a **resume**: read its `repos:` map (its `primary: true` entry is the primary repo, the rest are target repos; apply the conventions' *Legacy on-disk back-compat* if the manifest predates the re-spec and has no `repos:` map), and jump to 1e as a resume. This matches the D1 baseline, where the manifest was probed after run-root computation regardless of how the repo was chosen — so re-invoking with an explicit `--repo` on an in-progress run resumes instead of re-scaffolding. (When `--repo` was omitted and 1a already found the run, that same manifest is the one probed here — no double work.)
+
+### 1d — Per-repo config for EVERY target repo
+
+For **each** target repo (primary included), resolve its config per the conventions' *Resolving the per-repo config* rule, parameterized by that repo's name+root — never "the cwd repo":
+
+1. `<rAbs>/.claude/strapped-config.json` (self-contained repo — back-compat).
+2. shared mode: `<stateRoot>/<repoName>/strapped-config.json` (colocated default).
+
+If a repo's config is **missing**, generate one and **confirm the values with the user** before continuing. Configs differ per repo — validations come from **that repo's** CLAUDE.md check commands, `worktreeRoot` = **that repo's** `<parent>/<name>__worktrees`, plus provisioning:
 
 ```json
 {
-  "validations": ["<derived from the project CLAUDE.md validation/check commands>"],
-  "worktreeRoot": "<repo-parent>/<repo-name>__worktrees",
+  "validations": ["<derived from THAT repo's CLAUDE.md validation/check commands>"],
+  "worktreeRoot": "<that-repo-parent>/<that-repo-name>__worktrees",
   "provisioning": "<untracked files worktrees need for validations (placeholder values only, never real secrets), or empty>"
 }
 ```
 
-Write the new config to `<runRoot>/strapped-config.json` when `stateRoot` is a shared/absolute base (the default). If there is no anchor and no repo-local config, ask the user whether to set up a global anchor (`~/.claude/strapped.json` with their chosen `stateRoot`) or keep state repo-relative — only then finalize `<runRoot>` and where the config goes.
+Write each generated config colocated at `<stateRoot>/<repoName>/strapped-config.json` in shared mode (the default), or repo-local `.claude/strapped-config.json` in legacy mode. **On resume, skip generation for any repo whose config already resolves.**
 
-Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). If `<runRoot>/<slug>/manifest.md` exists, read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). Otherwise scaffold:
+### 1e — Scaffold or resume
+
+If this is a **resume** (either the 1a single/`--primary-repo` match on the `--repo`-omitted path, or the 1c unconditional `<runRoot>/<slug>/manifest.md` probe on the `--repo`-given path), read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). The primary and target repos come straight off that manifest's `repos:` map — the config-generation loop in 1d is skipped for repos whose config already resolves, and **no re-inference or AskUserQuestion fires**, so the user cannot land on a different run root by answering a confirm step differently.
+
+Otherwise scaffold a fresh run:
 
 ```bash
 mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques}
 touch <runRoot>/<slug>/critiques/user-critiques.md
 ```
+
+The manifest (written by the planner agent in step 3) must carry the `repos:` map (name/root/config/primary per the conventions' [manifest schema](../../conventions.md)); the skill supplies the target-repo list to the workflow so the planner can write it.
 
 ## Step 2 — Rule snapshot and per-round assignments
 
@@ -59,7 +108,11 @@ Invoke the `strapped-plan-loop` workflow — invoke the Workflow tool with `scri
   "slug": "<slug>",
   "dir": "<runRoot>/<slug>",
   "sourcePlan": "<abs path to the source plan.md>",
-  "repoRoot": "<abs repo root>",
+  "repos": [
+    { "name": "<primaryRepo>", "root": "<abs repo root>", "config": "<abs config path>", "primary": true, "validations": ["<from that repo's config>"] },
+    { "name": "<targetRepo2>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }
+  ],
+  "primaryRepoRoot": "<abs primary repo root>",
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "rulesByRound": [<the per-round splits from step 2>],
   "maxRounds": 3,
@@ -67,6 +120,8 @@ Invoke the `strapped-plan-loop` workflow — invoke the Workflow tool with `scri
   "seed": 42
 }
 ```
+
+`repos` is the full target-repo list (one entry per repo, `primary: true` on exactly one, each carrying its resolved `validations`); `primaryRepoRoot` is a convenience for the run root's repo. The planner uses `repos` to (a) write the manifest's `repos:` map (name/root/config/primary), (b) set each deliverable's required `repo:` field to one of `repos[].name` (single-repo plans default it to the primary), and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
 
 The workflow runs the planner (which writes `research.md`, `manifest.md`, and the deliverable files), then up to `maxRounds` adversarial review rounds. It returns `{converged, rounds, deliverables, outstanding, summary}`.
 
