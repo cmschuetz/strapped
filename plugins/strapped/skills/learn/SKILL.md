@@ -15,7 +15,12 @@ Turn the user's recurring corrections into durable guidelines. Source format is 
 
 ## Step 1 — Collect
 
-Resolve the run root `<runRoot>` per the conventions' Config resolution. Glob `<runRoot>/*/critiques/user-critiques.md` and collect every entry with `synthesized: false`. If there are none, say so and stop.
+Collect every critique entry with `synthesized: false` across all runs, per the conventions' Config resolution:
+
+- **Shared mode** (absolute `stateRoot`): glob `<stateRoot>/*/*/critiques/user-critiques.md` — every `<repo>/<slug>/` under the shared state root, so critiques from **every** repo's runs (not just the primary's run root) are collected.
+- **Legacy repo-relative mode** (relative `stateRoot`): glob `<runRoot>/*/critiques/user-critiques.md` for the current repo's run root, as before.
+
+If there are none, say so and stop.
 
 ## Step 2 — Cluster and filter
 
