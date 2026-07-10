@@ -2,7 +2,6 @@
 set -u
 
 cd "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null || exit 0
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
 
 read_state_root() { grep -o '"stateRoot"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/'; }
@@ -20,15 +19,22 @@ case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
 # Absolute stateRoot → shared mode (run root <stateRoot>/<repo>). Relative → legacy repo-relative.
 case "$state_root" in
   /*)
-    repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
-    [ -n "$repo" ] || exit 0
-    run_root="$state_root/$repo"
+    shared=1
+    run_root="$state_root"
     ;;
-  *) run_root="$state_root" ;;
+  *)
+    shared=0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+    run_root="$state_root"
+    ;;
 esac
 [ -d "$run_root" ] || exit 0
 
-files=$(grep -l '^status: pr-open$' "$run_root"/*/deliverables/*.md 2>/dev/null) || exit 0
+if [ "$shared" = 1 ]; then
+  files=$(grep -l '^status: pr-open$' "$run_root"/*/*/deliverables/*.md 2>/dev/null) || exit 0
+else
+  files=$(grep -l '^status: pr-open$' "$run_root"/*/deliverables/*.md 2>/dev/null) || exit 0
+fi
 [ -n "$files" ] || exit 0
 
 gh auth status >/dev/null 2>&1 || exit 0
@@ -63,7 +69,13 @@ for f in $files; do
 done
 
 if [ "$flipped_any" = 1 ]; then
-  for d in "$run_root"/*/; do
+  if [ "$shared" = 1 ]; then
+    slug_dirs=("$run_root"/*/*/)
+  else
+    slug_dirs=("$run_root"/*/)
+  fi
+  for d in "${slug_dirs[@]}"; do
+    [ -d "$d" ] || continue
     slug=$(basename "$d")
     for f in "$d"deliverables/*.md; do
       [ -f "$f" ] || continue
