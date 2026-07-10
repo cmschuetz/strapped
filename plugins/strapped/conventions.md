@@ -183,7 +183,7 @@ EOF
 
 Two reviewers per round, disjoint rule halves, plus a distinct lens each so the pair differs by concern:
 
-- Plan review — **A: completeness** (every element of the ask covered? missing requirements, edge cases, test-per-AC gaps). **B: soundness** (wrong assumptions, DAG dependency errors, deliverables that mix unrelated themes or whose meaningful diff exceeds ~1,000 lines and should be split, undeclared cross-deliverable dependencies).
+- Plan review — **A: completeness** (every element of the ask covered? missing requirements, edge cases, test-per-AC gaps). **B: soundness** (wrong assumptions, DAG dependency errors, deliverables that mix unrelated themes or whose meaningful diff exceeds ~1,000 lines and should be split, undeclared cross-deliverable dependencies). Soundness cuts both ways — also flag over-fragmentation: deliverables that are fragments of one theme, or a linear chain whose combined meaningful diff (excluding generated code, dependency bumps, and fixtures) is under the ~1,000-line threshold and could be a single deliverable/PR, and should be consolidated.
 - Code review — **A: correctness** (logic bugs, edge cases, race conditions, error paths, AC compliance). **B: convention & test fidelity** (guideline adherence, test quality: integration-style, no mocking, aiohttp test servers, polyfactory).
 
 ## Critique loop shape (both loops)
