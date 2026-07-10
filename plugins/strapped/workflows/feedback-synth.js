@@ -71,6 +71,12 @@ const review = await workflow(
     artifactLocation: 'every file in deliverables/ including the newly-added `## Feedback addendum` sections synthesized from the PR review comments',
     artifactNoun: 'deliverable set',
     refuteArtifactPhrase: 'the amended deliverable set',
+    reviserPrompt: `You are the PR-feedback addenda reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing ONLY the \`## Feedback addendum\` sections of the affected deliverable files under ${cfg.dir}/deliverables/, keeping every file conformant to ${cfg.conventionsFile}. Original ask (the fetched PR review comments) for reference: ${cfg.slug} feedback batch. You MUST NOT edit ${cfg.dir}/manifest.md or ${cfg.dir}/research.md, and you MUST NOT create new deliverable files, branches, or worktrees — the feedback flow attaches fixes only to EXISTING deliverables' \`## Feedback addendum\` sections.
+
+Confirmed findings to close (full bodies also in {{roundFile}}):
+{{findings}}
+
+For each finding: apply the fix by editing the relevant deliverable's \`## Feedback addendum\` section only (add/correct/reassign fix tasks; keep them concrete, in-scope, and testable). Do not touch any \`## Files to touch\`, \`## Implementation steps\`, or other original plan sections, and never touch manifest.md/research.md. Then update {{roundFile}}: flip each addressed finding's status from open to fixed. Return one line per finding: id — what you changed.`,
     conventionsFile: cfg.conventionsFile,
     repos,
     repoRoot: cfg.repoRoot,
