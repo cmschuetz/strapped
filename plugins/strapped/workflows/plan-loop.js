@@ -249,6 +249,7 @@ Tasks:
 }
 
 let lastRoundFixedAll = false
+let revisionFailed = false
 for (let round = 1; round <= cfg.maxRounds; round++) {
   roundsUsed = round
   lastRoundFixedAll = false
@@ -277,18 +278,23 @@ For each finding: apply the fix (this may mean splitting a deliverable that mixe
   if (revision) {
     for (const f of seen) if (newIds.has(f.id)) f.status = 'fixed'
     lastRoundFixedAll = true
+  } else {
+    revisionFailed = true
+    break
   }
 }
 
-if (!converged && lastRoundFixedAll) {
+if (!converged && !revisionFailed && lastRoundFixedAll) {
   const { newConfirmed } = await runReviewRound(cfg.maxRounds, true)
   for (const f of newConfirmed) seen.push({ ...f, round: cfg.maxRounds, status: 'open' })
   if (newConfirmed.length === 0) {
     converged = true
     outstanding = []
-  } else {
-    outstanding = newConfirmed
   }
+}
+
+if (!converged) {
+  outstanding = seen.filter(f => f.status === 'open')
 }
 
 return {
