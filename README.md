@@ -9,6 +9,7 @@ Get strapped in. An agentic coding harness for Claude Code: a big themed `plan.m
 | `/strapped:plan <plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]` | Research → DAG of theme-scoped deliverables → adversarial plan-review loop (2 reviewers with disjoint CLAUDE.md rule halves + distinct lenses, refute pass, dedup-vs-seen, bounded at 3 rounds) → interactive final review. `--repo` names the target repo(s) the work lands in (repeatable); omit to be prompted. A run may span multiple repos. |
 | `/strapped:implement <slug> [--only Did]` | Execute the DAG wave-by-wave: persistent worktree per deliverable, fresh implementer, validations, bounded code-review/fix loop, park-don't-spin |
 | `/strapped:pr <slug> [--dry-run] [--update]` | Stacked PRs via git + gh: child PRs based on their parent deliverable's branch, dependency-annotated bodies; `--update` rebases children after parent changes |
+| `/strapped:feedback <slug> [--deliverable Did]... [--pr url]... [--dry-run] [--max-rounds N]` | Turn PR review comments into reviewed, approved fixes: fetch comments across the run's PRs (GitHub via `gh`), synthesize cross-deliverable addenda, run the adversarial plan-review loop, gate on approval, apply fixes on the existing branches, then offer `/strapped:pr <slug> --update` |
 | `/strapped:learn` | Cluster your captured critiques into proposed CLAUDE.md additions — shown as a diff, applied only on approval |
 | `/strapped:status [<slug>]` | Read-only dashboard: DAG, statuses, worktrees, PRs, parked reasons, next action |
 
@@ -42,6 +43,10 @@ Edit, then `/reload-plugins`. Push when happy; other machines pick it up via mar
 ## PR tracking
 
 Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which checks every `pr-open` deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, and notes newly unblocked children. It exits silently in milliseconds when a project has no strapped state or nothing is `pr-open`, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.
+
+## Feedback loop
+
+When reviewers request changes on a run's stacked PRs, `/strapped:feedback <slug>` closes the loop back into planning. It fetches every in-scope PR's review comments via `gh` — line-anchored comments, review-submission bodies (including `CHANGES_REQUESTED` summaries), and global comments — synthesizes them into ONE consolidated **cross-deliverable** plan (a comment left on one PR can land a fix on a different deliverable), attaches each fix as a `## Feedback addendum` on the existing deliverable file, then runs the addenda through the SAME adversarial plan-review loop the original plan used before gating on your explicit approval. Approved fixes apply on each deliverable's EXISTING branch/worktree in stack order (no new branches, no force-push, no merge), and the run ends by offering `/strapped:pr <slug> --update` once to rebase the stack. Feedback rounds record separately (`feedback-round-<N>.md`, `feedback_rounds_used`) so the original run's audit stays intact.
 
 ## Per-project setup
 

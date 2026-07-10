@@ -151,7 +151,8 @@ const dropped = gating.length - surviving.length
 if (dropped > 0) log(`refute pass dropped ${dropped} finding(s)`)
 
 phase('Consolidate')
-const roundFile = `${cfg.dir}/reviews/${cfg.deliverableId}-code-round-${cfg.round}.md`
+const recordSuffix = cfg.recordSuffix || ''
+const roundFile = `${cfg.dir}/reviews/${cfg.deliverableId}-code-round-${cfg.round}${recordSuffix}.md`
 const consolidation = await agent(
   `You are consolidating verified code-review findings for deliverable ${cfg.deliverableId}, round ${cfg.round}, of strapped run "${cfg.slug}". Follow the round-record format in ${cfg.conventionsFile}.
 
@@ -166,7 +167,7 @@ Rule checklists: ${JSON.stringify(checklists, null, 2)}
 Seen digest from prior rounds:
 ${cfg.seenDigest || '(none — first round)'}
 
-Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${cfg.deliverableId}-code-round-*.md — read them.
+Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${cfg.deliverableId}-code-round-*${recordSuffix}.md — read them.
 
 Tasks:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
