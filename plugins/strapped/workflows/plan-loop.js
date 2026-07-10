@@ -189,23 +189,28 @@ let converged = false
 let roundsUsed = 0
 let outstanding = []
 
-for (let round = 1; round <= cfg.maxRounds; round++) {
-  roundsUsed = round
+// One review round: 2 reviewers → refute → consolidate-vs-seen. Writes its own
+// round record and returns the truly-NEW confirmed findings. `confirmation`
+// runs the same machinery as a determination-only pass (does not drive a fix)
+// with a distinct round label so its record does not clobber a fix round's.
+async function runReviewRound(round, confirmation) {
   const rules = cfg.rulesByRound[round - 1]
   const seedUsed = cfg.seed + round
+  const roundLabel = confirmation ? `${round}-confirm` : `${round}`
+  const phaseLabel = confirmation ? `Confirm ${round}` : `Review ${round}`
 
-  phase(`Review ${round}`)
+  phase(phaseLabel)
   const reviews = await parallel([
-    () => agent(reviewerPrompt('a', rules.a, seen, round), { label: `plan-review:a:r${round}`, schema: FINDINGS_SCHEMA }),
-    () => agent(reviewerPrompt('b', rules.b, seen, round), { label: `plan-review:b:r${round}`, schema: FINDINGS_SCHEMA }),
+    () => agent(reviewerPrompt('a', rules.a, seen, round), { label: `plan-review:a:r${roundLabel}`, schema: FINDINGS_SCHEMA }),
+    () => agent(reviewerPrompt('b', rules.b, seen, round), { label: `plan-review:b:r${roundLabel}`, schema: FINDINGS_SCHEMA }),
   ])
 
   const tagged = reviews.map((r, i) => ({ r, which: i === 0 ? 'a' : 'b' })).filter(x => x.r)
-  const allFindings = tagged.flatMap(x => x.r.findings.map(f => ({ ...f, id: `r${round}-${x.which}-${f.id}` })))
+  const allFindings = tagged.flatMap(x => x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}` })))
   const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist]))
   const gating = allFindings.filter(f => f.severity !== 'suggestion')
   const suggestions = allFindings.filter(f => f.severity === 'suggestion')
-  log(`round ${round}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
+  log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
 
   const verified = await parallel(
     gating.map(f => () =>
@@ -217,9 +222,9 @@ for (let round = 1; round <= cfg.maxRounds; round++) {
     .filter(Boolean)
     .filter(f => f.refute.verdict !== 'refuted' && f.refute.confidence >= cfg.confidenceMin)
 
-  const roundFile = `${cfg.dir}/reviews/plan-round-${round}.md`
+  const roundFile = `${cfg.dir}/reviews/plan-round-${roundLabel}.md`
   const consolidation = await agent(
-    `You are consolidating verified plan-review findings for round ${round} of strapped run "${cfg.slug}". Round-record format: ${cfg.conventionsFile}.
+    `You are consolidating verified plan-review findings for round ${roundLabel} of strapped run "${cfg.slug}". Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
 
 Surviving verified findings:
 ${JSON.stringify(surviving, null, 2)}
@@ -236,15 +241,24 @@ Prior round files live at ${cfg.dir}/reviews/plan-round-*.md — read them.
 
 Tasks:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${roundFile} with frontmatter (round: ${round}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists.
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists.
 3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`,
-    { label: `consolidate:r${round}`, phase: `Review ${round}`, effort: 'low', schema: CONSOLIDATE_SCHEMA }
+    { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: CONSOLIDATE_SCHEMA }
   )
 
   const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map(f => f.id))
   const newConfirmed = surviving.filter(f => newIds.has(f.id))
+  log(`round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`)
+  return { newConfirmed, newIds, roundFile }
+}
+
+let lastRoundFixedAll = false
+for (let round = 1; round <= cfg.maxRounds; round++) {
+  roundsUsed = round
+  lastRoundFixedAll = false
+
+  const { newConfirmed, newIds, roundFile } = await runReviewRound(round, false)
   for (const f of newConfirmed) seen.push({ ...f, round, status: 'open' })
-  log(`round ${round}: ${newConfirmed.length} NEW confirmed finding(s)`)
 
   if (newConfirmed.length === 0) {
     converged = true
@@ -264,7 +278,26 @@ ${JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.loca
 For each finding: apply the fix (this may mean splitting a deliverable that mixes unrelated themes or exceeds the ~1,000-line meaningful-diff threshold, adding a missing deliverable, fixing deps in BOTH the manifest and the deliverable frontmatter, adding acceptance criteria or tests, or correcting a wrong assumption after re-checking the code). Then update ${roundFile}: flip each addressed finding's status from open to fixed. Return one line per finding: id — what you changed.`,
     { label: `revise:r${round}`, phase: `Revise ${round}` }
   )
-  if (revision) for (const f of seen) if (newIds.has(f.id)) f.status = 'fixed'
+  if (revision) {
+    for (const f of seen) if (newIds.has(f.id)) f.status = 'fixed'
+    lastRoundFixedAll = true
+  }
+}
+
+// The final budgeted round found and revised findings but never got a
+// zero-new round to prove convergence. Run ONE confirmation review (does not
+// consume budget, never loops) so a fully-revised final round is not falsely
+// reported as non-converged. Genuinely-open findings still leave converged
+// false with a real outstanding list.
+if (!converged && lastRoundFixedAll) {
+  const { newConfirmed } = await runReviewRound(cfg.maxRounds, true)
+  for (const f of newConfirmed) seen.push({ ...f, round: cfg.maxRounds, status: 'open' })
+  if (newConfirmed.length === 0) {
+    converged = true
+    outstanding = []
+  } else {
+    outstanding = newConfirmed
+  }
 }
 
 return {
