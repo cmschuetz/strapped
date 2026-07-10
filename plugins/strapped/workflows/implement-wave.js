@@ -83,9 +83,8 @@ async function reviewFixLoop(state) {
   let roundsUsed = 0
   let parkedReason = null
 
-  for (let round = 1; round <= cfg.codeRounds; round++) {
-    roundsUsed = round
-    const review = await workflow(cfg.codeReviewScript ? { scriptPath: cfg.codeReviewScript } : 'strapped-code-review', {
+  const runReview = (round, confirmation) =>
+    workflow(cfg.codeReviewScript ? { scriptPath: cfg.codeReviewScript } : 'strapped-code-review', {
       slug: cfg.slug,
       deliverableId: item.id,
       dir: cfg.dir,
@@ -97,12 +96,18 @@ async function reviewFixLoop(state) {
       branch: item.branch,
       base: item.base,
       planFile: item.planFile,
-      round,
+      round: confirmation ? `${round}-confirm` : round,
       seedUsed: cfg.seed + round,
       rules: cfg.rulesByRound[round - 1],
       confidenceMin: cfg.confidenceMin,
       seenDigest: digest(seen),
     })
+
+  let lastRoundFixedAll = false
+  for (let round = 1; round <= cfg.codeRounds; round++) {
+    roundsUsed = round
+    lastRoundFixedAll = false
+    const review = await runReview(round, false)
     if (!review) {
       parkedReason = `code-review workflow failed on round ${round}`
       break
@@ -124,16 +129,35 @@ async function reviewFixLoop(state) {
       break
     }
     for (const f of seen) if (f.status === 'open') f.status = 'fixed'
+    lastRoundFixedAll = true
+  }
+
+  if (!converged && !parkedReason && lastRoundFixedAll) {
+    const confirm = await runReview(cfg.codeRounds, true)
+    if (!confirm) {
+      parkedReason = `code-review confirmation pass failed after round ${cfg.codeRounds}`
+    } else {
+      suggestions.push(...confirm.suggestions)
+      if (confirm.converged) {
+        converged = true
+      } else {
+        for (const f of confirm.newConfirmed) seen.push({ ...f, round: cfg.codeRounds, status: 'open' })
+        parkedReason = `confirmation pass after round ${cfg.codeRounds} surfaced open findings: ${confirm.newConfirmed.map(f => f.key).join(', ')}`
+      }
+    }
   }
 
   if (converged) {
     return { item, outcome: 'done', roundsUsed, summary: state.summary, suggestions }
   }
+  const open = seen.filter(f => f.status === 'open').map(f => f.key)
   return {
     item,
     outcome: 'parked',
     roundsUsed,
-    parkedReason: parkedReason || `code-review budget (${cfg.codeRounds}) exhausted with open findings: ${seen.filter(f => f.status === 'open').map(f => f.key).join(', ')}`,
+    parkedReason:
+      parkedReason ||
+      `code-review budget (${cfg.codeRounds}) exhausted with open findings: ${open.join(', ')}`,
     summary: state.summary,
     suggestions,
   }
