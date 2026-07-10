@@ -221,20 +221,20 @@ Expand a leading `~` to `$HOME`. An **absolute** result → *shared mode*; a **r
 
 ### Resolving the run root
 
-The run root is addressed by primary repo in shared mode, or is repo-relative in legacy mode:
+The run root is addressed by primary repo in shared mode, or is repo-relative in legacy mode. `<runRoot>` is slug-less; the run's state lives at `<runRoot>/<slug>/` (see [Directory layout](#directory-layout)):
 
-- **Shared mode** (absolute `stateRoot`): `<runRoot>` = `<stateRoot>/<primaryRepo>/<slug>/`.
-- **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<primaryRepoAbs>/<stateRoot>/<slug>/`. No `<repo>` segment — state is already repo-scoped.
+- **Shared mode** (absolute `stateRoot`): `<runRoot>` = `<stateRoot>/<primaryRepo>/`.
+- **Legacy repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<primaryRepoAbs>/<stateRoot>/`. No `<repo>` segment — state is already repo-scoped.
 
 #### Cwd-independent slug → run-root resolution
 
 The slug-addressed invocations — the downstream skills `/strapped:implement`, `/strapped:status`, `/strapped:pr`, **and** the `/strapped:plan` resume path (re-invoked with `--repo` omitted) — receive only a `<slug>` and a cwd that may be a plans dir. They MUST locate the run root **without** deriving the primary repo from `git rev-parse` on cwd. This is the authoritative resolution for **any** slug-only invocation. Rule (first match wins):
 
-- **Shared mode:** glob `<stateRoot>/*/<slug>/manifest.md` and take the single match's directory as `<runRoot>`.
+- **Shared mode:** glob `<stateRoot>/*/<slug>/manifest.md` and take the single match's directory as the run's `<runRoot>/<slug>` (its parent is `<runRoot>` = `<stateRoot>/<primaryRepo>/`).
   - **Zero** matches — caller-dependent: a slug-addressed downstream skill (implement/status/pr) stops with a helpful message (slug not found under `<stateRoot>`); the plan skill treats zero matches as "no existing run" and proceeds to fresh inference/scaffold (D2).
   - **Exactly one** match — use it.
   - **More than one** match (same slug under two primary-repo namespaces) — stop and ask the user to disambiguate; they may pass `--primary-repo <name>` to select `<stateRoot>/<name>/<slug>/`.
-- **Legacy repo-relative mode:** `<runRoot>` = `<repoAbs>/<stateRoot>/<slug>/` for the current repo, as today (state is already repo-scoped, so cwd resolution is correct here).
+- **Legacy repo-relative mode:** `<runRoot>` = `<repoAbs>/<stateRoot>/` for the current repo, with the run's state at `<runRoot>/<slug>/`, as today (state is already repo-scoped, so cwd resolution is correct here).
 
 Once `manifest.md` is located, its `repos:` map supplies every target repo — cwd is **never** consulted to pick the primary repo. This is the source the slug-only invocations (downstream skills and plan-resume) defer to; the plan resume path recovers an existing run's primary repo / `repos:` map off disk this way before re-inferring or re-confirming repos.
 
