@@ -13,7 +13,7 @@ allowed-tools:
 
 Implement an approved strapped plan.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time. This skill cold-starts entirely from the project's `<stateRoot>/<slug>/` (from `.claude/strapped-config.json`, default `plans/strapped`) plus that config — it needs no memory of the planning session.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time. This skill cold-starts entirely from the run root `<runRoot>/<slug>/` (resolved per the conventions' Config resolution) plus the per-repo config — it needs no memory of the planning session.
 
 ## Arguments
 
@@ -26,7 +26,7 @@ Implement an approved strapped plan.
 
 Read `manifest.md` (must be `status: approved` or `implementing` — otherwise stop and say why) and every `deliverables/*.md` frontmatter. Set manifest `status: implementing` if not already. Build the DAG from the manifest `deliverables` list; per-node truth (status, branch, worktree, rounds used) comes from the deliverable files only.
 
-Read the project config `.claude/strapped-config.json` (`validations`, `worktreeRoot`, `provisioning`). If it is missing, stop and point the user at `/strapped:plan`, which generates it.
+Resolve the per-repo config per the conventions' Config resolution (repo-local `.claude/strapped-config.json`, else `<runRoot>/strapped-config.json`) for `validations`, `worktreeRoot`, `provisioning`. If none exists, stop and point the user at `/strapped:plan`, which generates it.
 
 ## Step 2 — Rule assignments
 
@@ -44,7 +44,7 @@ Repeat until no deliverable is runnable:
 ```json
 {
   "slug": "<slug>",
-  "dir": "<abs>/<stateRoot>/<slug>",
+  "dir": "<runRoot>/<slug>",
   "repoRoot": "<abs repo root>",
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "items": [
@@ -55,7 +55,7 @@ Repeat until no deliverable is runnable:
   "confidenceMin": 70,
   "seed": 42,
   "rulesByRound": [<per-round splits from step 2>],
-  "validations": [<the validations array from .claude/strapped-config.json>]
+  "validations": [<the validations array from the resolved config>]
 }
 ```
 

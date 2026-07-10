@@ -10,7 +10,7 @@ allowed-tools:
   - Grep
 ---
 
-Create/update stacked PRs for `done` deliverables of one strapped run. Formats and naming are in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`) — read it first. Cold-starts from `<stateRoot>/<slug>/` alone (`stateRoot` from `.claude/strapped-config.json`, default `plans/strapped`).
+Create/update stacked PRs for `done` deliverables of one strapped run. Formats and naming are in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`) — read it first. Cold-starts from the run root `<runRoot>/<slug>/` alone (`<runRoot>` resolved per the conventions' Config resolution).
 
 ## Arguments
 

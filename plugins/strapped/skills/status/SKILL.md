@@ -12,7 +12,7 @@ Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/c
 
 ## Arguments
 
-`$ARGUMENTS`: `[<slug>]` — omit to list all runs under `<stateRoot>/` (from `.claude/strapped-config.json`, default `plans/strapped`) with one summary line each (slug, status, done/total deliverables), then stop.
+`$ARGUMENTS`: `[<slug>]` — omit to list all runs under this repo's run root `<runRoot>/` (resolved per the conventions' Config resolution) with one summary line each (slug, status, done/total deliverables), then stop. In shared mode, other repos' runs live under sibling `<stateRoot>/<repo>/` roots.
 
 ## With a slug
 

@@ -12,7 +12,7 @@ Get strapped in. An agentic coding harness for Claude Code: a big themed `plan.m
 | `/strapped:learn` | Cluster your captured critiques into proposed CLAUDE.md additions — shown as a diff, applied only on approval |
 | `/strapped:status [<slug>]` | Read-only dashboard: DAG, statuses, worktrees, PRs, parked reasons, next action |
 
-All run state lives in the consuming project (`<stateRoot>/<slug>/`, default `plans/strapped/`, plus `.claude/strapped-config.json`), never in the plugin. Design details: `plugins/strapped/conventions.md`.
+All run state lives under a per-repo run root — by default `<stateRoot>/<repo>/<slug>/` beneath a shared state root, colocated with that repo's config — never in the plugin. `stateRoot` comes from `$STRAPPED_STATE_ROOT` or `~/.claude/strapped.json`; a repo can instead keep state in-repo via a local `.claude/strapped-config.json`. Design details: `plugins/strapped/conventions.md`.
 
 ## Setup (each machine)
 
@@ -45,4 +45,4 @@ Deliverable statuses refresh automatically at session start: a SessionStart hook
 
 ## Per-project setup
 
-None required — `/strapped:plan` generates `.claude/strapped-config.json` (validation commands, worktree root, worktree provisioning) on first run and asks you to confirm it.
+None required in the repo itself — `/strapped:plan` generates the per-repo config (validation commands, worktree root, worktree provisioning) on first run and asks you to confirm it. By default it lives with the state at `<stateRoot>/<repo>/strapped-config.json`; set `stateRoot` once via `~/.claude/strapped.json` (`{"stateRoot": "..."}`) or `$STRAPPED_STATE_ROOT`.

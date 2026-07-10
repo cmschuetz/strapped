@@ -24,24 +24,25 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 
 ## Step 1 — Config, then scaffold or resume
 
-Ensure the project config exists at `.claude/strapped-config.json`. If missing, generate it and confirm the values with the user before continuing:
+Resolve `<repo>`, `stateRoot`, and the run root `<runRoot>` per the **Config resolution** section of the conventions (env → repo-local config → `~/.claude/strapped.json` anchor → `plans/strapped`; absolute → `<stateRoot>/<repo>/`, relative → `<stateRoot>/` in the repo). `<runRoot>` is where all run state lives — every path below uses it.
+
+Ensure a per-repo config exists (repo-local `.claude/strapped-config.json`, else `<runRoot>/strapped-config.json`). If none does, generate one and confirm the values with the user before continuing:
 
 ```json
 {
-  "stateRoot": "plans/strapped",
   "validations": ["<derived from the project CLAUDE.md validation/check commands>"],
   "worktreeRoot": "<repo-parent>/<repo-name>__worktrees",
   "provisioning": "<untracked files worktrees need for validations (placeholder values only, never real secrets), or empty>"
 }
 ```
 
-`stateRoot` (repo-relative, default `plans/strapped`) is where all run state lives — every path below uses it.
+Write the new config to `<runRoot>/strapped-config.json` when `stateRoot` is a shared/absolute base (the default). If there is no anchor and no repo-local config, ask the user whether to set up a global anchor (`~/.claude/strapped.json` with their chosen `stateRoot`) or keep state repo-relative — only then finalize `<runRoot>` and where the config goes.
 
-Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). If `<stateRoot>/<slug>/manifest.md` exists, read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). Otherwise scaffold:
+Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). If `<runRoot>/<slug>/manifest.md` exists, read its `status` and resume at the matching step below (`draft`/`in-review` → step 3; `approved` or later → tell the user this run is already approved and stop, pointing at `/strapped:status`). Otherwise scaffold:
 
 ```bash
-mkdir -p <stateRoot>/<slug>/{deliverables,reviews,critiques}
-touch <stateRoot>/<slug>/critiques/user-critiques.md
+mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques}
+touch <runRoot>/<slug>/critiques/user-critiques.md
 ```
 
 ## Step 2 — Rule snapshot and per-round assignments
@@ -56,7 +57,7 @@ Invoke the `strapped-plan-loop` workflow — invoke the Workflow tool with `scri
 ```json
 {
   "slug": "<slug>",
-  "dir": "<abs>/<stateRoot>/<slug>",
+  "dir": "<runRoot>/<slug>",
   "sourcePlan": "<abs path to the source plan.md>",
   "repoRoot": "<abs repo root>",
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",

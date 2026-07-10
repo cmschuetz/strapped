@@ -5,15 +5,30 @@ cd "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null || exit 0
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
 
-config=".claude/strapped-config.json"
-state_root="plans/strapped"
-if [ -f "$config" ]; then
-  sr=$(grep -o '"stateRoot"[[:space:]]*:[[:space:]]*"[^"]*"' "$config" | sed 's/.*"\([^"]*\)"$/\1/')
-  [ -n "${sr:-}" ] && state_root="$sr"
-fi
-[ -d "$state_root" ] || exit 0
+read_state_root() { grep -o '"stateRoot"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/'; }
 
-files=$(grep -l '^status: pr-open$' "$state_root"/*/deliverables/*.md 2>/dev/null) || exit 0
+# Resolve stateRoot per conventions: env > repo-local config > ~/.claude/strapped.json > default.
+repo_config=".claude/strapped-config.json"
+anchor="$HOME/.claude/strapped.json"
+state_root="${STRAPPED_STATE_ROOT:-}"
+[ -n "$state_root" ] || { [ -f "$repo_config" ] && state_root=$(read_state_root "$repo_config"); }
+[ -n "$state_root" ] || { [ -f "$anchor" ] && state_root=$(read_state_root "$anchor"); }
+[ -n "$state_root" ] || state_root="plans/strapped"
+
+case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
+
+# Absolute stateRoot → shared mode (run root <stateRoot>/<repo>). Relative → legacy repo-relative.
+case "$state_root" in
+  /*)
+    repo=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)")
+    [ -n "$repo" ] || exit 0
+    run_root="$state_root/$repo"
+    ;;
+  *) run_root="$state_root" ;;
+esac
+[ -d "$run_root" ] || exit 0
+
+files=$(grep -l '^status: pr-open$' "$run_root"/*/deliverables/*.md 2>/dev/null) || exit 0
 [ -n "$files" ] || exit 0
 
 gh auth status >/dev/null 2>&1 || exit 0
@@ -48,7 +63,7 @@ for f in $files; do
 done
 
 if [ "$flipped_any" = 1 ]; then
-  for d in "$state_root"/*/; do
+  for d in "$run_root"/*/; do
     slug=$(basename "$d")
     for f in "$d"deliverables/*.md; do
       [ -f "$f" ] || continue
