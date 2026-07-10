@@ -1,0 +1,14 @@
+{
+  "name": "strapped",
+  "owner": {
+    "name": "Christian Schuetz",
+    "email": "cmschuetz12@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "strapped",
+      "source": "./plugins/strapped",
+      "description": "Adversarial plan → implement → stacked-PR coding harness: rule-partitioned reviewers, refute passes, DAG deliverables in persistent worktrees, CLAUDE.md learning loop"
+    }
+  ]
+}
