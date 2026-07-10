@@ -11,6 +11,22 @@ export const meta = {
 
 const cfg = typeof args === 'string' ? JSON.parse(args) : args
 
+const repos =
+  Array.isArray(cfg.repos) && cfg.repos.length
+    ? cfg.repos
+    : cfg.repoRoot
+    ? [{ name: cfg.repoRoot.split('/').filter(Boolean).pop() || cfg.repoRoot, root: cfg.repoRoot, primary: true }]
+    : []
+const primaryRepo = repos.find(r => r.primary) || repos[0]
+const primaryRepoRoot = primaryRepo ? primaryRepo.root : cfg.repoRoot
+
+function repoList() {
+  if (!repos.length) return `Repo root: ${cfg.repoRoot}`
+  return repos
+    .map(r => `- ${r.name}${r.primary ? ' (primary)' : ''} → ${r.root}`)
+    .join('\n')
+}
+
 const PLAN_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -116,11 +132,13 @@ function reviewerPrompt(which, rules, seen, round) {
 Original ask: ${cfg.sourcePlan}
 Plan under review, in ${cfg.dir}: manifest.md, research.md, and every file in deliverables/.
 Conventions the plan must follow: ${cfg.conventionsFile}
-Repo root (explore as needed to check the plan's claims against reality): ${cfg.repoRoot}
+Target repos (explore any of these as needed to check the plan's claims against reality):
+${repoList()}
 
-Read the original ask first, then the whole plan, then verify claims against the actual codebase where they matter.
+Read the original ask first, then the whole plan, then verify claims against the actual codebase(s) where they matter.
 
 Your lens (your primary hunting ground beyond the rules): ${LENSES[which]}.
+${which === 'b' ? `\nSoundness — multi-repo checks specific to this run: verify each deliverable has a \`repo:\` field naming one of the target repos above; verify each deliverable's \`base:\` obeys the cross-repo base rule (it is a branch in the SAME repo as the deliverable, or that repo's \`main\` for roots and for cross-repo children — a deliverable can never base on a branch in a different repo); and verify that no cross-repo dep is a true code dependency (cross-repo deps are ordering-only — flag any cross-repo child that would need its parent's unmerged code, since it bases on its own repo's \`main\` and does not have that code).\n` : ''}
 
 Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
 ${ruleBlock(rules)}
@@ -134,7 +152,8 @@ You MUST return a rule_checklist verdict (pass/violation/na + one line of eviden
 }
 
 function refutePrompt(f) {
-  return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in the implementation plan at ${cfg.dir} (original ask: ${cfg.sourcePlan}, repo: ${cfg.repoRoot}).
+  return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in the implementation plan at ${cfg.dir} (original ask: ${cfg.sourcePlan}). Target repos you may explore to check the claim:
+${repoList()}
 
 Claim [${f.severity}] at ${f.location}: ${f.what}
 Why: ${f.why}
@@ -148,16 +167,18 @@ const plan = await agent(
   `You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
 
 Source plan (the original ask): ${cfg.sourcePlan}
-Repo root: ${cfg.repoRoot}
+Target repos (the work spans these; the first-flagged is the primary repo whose namespace holds the run state):
+${repoList()}
 Output directory (already scaffolded): ${cfg.dir}
 Conventions you MUST follow for every file format: ${cfg.conventionsFile}
 
 Procedure:
-1. Read the source plan in full, then research the codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
+1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
 2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
-3. Split the work into deliverables of roughly 500 lines of complex diff each, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Prefer more, smaller, independently-shippable nodes over fewer large ones.
-4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base: parent branch or main, worktree: null, pr: null, review_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
-5. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, the deliverables list with ids/files/deps, theme summary, ASCII DAG sketch).
+3. Split the work into deliverables of roughly 500 lines of complex diff each, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Prefer more, smaller, independently-shippable nodes over fewer large ones. Assign each deliverable to exactly one target repo.
+4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
+5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
+6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, the repos: map listing every target repo above per the conventions — name, root, config path, and primary: true on the primary; the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
 
 Return the deliverable list and a one-paragraph summary.`,
   { label: 'planner', schema: PLAN_SCHEMA }
@@ -236,7 +257,8 @@ Tasks:
 
   phase(`Revise ${round}`)
   const revision = await agent(
-    `You are the plan reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing the plan files in ${cfg.dir} (manifest.md, research.md, deliverables/*.md), keeping every file conformant to ${cfg.conventionsFile}. Original ask for reference: ${cfg.sourcePlan}. Repo root: ${cfg.repoRoot}.
+    `You are the plan reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing the plan files in ${cfg.dir} (manifest.md, research.md, deliverables/*.md), keeping every file conformant to ${cfg.conventionsFile}. Original ask for reference: ${cfg.sourcePlan}. Target repos (fix repo assignments and cross-repo base rules against these):
+${repoList()}
 
 Confirmed findings to close (full bodies also in ${roundFile}):
 ${JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
