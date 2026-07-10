@@ -16,8 +16,7 @@ state_root="${STRAPPED_STATE_ROOT:-}"
 
 case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
 
-# Absolute stateRoot → shared mode: scan ALL repo namespaces under <stateRoot>, regardless of cwd.
-# Relative stateRoot → legacy repo-relative mode: run root is repo-relative (cwd must be that repo).
+# Absolute stateRoot → shared mode (run root <stateRoot>/<repo>). Relative → legacy repo-relative.
 case "$state_root" in
   /*)
     shared=1
@@ -32,10 +31,8 @@ esac
 [ -d "$run_root" ] || exit 0
 
 if [ "$shared" = 1 ]; then
-  # <stateRoot>/<repo>/<slug>/deliverables/*.md across every repo namespace.
   files=$(grep -l '^status: pr-open$' "$run_root"/*/*/deliverables/*.md 2>/dev/null) || exit 0
 else
-  # <runRoot>/<slug>/deliverables/*.md (state already repo-scoped).
   files=$(grep -l '^status: pr-open$' "$run_root"/*/deliverables/*.md 2>/dev/null) || exit 0
 fi
 [ -n "$files" ] || exit 0
