@@ -17,6 +17,7 @@ const EXPECTED_WORKFLOW_NAMES = [
   'strapped-feedback-synth',
   'strapped-implement-wave',
   'strapped-plan-loop',
+  'strapped-pr-run',
   'strapped-review-loop',
 ]
 
@@ -145,7 +146,7 @@ test('workflow meta.names are unique and every referenced workflow name resolves
   const referenced = new Set()
   for (const file of referencingFiles) {
     const src = readFileSync(file, 'utf8')
-    for (const ref of src.match(/strapped-[a-z]+(?:-loop|-review|-wave|-synth)/g) || []) {
+    for (const ref of src.match(/strapped-[a-z]+(?:-loop|-review|-wave|-synth|-run)/g) || []) {
       assert.ok(nameSet.has(ref), `${file} references unknown workflow name ${ref}`)
       referenced.add(ref)
     }

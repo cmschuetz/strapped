@@ -299,6 +299,28 @@ The idempotent worktree recipe from [Worktrees and branches](#worktrees-and-bran
 
 Output is one JSON object `{"worktree", "branch", "created"}` on stdout; git failures exit non-zero with git's stderr passed through.
 
+## Composable chains
+
+Status: **partially shipped**. The chain architecture (a chain-run orchestrator workflow sequencing plan → implement → pr stage workflows, plus an implement-run wave-loop workflow) is blocked on the verified Workflow-tool nesting limit below; only the pr stage workflow (`strapped-pr-run`) exists.
+
+### Workflow nesting limit (verified)
+
+Verified 2026-07-11 against the real Workflow tool, with throwaway scriptPath chains dispatched at depths 2, 3, and 4:
+
+- **Depth 2** — a root workflow dispatching one child via `workflow({ scriptPath })` — **works**: the child's return value and its `phase`/`log` output surface at the root.
+- **Depth 3 and depth 4 fail**: a CHILD workflow may not call `workflow()` at all. Exact runtime error: `workflow() cannot be called from within a child workflow — nesting is limited to one level. Inline the inner script or call its agents directly.`
+
+Consequence: a chain-run orchestrator workflow cannot dispatch the existing stage workflows, because `plan-loop.js → review-loop.js` and `implement-wave.js → code-review.js` each already consume the single allowed nesting level. Neither the planned depth-4 chain (chain-run → implement-run → implement-wave → code-review) nor its flatten-to-3-levels fallback (chain-run absorbing the wave loop and dispatching implement-wave directly) is buildable. Chain sequencing therefore cannot live in a workflow above the existing stage workflows: it must live in a skill that dispatches each stage workflow as a ROOT workflow in order (each stage then keeps its one nesting level), and the implement wave loop must stay skill-side (as in `/strapped:implement` today) unless the review dispatch inside `implement-wave.js` is restructured.
+
+### strapped-pr-run
+
+The stacked-PR create pass as a workflow stage. Safe to dispatch either as a root workflow or as another workflow's child, because it dispatches no sub-workflows — it is a single PR agent.
+
+- cfg: `{ slug, dir, conventionsFile, stateScript, dryRun }` — `stateScript` is the absolute path to `scripts/state.mjs`, `dir` the run root.
+- One `pr-create` agent runs the [Stacked PRs](#stacked-prs) create procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + topo order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), and carries the pr skill's guardrails verbatim: never push `main`, never merge PRs, never `--force` (only `--force-with-lease`), enforced per repo via `-C <deliverableRepoRoot>`; an unauthenticated `gh` or a branch with no commits beyond its base is reported and skipped (`prs[].skipped: true` with a human-readable `reason`), never failing the stage.
+- `dryRun: true` → print-only: no push, no PR create/edit, no state writes; the would-be commands are returned in `summary`, every `url` is null and every node `skipped: true`.
+- Returns `{ slug, dryRun, prs: [{id, url, skipped, reason}], summary }`.
+
 ## Validations
 
 Every command in the **deliverable's repo's** config `validations` must be green before code review and after every fix round, run inside the deliverable's worktree.
