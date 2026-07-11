@@ -61,6 +61,67 @@ test('every skills/*/SKILL.md has frontmatter with name and description', () => 
   }
 })
 
+// GitHub-style heading slugs for the anchor-link check, with fenced code
+// blocks stripped so code comments never register as headings.
+function conventionHeadings() {
+  const src = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
+  const prose = src.replace(/^```[\s\S]*?^```\s*$/gm, '')
+  return [...prose.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map(m => m[1])
+}
+
+const slugify = heading =>
+  heading
+    .toLowerCase()
+    .replace(/[^\w\- ]/g, '')
+    .replace(/ /g, '-')
+
+test('every anchor link in conventions.md and every SKILL.md link into conventions.md resolves to a heading', () => {
+  const slugs = new Set(conventionHeadings().map(slugify))
+  assert.ok(slugs.size > 0, 'expected headings in conventions.md')
+
+  const conventionsSrc = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
+  const anchors = [...conventionsSrc.matchAll(/\]\(#([^)]+)\)/g)].map(m => m[1])
+  assert.ok(anchors.length > 0, 'expected at least one anchor link in conventions.md')
+  for (const anchor of anchors) {
+    assert.ok(slugs.has(anchor), `conventions.md links to missing heading #${anchor}`)
+  }
+
+  const skillsDir = join(PLUGIN_ROOT, 'skills')
+  for (const dir of readdirSync(skillsDir)) {
+    const src = readFileSync(join(skillsDir, dir, 'SKILL.md'), 'utf8')
+    for (const [, fragment] of src.matchAll(/\]\([^)#]*conventions\.md#([^)]+)\)/g)) {
+      assert.ok(slugs.has(fragment), `${dir}/SKILL.md links to missing conventions.md heading #${fragment}`)
+    }
+  }
+})
+
+// The SKILL.mds cite conventions sections almost exclusively by prose NAME,
+// not markdown link — this fixed list is that prose-citation surface. Add to
+// it whenever a skill starts citing a new conventions section by name.
+// Case-insensitive PREFIX match: a heading may carry a trailing qualifier
+// without breaking the citation.
+const PROSE_CITED_SECTIONS = [
+  'Config resolution',
+  'Cwd-independent slug → run-root resolution',
+  'Resolving the per-repo config',
+  'Feedback loop',
+  'Rule extraction',
+  'Seeded rule split',
+  'Cross-repo base rule',
+  'Cleanup recipe',
+]
+
+test('every conventions section cited by name in SKILL.md prose still exists as a heading', () => {
+  const headings = conventionHeadings().map(h => h.toLowerCase())
+  for (const name of PROSE_CITED_SECTIONS) {
+    const wanted = name.toLowerCase()
+    assert.ok(
+      headings.some(h => h.startsWith(wanted)),
+      `conventions.md lost the prose-cited section heading "${name}"`
+    )
+  }
+})
+
 test('workflow meta.names are unique and every referenced workflow name resolves', () => {
   const workflowsDir = join(PLUGIN_ROOT, 'workflows')
   const files = readdirSync(workflowsDir).filter(f => f.endsWith('.js'))

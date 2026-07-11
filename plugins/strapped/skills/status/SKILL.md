@@ -19,10 +19,7 @@ Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/c
 
 ## Locating the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd — it may be a plans dir or `~`:
-
-- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
-- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe `<repoAbs>/<stateRoot>/runs/<slug>/manifest.md` for the current repo.
+Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd — it may be a plans dir or `~`: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
 
 If `manifest.md` is absent → stop with a helpful message (`slug <slug> not found under <stateRoot>`).
 
@@ -44,10 +41,7 @@ Read the manifest `repos:` map (**required**) — each entry gives a repo `name`
    - Unsynthesized critique count from `critiques/user-critiques.md`.
 ## No-slug mode
 
-List every run with one summary line each (slug, status, done/total deliverables), then stop.
-
-- **Shared mode:** glob `<stateRoot>/runs/*/manifest.md` — a single tier that never touches `repos/` (its sibling dir). Show each run's target repos alongside its slug.
-- **Repo-relative mode:** glob `<repoAbs>/<stateRoot>/runs/*/manifest.md` for the current repo.
+List every run with one summary line each (slug, status, done/total deliverables), then stop: glob `<stateRoot>/runs/*/manifest.md` — a single tier that never touches `repos/` (its sibling dir). Show each run's target repos alongside its slug.
 
 ## Next action
 

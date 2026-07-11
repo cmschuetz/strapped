@@ -23,10 +23,7 @@ Create/update stacked PRs for `done` deliverables of one strapped run. Formats a
 
 ## Locating the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd:
-
-- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`. Absent → stop (`slug <slug> not found under <stateRoot>`).
-- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe its `manifest.md` for the current repo.
+Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`. Absent → stop (`slug <slug> not found under <stateRoot>`).
 
 ## Resolving the repos map
 

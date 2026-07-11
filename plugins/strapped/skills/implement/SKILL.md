@@ -25,10 +25,7 @@ Implement an approved strapped plan.
 
 ## Step 0 — Locate the run root (cwd-independent)
 
-`/strapped:implement` is invoked with only a `<slug>`, and the cwd may be a plans dir or anything unrelated to the work. Resolve `<runRoot>/<slug>` per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd:
-
-- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
-- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe `<repoAbs>/<stateRoot>/runs/<slug>/manifest.md` for the current repo.
+`/strapped:implement` is invoked with only a `<slug>`, and the cwd may be a plans dir or anything unrelated to the work. Resolve `<runRoot>/<slug>` per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
 
 If `manifest.md` is absent, stop with a helpful message: the slug was not found under `<stateRoot>` (point at `/strapped:plan`).
 
@@ -36,7 +33,7 @@ If `manifest.md` is absent, stop with a helpful message: the slug was not found 
 
 Read `manifest.md` (must be `status: approved` or `implementing` — otherwise stop and say why) and every `deliverables/*.md` frontmatter. Set manifest `status: implementing` if not already. Build the DAG from the manifest `deliverables` list; per-node truth (status, branch, worktree, rounds used) comes from the deliverable files only.
 
-**Resolve every target repo's config.** Read the manifest `repos:` map (**required** — a manifest with no `repos:` map is invalid input). For **each** repo in it, resolve that repo's per-repo config per the conventions' Config resolution — the stateRoot mode fixes the location, parameterized by repo name+root: shared mode `<stateRoot>/repos/<repo>/config.json`, repo-relative mode `<rAbs>/.claude/strapped-config.json`. Build a lookup `repo → { root, validations, worktreeRoot, provisioning }`. If any target repo's config is missing, stop and point the user at `/strapped:plan`, which generates one per repo.
+**Resolve every target repo's config.** Read the manifest `repos:` map (**required** — a manifest with no `repos:` map is invalid input). For **each** repo in it, resolve that repo's per-repo config per the conventions' Config resolution — the location is fixed, parameterized by repo name: `<stateRoot>/repos/<repo>/config.json`. Build a lookup `repo → { root, validations, worktreeRoot, provisioning }`. If any target repo's config is missing, stop and point the user at `/strapped:plan`, which generates one per repo.
 
 Each deliverable's `repo:` field is **required** and names one of the `repos:` entries — a deliverable with no `repo:` is invalid input.
 

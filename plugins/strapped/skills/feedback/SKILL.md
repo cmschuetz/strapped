@@ -30,16 +30,13 @@ Drive PR review comments back into the plan→implement lifecycle for one strapp
 
 ## Step 0 — Locate the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd:
-
-- **Shared mode** (absolute `stateRoot`): the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
-- **Repo-relative mode** (relative `stateRoot`): the run root is `<repoAbs>/<stateRoot>/runs/<slug>/`; probe `<repoAbs>/<stateRoot>/runs/<slug>/manifest.md` for the current repo.
+Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
 
 If `manifest.md` is absent, stop with a helpful message (slug not found under `<stateRoot>`; point at `/strapped:plan`).
 
 ## Step 1 — Cold-start from disk
 
-Read `manifest.md` and every `deliverables/*.md` frontmatter. Read the manifest `repos:` map (**required**); for **each** repo resolve its per-repo config per the conventions' Config resolution (shared mode `<stateRoot>/repos/<repo>/config.json`, repo-relative mode `<rAbs>/.claude/strapped-config.json`), building a lookup `repo → { root, validations, worktreeRoot, provisioning }`. Each deliverable's `repo:` field is required and names one of the `repos:` entries.
+Read `manifest.md` and every `deliverables/*.md` frontmatter. Read the manifest `repos:` map (**required**); for **each** repo resolve its per-repo config per the conventions' Config resolution (`<stateRoot>/repos/<repo>/config.json`), building a lookup `repo → { root, validations, worktreeRoot, provisioning }`. Each deliverable's `repo:` field is required and names one of the `repos:` entries.
 
 Determine the **in-scope deliverable set**: every deliverable with a non-null `pr:` URL, intersected with `--deliverable`/`--pr` filters if given. A deliverable in scope is expected to be at `status: pr-open` (its PR is open, typically with changes requested — the same review `scripts/sync-prs.sh` warns on).
 
