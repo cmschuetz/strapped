@@ -304,6 +304,9 @@ function cmdDag(runDir, only) {
 // --- set -------------------------------------------------------------------
 
 function cmdSet(file, field, value) {
+  // A multi-line value would inject extra frontmatter lines (e.g. a forged
+  // second `status:` line), silently breaking the single-field-write contract.
+  if (/[\r\n]/.test(value)) die('value must be a single line')
   const { lines, idx, value: old } = readField(file, field)
   if (idx === -1) die(`unknown frontmatter field "${field}" in ${file}`)
   if (lines[idx] !== `${field}: ${value}`) writeField(file, lines, idx, field, value)

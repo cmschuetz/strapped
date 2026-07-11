@@ -232,6 +232,21 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
   assert.equal(env.readFile(file), afterLines.join('\n'))
 })
 
+test('set: newline-bearing value → exit 1, file untouched (no frontmatter line injection)', () => {
+  const env = makeStateEnv()
+  const file = env.addDeliverable('my-run', 'D1-x.md', deliverableFrontmatter('D1', { status: 'done' }))
+  const before = env.readFile(file)
+  for (const value of ['line1\nstatus: merged', 'line1\rstatus: merged']) {
+    const res = env.runState(['set', file, 'parked_reason', value])
+    assert.equal(res.status, 1)
+    assert.equal(res.stderr.trim(), 'state.mjs: value must be a single line')
+    assert.equal(res.stderr.trim().split('\n').length, 1)
+    assert.equal(env.readFile(file), before)
+  }
+  const statusLines = env.readFile(file).split('\n').filter(l => l.startsWith('status:'))
+  assert.deepEqual(statusLines, ['status: done'])
+})
+
 // --- transition ------------------------------------------------------------
 
 test('transition: skip-edges pending→in-progress, in-progress→done, in-progress→parked, parked→in-progress each accepted', () => {
