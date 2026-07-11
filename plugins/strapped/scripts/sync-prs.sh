@@ -1,28 +1,20 @@
 #!/usr/bin/env bash
 set -u
 
-cd "${CLAUDE_PROJECT_DIR:-$PWD}" 2>/dev/null || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
 
 read_state_root() { grep -o '"stateRoot"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/'; }
 
-# Resolve stateRoot per conventions: env > repo-local config > ~/.claude/strapped.json > default.
-repo_config=".claude/strapped-config.json"
+# Resolve stateRoot per conventions: env > ~/.claude/strapped.json > default ~/.claude/strapped.
 anchor="$HOME/.claude/strapped.json"
 state_root="${STRAPPED_STATE_ROOT:-}"
-[ -n "$state_root" ] || { [ -f "$repo_config" ] && state_root=$(read_state_root "$repo_config"); }
 [ -n "$state_root" ] || { [ -f "$anchor" ] && state_root=$(read_state_root "$anchor"); }
-[ -n "$state_root" ] || state_root="plans/strapped"
+[ -n "$state_root" ] || state_root="$HOME/.claude/strapped"
 
 case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
 
-# Absolute stateRoot → shared mode. Relative → repo-relative. Run state lives under <stateRoot>/runs/.
-case "$state_root" in
-  /*) ;;
-  *)
-    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-    ;;
-esac
+# stateRoot must be absolute; a relative value is invalid input — this hook exits silently.
+case "$state_root" in /*) ;; *) exit 0 ;; esac
 runs_root="$state_root/runs"
 [ -d "$runs_root" ] || exit 0
 

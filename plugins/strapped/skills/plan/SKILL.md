@@ -14,7 +14,7 @@ allowed-tools:
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md` — read it first, every time. State lives in the **project being worked on** (the cwd), never in the plugin.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md` — read it first, every time. State lives under the **global `stateRoot`** (default `~/.claude/strapped`), never in a worked repo or the plugin.
 
 ## Arguments
 
@@ -36,10 +36,8 @@ Do **not** run `git rev-parse --show-toplevel` on the cwd to pick the repo — t
 
 **`--repo` omitted — resume-first, then infer.** Run state is keyed by slug under `runs/`, so an existing run can be detected directly regardless of which repos it touches:
 
-1. Resolve `stateRoot` per conventions (`$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json` → default `plans/strapped`). The repo-local `.claude/strapped-config.json` source in the anchor chain cannot apply yet — no repo is chosen — so skip it here.
-2. Apply the conventions' **cwd-independent slug → run-root rule** to look for an existing run — a **direct path**, no glob, no fallback:
-   - **Shared mode** (absolute `stateRoot`): probe `<stateRoot>/runs/<slug>/manifest.md`.
-   - **Repo-relative mode** (relative `stateRoot`): probe `<repoAbs>/<stateRoot>/runs/<slug>/manifest.md` for the current repo.
+1. Resolve `stateRoot` per conventions (`$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json` → default `~/.claude/strapped`).
+2. Apply the conventions' **cwd-independent slug → run-root rule** to look for an existing run — a **direct path**, no glob, no fallback: probe `<stateRoot>/runs/<slug>/manifest.md`.
 3. Handle the probe result:
    - **Manifest present** — this is a **resume**. Read that `manifest.md`'s `repos:` map: its entries are the target repos. **Skip inference and AskUserQuestion entirely — do not re-prompt.** Then jump to 1d with the recovered repos and run root.
    - **Manifest absent** — no existing run. Fall through to inference below.
@@ -51,21 +49,15 @@ Store each target repo's canonical `<repoName>` and absolute `root`. The set is 
 
 ### 1c — Resolve stateRoot and the run root
 
-Resolve `stateRoot` per conventions, first match wins: `$STRAPPED_STATE_ROOT` → a target repo's repo-local `.claude/strapped-config.json`.stateRoot → `~/.claude/strapped.json`.stateRoot → default `plans/strapped`. Expand a leading `~`. Compute `<runRoot>`:
+Resolve `stateRoot` per conventions, first match wins: `$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json`.stateRoot → default `~/.claude/strapped`. Expand a leading `~`; if the resolved value is still relative after expansion it is invalid input — stop with a clear message. `<runRoot>` = `<stateRoot>/runs/`.
 
-- **Shared mode** (absolute `stateRoot`): `<runRoot>` = `<stateRoot>/runs/`.
-- **Repo-relative mode** (relative `stateRoot`): `<runRoot>` = `<repoAbs>/<stateRoot>/runs/`.
-
-`<runRoot>/<slug>/` is where all run state lives — every path below uses it. If there is no anchor and no repo-local config, ask the user whether to set up a global anchor (`~/.claude/strapped.json` with their chosen `stateRoot`) or keep state repo-relative — only then finalize `<runRoot>` and where configs go.
+`<runRoot>/<slug>/` is where all run state lives — every path below uses it. **First run** (neither `$STRAPPED_STATE_ROOT` nor `~/.claude/strapped.json` exists): proceed with the default `~/.claude/strapped` and tell the user where state will live; offer via AskUserQuestion to keep the default or write `~/.claude/strapped.json` with a custom absolute `stateRoot` — never block on this.
 
 **Unconditional resume probe.** Once `<runRoot>` is known, probe `<runRoot>/<slug>/manifest.md` — **on every path, including `--repo` given**. If it exists, this is a **resume**: read its `repos:` map (its entries are the target repos), and jump to 1e as a resume. So re-invoking with an explicit `--repo` on an in-progress run resumes instead of re-scaffolding. (When `--repo` was omitted and 1a already found the run, that same manifest is the one probed here — no double work.)
 
 ### 1d — Per-repo config for EVERY target repo
 
-For **each** target repo, resolve its config per the conventions' *Resolving the per-repo config* rule — the stateRoot mode fixes the location, parameterized by that repo's name+root, never "the cwd repo":
-
-- **Shared mode:** `<stateRoot>/repos/<repoName>/config.json`.
-- **Repo-relative mode:** repo-local `<rAbs>/.claude/strapped-config.json`.
+For **each** target repo, resolve its config per the conventions' *Resolving the per-repo config* rule — the location is fixed, parameterized by that repo's name, never "the cwd repo": `<stateRoot>/repos/<repoName>/config.json`.
 
 If a repo's config is **missing**, generate one and **confirm the values with the user** before continuing. Configs differ per repo — validations come from **that repo's** CLAUDE.md check commands, `worktreeRoot` = **that repo's** `<parent>/<name>__worktrees`, plus provisioning:
 
@@ -77,7 +69,7 @@ If a repo's config is **missing**, generate one and **confirm the values with th
 }
 ```
 
-Write each generated config at `<stateRoot>/repos/<repoName>/config.json` in shared mode, or repo-local `.claude/strapped-config.json` in repo-relative mode. **On resume, skip generation for any repo whose config already resolves.**
+Write each generated config at `<stateRoot>/repos/<repoName>/config.json`. **On resume, skip generation for any repo whose config already resolves.**
 
 ### 1e — Scaffold or resume
 
