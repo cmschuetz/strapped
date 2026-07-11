@@ -40,6 +40,20 @@ Add the marketplace by local path instead of GitHub so edits are live without pu
 
 Edit, then `/reload-plugins`. Push when happy; other machines pick it up via marketplace update.
 
+## Testing
+
+```
+npm test
+```
+
+Zero dependencies (no `npm install` needed). The suite chains three gates:
+
+1. `claude plugin validate . --strict` — marketplace manifest (warnings are errors),
+2. `claude plugin validate plugins/strapped --strict` — plugin manifest, skills, hooks,
+3. `node --test tests/` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.js`) with recording `agent`/`workflow` stubs, and `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`.
+
+For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
+
 ## PR tracking
 
 Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which checks every `pr-open` deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, and notes newly unblocked children. It exits silently in milliseconds when a project has no strapped state or nothing is `pr-open`, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.

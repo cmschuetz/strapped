@@ -1,5 +1,6 @@
 {
   "name": "strapped",
+  "description": "Marketplace for the strapped plugin: an adversarial plan → implement → stacked-PR coding harness for Claude Code",
   "owner": {
     "name": "Christian Schuetz",
     "email": "cmschuetz12@gmail.com"
