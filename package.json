@@ -1,0 +1,8 @@
+{
+  "name": "strapped",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "claude plugin validate . --strict && claude plugin validate plugins/strapped --strict && node --test 'tests/*.test.js'"
+  }
+}
