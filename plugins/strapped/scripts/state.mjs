@@ -323,6 +323,8 @@ const DELIVERABLE_EDGES = new Set([
   'in-progress>parked',
   'fixing>parked',
   'in-review>parked',
+  'done>parked',
+  'pr-open>parked',
   'done>pr-open',
   'pr-open>merged',
   'pr-open>fixing',

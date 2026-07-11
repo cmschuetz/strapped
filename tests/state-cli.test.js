@@ -286,6 +286,20 @@ test('transition: feedback re-entry pr-open→fixing accepted; illegal edge exit
   assert.equal(env.readFile(file), before)
 })
 
+test('transition: pr --update rebase-conflict park edges pr-open→parked and done→parked accepted', () => {
+  const env = makeStateEnv()
+  for (const [id, from] of [
+    ['D1', 'pr-open'],
+    ['D2', 'done'],
+  ]) {
+    const file = env.addDeliverable('my-run', `${id}-x.md`, deliverableFrontmatter(id, { status: from }))
+    const res = env.runState(['transition', file, 'parked', '--from', from])
+    assert.equal(res.status, 0, `${from} → parked: ${res.stderr}`)
+    assert.deepEqual(parse(res), { file, from, to: 'parked', changed: true })
+    assert.match(env.readFile(file), /^status: parked$/m)
+  }
+})
+
 test('transition: --from mismatch → exit 1, no write', () => {
   const env = makeStateEnv()
   const file = env.addDeliverable('my-run', 'D1-x.md', deliverableFrontmatter('D1', { status: 'pending' }))

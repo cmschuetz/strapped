@@ -276,6 +276,8 @@ The lifecycle prose in [deliverables/D#-\<kebab\>.md](#deliverablesd-kebabmd) is
 | in-progress | parked | implement (wave outcome) |
 | fixing | parked | fix loop exhausted/blocked |
 | in-review | parked | review loop exhausted |
+| done | parked | pr `--update` rebase conflict (pre-PR child) |
+| pr-open | parked | pr `--update` rebase conflict |
 | done | pr-open | pr |
 | pr-open | merged | sync-prs.sh / pr |
 | pr-open | fixing | feedback re-entry |
