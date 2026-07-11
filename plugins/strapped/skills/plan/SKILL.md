@@ -14,7 +14,7 @@ allowed-tools:
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md` — read it first, every time. State lives under the **global `stateRoot`** (default `~/.claude/strapped`), never in a worked repo or the plugin.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md`, which the plugin's SessionStart hook auto-injects as the **strapped preamble** — assume it is in context. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. State lives under the **global `stateRoot`** (default `~/.claude/strapped`), never in a worked repo or the plugin.
 
 ## Arguments
 
@@ -26,7 +26,7 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 
 ## Step 1 — Resolve repos, config, then scaffold or resume
 
-Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). Everything below defers to the **Config resolution** section of the conventions — read it first.
+Derive the slug from the source plan filename (`plans/foo_bar.md` → `foo-bar`). Everything below defers to the **Config resolution** section of the conventions (in the injected strapped preamble).
 
 ### 1a — Determine the target repos (never from cwd)
 
