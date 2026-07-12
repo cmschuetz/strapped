@@ -143,6 +143,9 @@ const PROSE_CITED_SECTIONS = [
   'Cross-repo base rule',
   'Cleanup recipe',
   'Composable chains',
+  'Chain configs',
+  'Wrapper skill sync',
+  'Harness scripts',
   'Stacked PRs',
 ]
 

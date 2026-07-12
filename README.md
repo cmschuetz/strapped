@@ -10,6 +10,7 @@ Get strapped in. An agentic coding harness for Claude Code: a big themed `plan.m
 | `/strapped:implement <slug> [--only Did]` | Execute the DAG wave-by-wave: persistent worktree per deliverable, fresh implementer, validations, bounded code-review/fix loop, park-don't-spin |
 | `/strapped:pr <slug> [--dry-run] [--update]` | Stacked PRs via git + gh: child PRs based on their parent deliverable's branch, dependency-annotated bodies; `--update` rebases children after parent changes |
 | `/strapped:feedback <slug> [--deliverable Did]... [--pr url]... [--dry-run] [--max-rounds N]` | Turn PR review comments into reviewed, approved fixes: fetch comments across the run's PRs (GitHub via `gh`), synthesize cross-deliverable addenda, run the adversarial plan-review loop, gate on approval, apply fixes on the existing branches, then offer `/strapped:pr <slug> --update` |
+| `/strapped:run <chain> <plan.md\|slug> [--yes] [--dry-run]` | Compose strapped skills into one workflow that runs until complete: resolve a built-in (`auto`, `ship`) or config-defined chain of stages, confirm once which interactive gates it skips (`--yes` to skip asking), then dispatch the whole chain as a single autonomous run. `--dry-run` previews everything without writing state. See [Composable chains](#composable-chains) |
 | `/strapped:learn` | Cluster your captured critiques into proposed CLAUDE.md additions — shown as a diff, applied only on approval |
 | `/strapped:status [<slug>]` | Read-only dashboard: DAG, statuses, worktrees, PRs, parked reasons, next action |
 
@@ -65,6 +66,25 @@ Deliverable statuses refresh automatically at session start: a SessionStart hook
 ## Feedback loop
 
 When reviewers request changes on a run's stacked PRs, `/strapped:feedback <slug>` closes the loop back into planning. It fetches every in-scope PR's review comments via `gh` — line-anchored comments, review-submission bodies (including `CHANGES_REQUESTED` summaries), and global comments — synthesizes them into ONE consolidated **cross-deliverable** plan (a comment left on one PR can land a fix on a different deliverable), attaches each fix as a `## Feedback addendum` on the existing deliverable file, then runs the addenda through the SAME adversarial plan-review loop the original plan used before gating on your explicit approval. Approved fixes apply on each deliverable's EXISTING branch/worktree in stack order (no new branches, no force-push, no merge), and the run ends by offering `/strapped:pr <slug> --update` once to rebase the stack. Feedback rounds record separately (`feedback-round-<N>.md`, `feedback_rounds_used`) so the original run's audit stays intact.
+
+## Composable chains
+
+`/strapped:run <chain>` composes the plan → implement → pr stages into ONE workflow that runs until complete. Two chains are built in — `auto` (plan, implement, pr) and `ship` (implement, pr) — and you can define your own in `~/.claude/strapped.json`, the same anchor file that holds `stateRoot` (the anchor is the only place chains live):
+
+```json
+{
+  "stateRoot": "/abs/path",
+  "chains": {
+    "automode": ["plan", "implement", "pr"]
+  }
+}
+```
+
+A chain is a non-empty ordered subset of `plan`, `implement`, `pr` in that order; a config chain named like a built-in overrides it. `feedback`, `learn`, and `status` are excluded — they exist to put a human in the loop, which is exactly what a chain removes.
+
+**Full-auto is risky.** A chain substitutes the interactive gates: a converged plan is auto-approved without your final review, and PRs open without a human look at the diffs. That can work when you aren't available — but be sure it's what you want. `/strapped:run` discloses the skipped gates and asks once up front (skip with `--yes`), and `--dry-run` previews the resolved chain, would-be paths, and dispatch args without writing anything. Non-convergence, parked deliverables, or a failed gate stop the chain with a precise report and the resume command — it never proceeds silently.
+
+**Autocomplete wrappers (best-effort).** `node plugins/strapped/scripts/sync-chain-skills.mjs` generates a thin personal skill per chain at `~/.claude/skills/strapped-run-<chain>/`, so e.g. `/strapped-run-automode` autocompletes; each wrapper only delegates to `/strapped:run <chain>`. Wrappers are marked `generated_by: strapped`, re-syncing is idempotent, wrappers for removed chains are pruned, and unmarked skills are never touched. `/strapped:run` offers the sync after a run when you have config-defined chains.
 
 ## Per-project setup
 
