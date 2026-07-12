@@ -103,6 +103,8 @@ const PROSE_CITED_SECTIONS = [
   'Seeded rule split',
   'Cross-repo base rule',
   'Cleanup recipe',
+  'Composable chains',
+  'Stacked PRs',
 ]
 
 test('every conventions section cited by name in SKILL.md prose still exists as a heading', () => {

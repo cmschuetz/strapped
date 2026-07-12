@@ -172,7 +172,7 @@ const WAVE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'repo', 'repoRoot', 'validations', 'planFile', 'worktree', 'branch', 'base', 'resumeNote'],
+        required: ['id', 'repo', 'repoRoot', 'validations', 'planFile', 'worktree', 'branch', 'base', 'resumeNote', 'pr'],
         properties: {
           id: { type: 'string' },
           repo: { type: 'string' },
@@ -183,6 +183,7 @@ const WAVE_SCHEMA = {
           branch: { type: 'string' },
           base: { type: 'string' },
           resumeNote: { type: ['string', 'null'] },
+          pr: { type: ['string', 'null'], description: "the node's `pr:` frontmatter URL, null for a pre-PR node" },
         },
       },
     },
@@ -813,11 +814,12 @@ This is a FEEDBACK (addendum) pass — the "Feedback loop" section of ${cfg.conv
 1. Run \`node ${stateScript} dag ${cfg.dir}\` for the nodes, their frontmatter, and the authoritative \`topo\` order — never hand-roll them.
 2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
 3. This pass's wave is the next unprocessed topological RANK of the affected set (parents before children — a parent's fixes must land before its children's wave). A node already back at \`pr-open\`/\`done\`/\`merged\` with its addendum applied, or currently \`parked\`, is not dispatched again.
-4. Per node in the wave (feedback re-entry — the node is at \`pr-open\`, or \`fixing\` on resume):
-   - \`node ${stateScript} transition <deliverableFile> fixing\` (idempotent when already \`fixing\`).
+4. Per node in the wave:
+   - Node with an open PR (\`pr:\` frontmatter non-null — status \`pr-open\`, or \`fixing\` on resume): \`node ${stateScript} transition <deliverableFile> fixing\` (idempotent when already \`fixing\`).
+   - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
    - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
    - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote), \`remaining\` = the count of affected nodes NOT yet returned to \`pr-open\`/\`done\`/\`merged\` after their addendum, and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT yet returned to \`pr-open\`/\`done\`/\`merged\` after their addendum, and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
   }
 
   return `${header}
@@ -829,7 +831,7 @@ Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile a
    - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
    - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote), the dag's \`remaining\` verbatim, and its \`blocked\` list verbatim. When \`remaining\` is 0, return items: [].`
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), the dag's \`remaining\` verbatim, and its \`blocked\` list verbatim. When \`remaining\` is 0, return items: [].`
 }
 
 function applyPrompt(pass, results, { addendumMode, roundsField }) {
@@ -849,7 +851,8 @@ Wave outcomes:
 ${JSON.stringify(outcomes, null, 2)}
 
 Per outcome:${addendumMode ? `
-- outcome "done" (feedback fix converged): \`node ${stateScript} transition <deliverableFile> in-review\` then return the node to its PR state — \`node ${stateScript} transition <deliverableFile> pr-open\` (or \`node ${stateScript} transition <deliverableFile> done\` for a pre-PR node whose \`pr:\` frontmatter is null). Report the final status per node.
+- outcome "done" (feedback fix converged) with a non-null \`pr\` in its outcome above: \`node ${stateScript} transition <deliverableFile> in-review\` then return the node to its PR state — \`node ${stateScript} transition <deliverableFile> pr-open\`.
+- outcome "done" with \`pr: null\` (pre-PR node — it was dispatched at \`done\` and never entered \`fixing\`): \`node ${stateScript} transition <deliverableFile> done\` (an idempotent no-op). Report the final status per node.
 - outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
 - always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\` — the feedback counter, NEVER review_rounds_used.` : `
 - outcome "done": \`node ${stateScript} transition <deliverableFile> done\`.

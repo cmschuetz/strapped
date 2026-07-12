@@ -74,7 +74,7 @@ function planConverges() {
   }
 }
 
-function item(id) {
+function item(id, pr = null) {
   return {
     id,
     repo: 'alpha',
@@ -85,6 +85,7 @@ function item(id) {
     branch: `strapped/test-run/${id}-thing`,
     base: 'main',
     resumeNote: null,
+    pr,
   }
 }
 
@@ -354,6 +355,44 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
   const coordinate = callWithLabel(calls, 'coordinate:1')
   assert.ok(coordinate.prompt.includes('Feedback addendum'))
   assert.ok(coordinate.prompt.includes('transition <deliverableFile> fixing'))
+})
+
+test('addendumMode: apply prompt carries each node\'s real pr value; done/pre-PR entry and exit contracts agree', async () => {
+  const cfg = baseCfg({
+    stages: ['implement'],
+    stageArgs: { implement: { addendumMode: true, recordSuffix: '-feedback' } },
+  })
+  const PR_URL = 'https://github.com/o/r/pull/9'
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      // One node with an open PR, one pre-PR node still at done (pr: null).
+      'coordinate:1': { items: [item('D1', PR_URL), item('D2')], remaining: 2, blocked: [] },
+      ...nodeConverges('D1'),
+      ...nodeConverges('D2'),
+      'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }, { id: 'D2', status: 'done' }] },
+      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+
+  // The coordinator is told to return pr from the node frontmatter, to flip
+  // fixing only for nodes with an open PR, and to dispatch a done/pre-PR node
+  // WITHOUT the (illegal) done>fixing transition instead of hard-stopping.
+  const coordinate = callWithLabel(calls, 'coordinate:1')
+  assert.ok(coordinate.prompt.includes('resumeNote, pr'))
+  assert.ok(coordinate.prompt.includes('transition <deliverableFile> fixing'))
+  assert.ok(coordinate.prompt.includes('WITHOUT any transition'))
+  assert.ok(coordinate.prompt.includes('no `done>fixing` edge'))
+
+  // The applier sees each node's REAL pr value (not unconditionally null) and
+  // keys the pr-open-vs-done exit on it; the pre-PR exit never routes through
+  // in-review (illegal from done).
+  const apply = callWithLabel(calls, 'apply:1')
+  assert.ok(apply.prompt.includes(`"pr": "${PR_URL}"`))
+  assert.ok(apply.prompt.includes('"pr": null'))
+  assert.ok(apply.prompt.includes('with a non-null `pr`'))
+  assert.ok(apply.prompt.includes('never entered `fixing`'))
 })
 
 // --- AC4: pr stage -------------------------------------------------------------
