@@ -8,6 +8,7 @@ allowed-tools:
   - Bash
   - Glob
   - Grep
+  - Workflow
   - AskUserQuestion
 ---
 
@@ -37,25 +38,25 @@ It performs the conventions' *Cwd-independent slug → run-root resolution* (dir
 
 ## Create mode (default)
 
-1. Run `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>` — its `nodes` carry every deliverable's frontmatter (status, branch, base, pr, repo) and its `topo` is the authoritative topological order (parents before children); never hand-roll either. Candidates: `status: done` nodes whose parents are all `done`, `pr-open`, or `merged`, processed in `topo` order.
-2. For each candidate, generate a PR body from the deliverable file:
-   - One-paragraph summary (from the deliverable title + plan Context).
-   - The acceptance criteria as a checklist.
-   - A `## Stack` table of the whole DAG spanning **all** repos: id, title, **repo**, PR link (or `pending`), deps. Group or label rows by repo.
-   - For non-roots **whose parent is in the same repo**: `Depends on #<parent PR number>` on its own line. A child in a *different* repo from its parent has no `Depends on #` line (there is no cross-repo branch stacking — it rooted on `main`). If a same-repo parent has no PR yet it is created earlier in this same topological pass, so the number exists by the time the child body is built.
-3. Per node, resolve `<repoRoot>` = `repos[<deliverable.repo>].root` and run push/create **from that deliverable's own repo** (not the worktree, not some other repo). Base is the parent's branch **only when the parent is in the same repo**; a cross-repo child (or a root) bases on that repo's `main`:
-   ```bash
-   git -C <repoRoot> push -u origin <branch>
-   gh -C <repoRoot> pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>
-   ```
-   (`gh` reads the repo from cwd; run it with the working directory set to `<repoRoot>`, e.g. `git -C <repoRoot> …` for git and invoke `gh` inside `<repoRoot>`.)
-4. Record the result via the harness scripts (never hand-edit frontmatter):
-   ```bash
-   node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> pr <url>
-   node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> pr-open
-   ```
-   After all creations, refresh every stack table via `gh pr edit <num> --body-file <regenerated>` so earlier PRs link the later ones.
-5. With `--dry-run`/`--no-push`: print steps 3–4's commands and full bodies instead of running them; change no frontmatter.
+The entire create pass lives in the `pr` stage of the `strapped-run` mono-workflow: one PR agent runs the conventions' **Stacked PRs** procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + the authoritative `topo` order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), builds each body (summary, acceptance-criteria checklist, cross-repo `## Stack` table, `Depends on #<parent PR>` for same-repo non-roots), refreshes every stack table after all creations, and carries the Guardrails below verbatim. Do not hand-roll any of it.
+
+Dispatch the mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (full contract in the conventions' **Composable chains** section):
+
+```json
+{
+  "slug": "<slug>",
+  "dir": "<runRoot>/<slug>",
+  "stages": ["pr"],
+  "stageArgs": { "pr": { "dryRun": false } },
+  "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
+  "conventionsFile": "$PLUGIN_ROOT/conventions.md",
+  "seed": 42, "confidenceMin": 70, "planRounds": 3, "codeRounds": 3
+}
+```
+
+- With `--dry-run` or `--no-push`, set `stageArgs.pr.dryRun` to `true`: the agent prints every would-be git/gh/state command and full PR bodies, executes nothing that mutates, and changes no frontmatter.
+- The stage is gated on every node being done-or-later: dispatched alone, it probes `state.mjs dag` first and stops (returning `gateFailed: true` with the not-done nodes) when any node is earlier than `done`.
+- Read `results.pr` from the return — `{prs: [{id, url, skipped, reason}], summary, dryRun}` — and report created vs skipped PRs (with reasons) to the user.
 
 ## Update mode (`--update`)
 
