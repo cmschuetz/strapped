@@ -799,7 +799,7 @@ async function reviewFixLoop(state, recordSuffix) {
   }
 }
 
-function coordinatorPrompt(pass, { only, addendumMode, recordSuffix, roundsField }) {
+function coordinatorPrompt(pass, { only, addendumMode, recordSuffix, roundsField }, processed = []) {
   const header = `You are the wave coordinator (pass ${pass}) of the implement stage of strapped run "${cfg.slug}". You are a mechanical executor: run exactly the commands below via Bash and return the JSON described — the scripts do all the computing, you are a pipe. Contract for every script: the "Harness scripts" section of ${cfg.conventionsFile}.
 
 Run root: ${cfg.dir}
@@ -808,18 +808,25 @@ Worktree script: ${worktreeScript}
 ${pass === 1 ? `\nFirst pass only — flip the manifest first: run \`node ${stateScript} manifest-status ${cfg.dir} implementing\` (a same-status flip is an idempotent no-op on resume).\n` : ''}`
 
   if (addendumMode) {
+    const doneIds = processed.filter(o => o.outcome === 'done').map(o => o.id)
+    const parkedIds = processed.filter(o => o.outcome !== 'done').map(o => o.id)
+    const ledger = processed.length
+      ? `Progress ledger — the workflow tracked these across the passes of THIS dispatch and it is the ONLY authoritative progress signal: addendum applied (done): ${JSON.stringify(doneIds)}; parked this dispatch: ${JSON.stringify(parkedIds)}. Never dispatch a ledger node again.`
+      : `Progress ledger: empty — this is the first pass of this dispatch, so treat EVERY affected node's addendum as unapplied.`
     return `${header}
 This is a FEEDBACK (addendum) pass — the "Feedback loop" section of ${cfg.conventionsFile} is authoritative. The affected set is every deliverable whose file under ${cfg.dir}/deliverables/ contains a \`## Feedback addendum\` section${only ? ` intersected with the single node ${only}` : ''}. No new deliverables, branches, or worktrees are minted.
 
+${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from existing ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md records, or from node statuses — all of those can be left over from a PRIOR feedback batch, and the feedback lifecycle is status-neutral (a node returns to its pre-addendum status after its fix lands).
+
 1. Run \`node ${stateScript} dag ${cfg.dir}\` for the nodes, their frontmatter, and the authoritative \`topo\` order — never hand-roll them.
 2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
-3. This pass's wave is the next unprocessed topological RANK of the affected set (parents before children — a parent's fixes must land before its children's wave). A node already back at \`pr-open\`/\`done\`/\`merged\` with its addendum applied, or currently \`parked\`, is not dispatched again.
+3. This pass's wave is the next topological RANK of the affected set counting ONLY nodes not in the progress ledger (parents before children — a parent's fixes must land before its children's wave). A ledger node (done or parked) is never dispatched again; a node whose current status is \`parked\` is not dispatched either.
 4. Per node in the wave:
    - Node with an open PR (\`pr:\` frontmatter non-null — status \`pr-open\`, or \`fixing\` on resume): \`node ${stateScript} transition <deliverableFile> fixing\` (idempotent when already \`fixing\`).
    - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
    - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
    - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT yet returned to \`pr-open\`/\`done\`/\`merged\` after their addendum, and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
   }
 
   return `${header}
@@ -877,7 +884,7 @@ async function implementStage() {
 
   while (pass < maxPasses) {
     pass++
-    const wave = await agent(coordinatorPrompt(pass, coordinatorCtx), {
+    const wave = await agent(coordinatorPrompt(pass, coordinatorCtx, outcomes), {
       label: `coordinate:${pass}`,
       phase: 'Implement',
       schema: WAVE_SCHEMA,

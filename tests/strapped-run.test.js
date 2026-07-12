@@ -395,6 +395,58 @@ test('addendumMode: apply prompt carries each node\'s real pr value; done/pre-PR
   assert.ok(apply.prompt.includes('never entered `fixing`'))
 })
 
+test('addendumMode: coordinator progress ledger — pass 1 treats every addendum as unapplied, later passes carry the processed ids', async () => {
+  const cfg = baseCfg({
+    stages: ['implement'],
+    stageArgs: { implement: { addendumMode: true, recordSuffix: '-feedback' } },
+  })
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'coordinate:1': { items: [item('D1')], remaining: 3, blocked: [] },
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
+      'coordinate:2': { items: [item('D2'), item('D3')], remaining: 2, blocked: [] },
+      ...nodeConverges('D2'),
+      'implement:D3': BLOCKED,
+      'apply:2': { applied: [{ id: 'D2', status: 'pr-open' }, { id: 'D3', status: 'parked' }] },
+      'coordinate:3': { items: [], remaining: 1, blocked: [] },
+    }),
+  })
+
+  // Pass 1: empty ledger — every affected addendum is unapplied, and stale
+  // on-disk markers from a prior feedback batch are explicitly ruled out as
+  // progress signals.
+  const c1 = callWithLabel(calls, 'coordinate:1').prompt
+  assert.ok(c1.includes('Progress ledger: empty'))
+  assert.ok(c1.includes("treat EVERY affected node's addendum as unapplied"))
+  assert.ok(c1.includes('Never infer "addendum applied" from `feedback_rounds_used`'))
+  assert.ok(c1.includes(`${cfg.dir}/reviews/<id>-code-round-*-feedback.md`))
+  assert.ok(!c1.includes('["D1"]'))
+
+  // Pass 2 carries pass 1's processed id in the done ledger.
+  const c2 = callWithLabel(calls, 'coordinate:2').prompt
+  assert.ok(c2.includes('addendum applied (done): ["D1"]'))
+  assert.ok(c2.includes('parked this dispatch: []'))
+  assert.ok(c2.includes('Never dispatch a ledger node again'))
+
+  // Pass 3 carries both passes' outcomes, split done vs parked; remaining
+  // counts the parked node, so items:[] with remaining:1 parks (allDone false).
+  const c3 = callWithLabel(calls, 'coordinate:3').prompt
+  assert.ok(c3.includes('addendum applied (done): ["D1","D2"]'))
+  assert.ok(c3.includes('parked this dispatch: ["D3"]'))
+  assert.equal(result.results.implement.allDone, false)
+  assert.equal(result.stoppedAt, 'implement')
+
+  // The ledger is an addendum-mode construct only: the non-addendum
+  // coordinator consumes the dag's remaining verbatim instead.
+  const plain = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({ 'coordinate:1': { items: [], remaining: 0, blocked: [] } }),
+  })
+  assert.ok(!callWithLabel(plain.calls, 'coordinate:1').prompt.includes('Progress ledger'))
+})
+
 // --- AC4: pr stage -------------------------------------------------------------
 
 test('pr: guardrails + report-and-skip in prompt; dryRun print-only; skipped/reason surfaced', async () => {
