@@ -1,19 +1,30 @@
-// Spawns the REAL plugins/strapped/scripts/resolve-chain.mjs with an isolated
-// HOME (state-env/hook-env pattern) so the user's real ~/.claude/strapped.json
-// can never leak in. Chains resolve from built-ins overlaid by the anchor's
-// `chains` map — the anchor is the only config source.
+// Spawns the REAL plugins/strapped/scripts/resolve-chain.mjs — the artifact
+// generated from src/scripts/resolve-chain.ts — under node (deploy parity)
+// with an isolated HOME (state-env/hook-env pattern) so the user's real
+// ~/.claude/strapped.json can never leak in. Chains resolve from built-ins
+// overlaid by the anchor's `chains` map — the anchor is the only config source.
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
+import { NODE } from './helpers/node-bin.ts'
 
 const SCRIPT = fileURLToPath(new URL('../plugins/strapped/scripts/resolve-chain.mjs', import.meta.url))
 
-function makeHome(anchor) {
+interface Chain {
+  name: string
+  stages: string[]
+  source: string
+}
+
+const parseChain = (stdout: string): Chain => JSON.parse(stdout) as Chain
+const parseList = (stdout: string): { chains: Chain[] } => JSON.parse(stdout) as { chains: Chain[] }
+
+function makeHome(anchor?: unknown): string {
   const home = mkdtempSync(join(tmpdir(), 'strapped-chain-'))
   if (anchor !== undefined) {
     mkdirSync(join(home, '.claude'), { recursive: true })
@@ -25,8 +36,8 @@ function makeHome(anchor) {
   return home
 }
 
-function run(args, home) {
-  return spawnSync(process.execPath, [SCRIPT, ...args], {
+function run(args: string[], home: string) {
+  return spawnSync(NODE, [SCRIPT, ...args], {
     encoding: 'utf8',
     env: { HOME: home, PATH: process.env.PATH },
   })
@@ -37,7 +48,7 @@ test('builtins resolve with no config; --list marks source builtin', () => {
 
   const auto = run(['auto'], home)
   assert.equal(auto.status, 0, auto.stderr)
-  assert.deepEqual(JSON.parse(auto.stdout), {
+  assert.deepEqual(parseChain(auto.stdout), {
     name: 'auto',
     stages: ['plan', 'implement', 'pr'],
     source: 'builtin',
@@ -45,7 +56,7 @@ test('builtins resolve with no config; --list marks source builtin', () => {
 
   const ship = run(['ship'], home)
   assert.equal(ship.status, 0, ship.stderr)
-  assert.deepEqual(JSON.parse(ship.stdout), {
+  assert.deepEqual(parseChain(ship.stdout), {
     name: 'ship',
     stages: ['implement', 'pr'],
     source: 'builtin',
@@ -53,7 +64,7 @@ test('builtins resolve with no config; --list marks source builtin', () => {
 
   const list = run(['--list'], home)
   assert.equal(list.status, 0, list.stderr)
-  const { chains } = JSON.parse(list.stdout)
+  const { chains } = parseList(list.stdout)
   assert.deepEqual(
     chains.map(c => c.name).sort(),
     ['auto', 'ship']
@@ -66,7 +77,7 @@ test('anchor chains: automode from ~/.claude/strapped.json resolves with source 
 
   const res = run(['automode'], home)
   assert.equal(res.status, 0, res.stderr)
-  assert.deepEqual(JSON.parse(res.stdout), {
+  assert.deepEqual(parseChain(res.stdout), {
     name: 'automode',
     stages: ['plan', 'implement', 'pr'],
     source: 'anchor',
@@ -74,12 +85,17 @@ test('anchor chains: automode from ~/.claude/strapped.json resolves with source 
 
   const list = run(['--list'], home)
   assert.equal(list.status, 0, list.stderr)
-  const { chains } = JSON.parse(list.stdout)
+  const { chains } = parseList(list.stdout)
   const automode = chains.find(c => c.name === 'automode')
+  assert.ok(automode)
   assert.equal(automode.source, 'anchor')
   // Built-ins still resolve alongside the anchor chain.
-  assert.equal(chains.find(c => c.name === 'auto').source, 'builtin')
-  assert.equal(chains.find(c => c.name === 'ship').source, 'builtin')
+  const auto = chains.find(c => c.name === 'auto')
+  assert.ok(auto)
+  assert.equal(auto.source, 'builtin')
+  const ship = chains.find(c => c.name === 'ship')
+  assert.ok(ship)
+  assert.equal(ship.source, 'builtin')
 })
 
 test('anchor auto overrides builtin auto (same-name override)', () => {
@@ -87,14 +103,14 @@ test('anchor auto overrides builtin auto (same-name override)', () => {
 
   const res = run(['auto'], home)
   assert.equal(res.status, 0, res.stderr)
-  assert.deepEqual(JSON.parse(res.stdout), {
+  assert.deepEqual(parseChain(res.stdout), {
     name: 'auto',
     stages: ['implement', 'pr'],
     source: 'anchor',
   })
 
   const list = run(['--list'], home)
-  const { chains } = JSON.parse(list.stdout)
+  const { chains } = parseList(list.stdout)
   assert.equal(chains.filter(c => c.name === 'auto').length, 1, 'override must not duplicate the name')
 })
 
@@ -151,7 +167,7 @@ test('invalid anchor JSON → exit 1; missing/absent chains key → builtins onl
   const noChains = run(['--list'], makeHome({ stateRoot: '/abs/state' }))
   assert.equal(noChains.status, 0, noChains.stderr)
   assert.deepEqual(
-    JSON.parse(noChains.stdout).chains.map(c => c.name).sort(),
+    parseList(noChains.stdout).chains.map(c => c.name).sort(),
     ['auto', 'ship']
   )
 })

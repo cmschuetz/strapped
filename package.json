@@ -3,6 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "claude plugin validate . --strict && claude plugin validate plugins/strapped --strict && node --test 'tests/*.test.js'"
+    "typecheck": "tsc --noEmit",
+    "build": "bun tools/build.ts",
+    "test": "claude plugin validate . --strict && claude plugin validate plugins/strapped --strict && bun run typecheck && bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
   }
 }
