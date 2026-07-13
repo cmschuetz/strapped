@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.js'
 
 const parse = res => JSON.parse(res.stdout)

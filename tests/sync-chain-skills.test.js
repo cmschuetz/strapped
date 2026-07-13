@@ -8,8 +8,9 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
+import { NODE } from './helpers/node-bin.ts'
 
 const SCRIPT = fileURLToPath(new URL('../plugins/strapped/scripts/sync-chain-skills.mjs', import.meta.url))
 
@@ -24,7 +25,8 @@ function makeHome(anchor) {
 
 function runSync(home, extra = []) {
   // HOME deliberately points elsewhere: --home must fully isolate the run.
-  const res = spawnSync(process.execPath, [SCRIPT, '--home', home, ...extra], {
+  // NODE, not process.execPath: under `bun test` execPath is bun (deploy parity).
+  const res = spawnSync(NODE, [SCRIPT, '--home', home, ...extra], {
     encoding: 'utf8',
     env: { HOME: join(home, 'decoy-home'), PATH: process.env.PATH },
   })

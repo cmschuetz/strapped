@@ -41,17 +41,20 @@ Add the marketplace by local path instead of GitHub so edits are live without pu
 
 Edit, then `/reload-plugins`. Push when happy; other machines pick it up via marketplace update.
 
+**TypeScript sources vs committed deployables.** Development happens in TypeScript under `src/` (bundled) and runs on [bun](https://bun.sh), managed by [asdf](https://asdf-vm.com) (`asdf install` in the repo root materializes the pinned `.tool-versions` toolchain, then `bun install` for the dev dependencies). The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-chain.mjs` — are **generated, committed artifacts**: plain node-runnable ESM with zero runtime dependencies, at the exact paths skills and conventions reference (marketplace installs run node, never bun). The loop is: edit `src/`, run `bun run build`, commit the regenerated artifacts alongside the sources. Never hand-edit a file with a `// GENERATED` header — `tests/build-sync.test.ts` runs `bun tools/build.ts --check` and fails the suite whenever a committed artifact is stale or hand-edited.
+
 ## Testing
 
 ```
 npm test
 ```
 
-Zero dependencies (no `npm install` needed). The suite chains three gates:
+Requires the asdf-pinned toolchain (`asdf install`, then `bun install`); `bun run test` is equivalent. Runtime dependencies remain zero — `typescript` and `@types/bun` are dev-only. The suite chains four gates:
 
 1. `claude plugin validate . --strict` — marketplace manifest (warnings are errors),
 2. `claude plugin validate plugins/strapped --strict` — plugin manifest, skills, hooks,
-3. `node --test tests/` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.js`) with recording `agent`/`workflow` stubs, and `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`.
+3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and the `.ts` tests,
+4. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.js`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, and `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
 
 For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
 

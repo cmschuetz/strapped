@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test } from 'bun:test'
 import { makeGitRepo, runEnsureWorktree } from './helpers/state-env.js'
 
 const BRANCH = 'strapped/my-run/D1-thing'

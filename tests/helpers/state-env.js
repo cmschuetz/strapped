@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { NODE } from './node-bin.ts'
 
 export const STATE_SCRIPT = fileURLToPath(
   new URL('../../plugins/strapped/scripts/state.mjs', import.meta.url)
@@ -120,9 +121,9 @@ export function makeStateEnv() {
     return runDir(slug)
   }
 
-  /** Spawn the real state.mjs with isolated HOME + STRAPPED_STATE_ROOT. */
+  /** Spawn the real state.mjs (under node — deploy parity) with isolated HOME + STRAPPED_STATE_ROOT. */
   const runState = (args, { env = {} } = {}) =>
-    spawnSync(process.execPath, [STATE_SCRIPT, ...args], {
+    spawnSync(NODE, [STATE_SCRIPT, ...args], {
       encoding: 'utf8',
       env: {
         HOME: home,
