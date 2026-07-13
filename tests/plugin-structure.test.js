@@ -12,13 +12,7 @@ import { fileURLToPath } from 'node:url'
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const PLUGIN_ROOT = join(REPO_ROOT, 'plugins', 'strapped')
 
-const EXPECTED_WORKFLOW_NAMES = [
-  'strapped-code-review',
-  'strapped-feedback-synth',
-  'strapped-implement-wave',
-  'strapped-plan-loop',
-  'strapped-review-loop',
-]
+const EXPECTED_WORKFLOW_NAMES = ['strapped-run']
 
 test('hooks.json parses and every hook command resolves to an existing executable under the plugin root', () => {
   const hooks = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
@@ -148,6 +142,8 @@ const PROSE_CITED_SECTIONS = [
   'Seeded rule split',
   'Cross-repo base rule',
   'Cleanup recipe',
+  'Composable chains',
+  'Stacked PRs',
 ]
 
 test('every conventions section cited by name in SKILL.md prose still exists as a heading', () => {
@@ -184,7 +180,10 @@ test('workflow meta.names are unique and every referenced workflow name resolves
   const referenced = new Set()
   for (const file of referencingFiles) {
     const src = readFileSync(file, 'utf8')
-    for (const ref of src.match(/strapped-[a-z]+(?:-loop|-review|-wave|-synth)/g) || []) {
+    // Matches the live name (strapped-run) AND any lingering reference to a
+    // retired stage-workflow name (strapped-plan-loop, strapped-code-review,
+    // ...), so a dangling reference still fails as an unknown name.
+    for (const ref of src.match(/strapped-(?:[a-z]+-)?(?:loop|review|wave|synth|run)\b/g) || []) {
       assert.ok(nameSet.has(ref), `${file} references unknown workflow name ${ref}`)
       referenced.add(ref)
     }

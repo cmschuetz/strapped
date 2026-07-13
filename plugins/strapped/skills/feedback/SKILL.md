@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Drive PR review comments back into the plan→implement lifecycle for one strapped run. This skill hand-rolls no planning or fix logic: it fetches review comments, synthesizes cross-deliverable **addenda** onto EXISTING deliverable files, runs them through the SAME adversarial plan-review loop the run's original plan used (via `review-loop.js`), gates on explicit user approval, then reuses `implement-wave.js`/`code-review.js` to apply the fixes on each affected deliverable's EXISTING branch/worktree. It mints NO new deliverables/branches/worktrees and never force-pushes or merges — shipping stays a user-approved `/strapped:pr <slug> --update`.
+Drive PR review comments back into the plan→implement lifecycle for one strapped run. This skill hand-rolls no planning or fix logic: it fetches review comments, then dispatches the `strapped-run` mono-workflow's `feedback-synth` stage (synthesis of cross-deliverable **addenda** onto EXISTING deliverable files + the SAME adversarial review loop the run's original plan used), gates on explicit user approval, then dispatches the same mono-workflow's `implement` stage in `addendumMode` to apply the fixes on each affected deliverable's EXISTING branch/worktree. It mints NO new deliverables/branches/worktrees and never force-pushes or merges — shipping stays a user-approved `/strapped:pr <slug> --update`.
 
 **GitHub via `gh`.** All PR data comes from `gh`; there is no GitLab/`glab` path.
 
@@ -53,7 +53,7 @@ As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.ran
 1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing).
 2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, a `{"a": [{"id","source","text"}...], "b": [...]}` pair shuffled with `random.Random(seed + round)` (seed from the manifest). Save the JSON — it becomes `rulesByRound`.
 
-This single `rulesByRound` (plus `seed`, `confidenceMin`, `maxRounds`) is threaded BOTH into `feedback-synth.js` (→ on into `review-loop.js` for the addenda review, consumed at `cfg.rulesByRound[round-1]`) AND into every `implement-wave.js` invocation in Step 6 (consumed by `reviewFixLoop` at `cfg.rulesByRound[round-1]`). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
+This single `rulesByRound` (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) is threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes it at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes it the same way). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
 
 ## Step 3 — Fetch PR review comments (GitHub via `gh`)
 
@@ -80,24 +80,30 @@ If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-
 
 ## Step 4 — Synthesize + review the addenda
 
-Dispatch the `strapped-feedback-synth` workflow — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/feedback-synth.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (all paths absolute):
+Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (all paths absolute; full contract in the conventions' **Composable chains** section):
 
 ```json
 {
   "slug": "<slug>",
   "dir": "<runRoot>/<slug>",
+  "stages": ["feedback-synth"],
+  "stageArgs": {
+    "feedback-synth": {
+      "comments": [<the fetched comments from Step 3>],
+      "repos": [ { "name": "<repo>", "root": "<abs>" } ]
+    }
+  },
+  "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "reviewLoopScript": "$PLUGIN_ROOT/workflows/review-loop.js",
-  "repos": [ { "name": "<repo>", "root": "<abs>" } ],
-  "comments": [<the fetched comments from Step 3>],
   "rulesByRound": [<per-round splits from Step 2>],
-  "maxRounds": 3,
+  "planRounds": 3,
+  "codeRounds": 3,
   "confidenceMin": 70,
   "seed": 42
 }
 ```
 
-The workflow (a) synthesizes ONE consolidated cross-deliverable plan — routing each comment to the deliverable that OWNS the anchored file (which may differ from the PR it was left on) via each deliverable's `Files to touch` map — writing a `## Feedback addendum` section into each affected EXISTING deliverable file, then (b) invokes `review-loop.js` via `workflow(cfg.reviewLoopScript ? { scriptPath: cfg.reviewLoopScript } : 'strapped-review-loop', feedbackCtx)` (ask = the fetched PR review comments; artifact = the amended deliverable set; `roundFilePrefix: feedback-round`), so the addenda pass through the SAME reviewers/refute/dedup/consolidate/revise cycle + the confirmation pass, writing `reviews/feedback-round-<N>.md` records (distinct from `plan-round-*`). It never invokes `strapped-plan-loop` (that would run the planner and clobber the addenda) and never `import`s another workflow. It returns `{ converged, rounds, outstanding, addenda, summary }`. Honor `--max-rounds`.
+The `feedback-synth` stage (a) synthesizes ONE consolidated cross-deliverable plan — routing each comment to the deliverable that OWNS the anchored file (which may differ from the PR it was left on) via each deliverable's `Files to touch` map — writing a `## Feedback addendum` section into each affected EXISTING deliverable file, then (b) runs the mono-workflow's shared review loop (ask = the fetched PR review comments; artifact = the amended deliverable set; `roundFilePrefix: feedback-round`), so the addenda pass through the SAME reviewers/refute/dedup/consolidate/revise cycle + the confirmation pass, writing `reviews/feedback-round-<N>.md` records (distinct from `plan-round-*`). Never dispatch the `plan` stage here (that would run the planner and clobber the addenda). Read `results["feedback-synth"]` from the return — `{ converged, rounds, outstanding, addenda, summary }`. Honor `--max-rounds` via `planRounds`.
 
 **With `--dry-run`:** the synthesis/review still runs to produce the plan, but you must NOT let it mutate the run — pass `--dry-run` intent by NOT writing addenda: instead, run only the fetch + a synthesis DRAFT in-conversation, print the routed addenda plan and the commands that WOULD run, then stop. (Do not dispatch the mutating workflow under `--dry-run`.)
 
@@ -111,33 +117,34 @@ With `--dry-run`, you already stopped in Step 4 — never reach implementation.
 
 ## Step 6 — Implement in topological (stack) order
 
-For each affected deliverable, in topological order (parents before children so a parent's fixes land before children rebase), reuse the EXISTING branch/worktree (idempotent — provisioning already applied; mint nothing new). Dispatch `strapped-implement-wave` — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/implement-wave.js` — with the NEW feedback seams turned on:
+The feedback fix pass is the mono-workflow's `implement` stage with the feedback seams turned on — its coordinator agents own the affected-set selection (every deliverable with a `## Feedback addendum` section), the feedback re-entry transitions, existing-worktree reuse (mint nothing new), and one topological rank per wave (parents before children so a parent's fixes land before children rebase); its outcome-applier agents own the return-to-`pr-open` (or `done` for a pre-PR node) and `feedback_rounds_used` writes. Do not hand-roll any of it.
+
+Dispatch the `strapped-run` mono-workflow again — Workflow tool, `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js`:
 
 ```json
 {
   "slug": "<slug>",
   "dir": "<runRoot>/<slug>",
+  "stages": ["implement"],
+  "stageArgs": {
+    "implement": { "addendumMode": true, "recordSuffix": "-feedback" }
+  },
+  "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "addendumMode": true,
-  "recordSuffix": "-feedback",
-  "codeReviewScript": "$PLUGIN_ROOT/workflows/code-review.js",
-  "items": [
-    { "id": "<Did>", "repo": "<repo>", "repoRoot": "<abs>", "validations": [<that repo's validations>], "planFile": "<abs>", "worktree": "<abs existing>", "branch": "strapped/<slug>/<Did>-...", "base": "<existing base>", "resumeNote": null }
-  ],
   "codeRounds": 3,
+  "planRounds": 3,
   "confidenceMin": 70,
   "seed": 42,
   "rulesByRound": [<per-round splits from Step 2>]
 }
 ```
 
-- `addendumMode: true` swaps the implement stage's prompt to "apply the `## Feedback addendum` section to the EXISTING code on this branch, staying in scope" — a targeted change, NOT a re-implementation.
-- `recordSuffix: "-feedback"` makes `code-review.js` write feedback code-review rounds as `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`), and `implement-wave.js` derives its fix agent's round-record READ path from the same suffix — writer and reader agree.
-- `rulesByRound`/`seed`/`confidenceMin`/`codeReviewScript` are threaded exactly as `/strapped:implement` does, because `reviewFixLoop` reads `cfg.rulesByRound[round-1]` per code-review round.
+- `addendumMode: true` swaps the implementer's prompt to "apply the `## Feedback addendum` section to the EXISTING code on this branch, staying in scope" — a targeted change, NOT a re-implementation — and switches the coordinator/applier to the feedback re-entry lifecycle: `pr-open → fixing ⇄ in-review → pr-open` (a pre-PR node whose `pr:` is null is dispatched at `done` without the `fixing` flip — there is no `done>fixing` edge — and converges back to `done` in place), never back through `pending`/`ready`/`in-progress`, every flip via the guarded `state.mjs transition`. A node that parks gets `parked` + `parked_reason` and is reported — never forced through.
+- `recordSuffix: "-feedback"` makes feedback code-review rounds write `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`); the fix agent's round-record READ path derives from the same suffix — writer and reader agree.
+- The rounds counter is the separate `feedback_rounds_used` field, NOT the original `review_rounds_used`.
+- `rulesByRound`/`seed`/`confidenceMin`/`codeRounds` are threaded exactly as `/strapped:implement` does, because the code-review/fix loop reads `rulesByRound[round-1]` per round.
 
-**Status transition (feedback re-entry).** An affected deliverable is at `pr-open` when feedback starts. Drive it into the `fixing` ⇄ `in-review` sub-cycle for the fix, and on convergence return it to `pr-open` (its PR stays open — the branch is re-pushed via the later `--update`, not reopened). It NEVER re-enters `pending`/`ready`/`in-progress`. Apply every flip via the guarded harness script (never hand-edit frontmatter): `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> fixing` on entry, then `... transition <deliverableFile> in-review` / `... transition <deliverableFile> fixing` around each review round, and `... transition <deliverableFile> pr-open` on convergence. Increment the NEW `feedback_rounds_used` frontmatter counter (default 0) via `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> feedback_rounds_used <n>`, NOT the original `review_rounds_used`. If a node parks (fix blocked / budget exhausted), run `... transition <deliverableFile> parked` + `... set <deliverableFile> parked_reason <reason>` and report it — do not force through.
-
-Dispatch one wave per topological rank (parents before children) so a parent's fixes are committed before its children's fix wave runs.
+Read `results.implement` from the return — `{outcomes, allDone, blocked}` — for the per-node report in Step 7.
 
 ## Step 7 — Offer the cascade ONCE
 

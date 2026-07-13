@@ -1,0 +1,1038 @@
+export const meta = {
+  name: 'strapped-run',
+  description: 'The strapped mono-workflow: every orchestration loop (plan + adversarial plan review, PR-feedback synthesis, DAG implement waves with bounded code review, stacked-PR create) lives here as plain stage functions selected by args.stages. Zero workflow() calls anywhere, so the harness one-level nesting limit never engages. The standalone skills dispatch this same file with singleton stage lists.',
+  phases: [
+    { title: 'plan', detail: 'planner writes research/manifest/deliverables, then the bounded adversarial plan-review loop' },
+    { title: 'feedback-synth', detail: 'synthesize fetched PR review comments into Feedback addendum sections, then the same review loop' },
+    { title: 'implement', detail: 'DAG wave loop: coordinator executor per pass, fresh implementer per node, bounded code-review/fix rounds, outcome applier' },
+    { title: 'pr', detail: 'stacked-PR create pass, gated on every node being done-or-later' },
+  ],
+}
+
+const cfg = typeof args === 'string' ? JSON.parse(args) : args
+
+// --- stage table + validation ----------------------------------------------
+
+const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
+
+if (!Array.isArray(cfg.stages) || cfg.stages.length === 0) {
+  throw new Error(`stages must be a non-empty ordered subset of [${STAGE_ORDER.join(', ')}]`)
+}
+{
+  const seenStages = new Set()
+  let prevIndex = -1
+  for (const name of cfg.stages) {
+    const index = STAGE_ORDER.indexOf(name)
+    if (index === -1) throw new Error(`unknown stage "${name}" — canonical stages: ${STAGE_ORDER.join(', ')}`)
+    if (seenStages.has(name)) throw new Error(`duplicate stage "${name}"`)
+    if (index < prevIndex) throw new Error(`stages out of canonical order at "${name}" — canonical order: ${STAGE_ORDER.join(', ')}`)
+    seenStages.add(name)
+    prevIndex = index
+  }
+}
+
+const stageArgsFor = name => (cfg.stageArgs && cfg.stageArgs[name]) || {}
+const stateScript = cfg.scripts && cfg.scripts.state
+const worktreeScript = cfg.scripts && cfg.scripts.worktree
+
+function repoList(repos) {
+  if (!Array.isArray(repos) || !repos.length) return '(no target repos supplied)'
+  return repos.map(r => `- ${r.name} → ${r.root}`).join('\n')
+}
+
+// --- schemas ----------------------------------------------------------------
+
+const PLAN_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['deliverables', 'summary'],
+  properties: {
+    deliverables: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'file', 'title', 'deps'],
+        properties: {
+          id: { type: 'string' },
+          file: { type: 'string' },
+          title: { type: 'string' },
+          deps: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    summary: { type: 'string' },
+  },
+}
+
+const FINDINGS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['findings', 'rule_checklist'],
+  properties: {
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'key', 'rule', 'severity', 'location', 'what', 'why', 'evidence', 'confidence', 'recommendation'],
+        properties: {
+          id: { type: 'string' },
+          key: { type: 'string', description: '<rule-id-or-gap>:<location>, stable across rounds for dedup' },
+          rule: { type: ['string', 'null'] },
+          severity: { type: 'string', enum: ['blocking', 'concern', 'suggestion'] },
+          location: { type: 'string' },
+          what: { type: 'string' },
+          why: { type: 'string' },
+          evidence: { type: 'string' },
+          confidence: { type: 'number', minimum: 0, maximum: 100 },
+          recommendation: { type: 'string' },
+        },
+      },
+    },
+    rule_checklist: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rule', 'verdict', 'evidence'],
+        properties: {
+          rule: { type: 'string' },
+          verdict: { type: 'string', enum: ['pass', 'violation', 'na'] },
+          evidence: { type: 'string' },
+        },
+      },
+    },
+  },
+}
+
+const REFUTE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['verdict', 'confidence', 'evidence'],
+  properties: {
+    verdict: { type: 'string', enum: ['confirmed', 'refuted', 'uncertain'] },
+    confidence: { type: 'number', minimum: 0, maximum: 100 },
+    evidence: { type: 'string' },
+  },
+}
+
+const CONSOLIDATE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['new_confirmed_ids', 'duplicate_ids'],
+  properties: {
+    new_confirmed_ids: { type: 'array', items: { type: 'string' } },
+    duplicate_ids: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+const SYNTH_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['addenda', 'summary'],
+  properties: {
+    addenda: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['deliverableId', 'sourcePr', 'crossDeliverable', 'tasks'],
+        properties: {
+          deliverableId: { type: 'string' },
+          sourcePr: { type: 'string' },
+          crossDeliverable: { type: 'boolean' },
+          tasks: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+    summary: { type: 'string' },
+  },
+}
+
+const IMPLEMENT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['status', 'summary', 'validations_green', 'blocker'],
+  properties: {
+    status: { type: 'string', enum: ['implemented', 'blocked'] },
+    summary: { type: 'string' },
+    validations_green: { type: 'boolean' },
+    blocker: { type: ['string', 'null'] },
+  },
+}
+
+const WAVE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['items', 'remaining', 'blocked'],
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'repo', 'repoRoot', 'validations', 'planFile', 'worktree', 'branch', 'base', 'resumeNote', 'pr'],
+        properties: {
+          id: { type: 'string' },
+          repo: { type: 'string' },
+          repoRoot: { type: 'string' },
+          validations: { type: 'array', items: { type: 'string' } },
+          planFile: { type: 'string' },
+          worktree: { type: 'string' },
+          branch: { type: 'string' },
+          base: { type: 'string' },
+          resumeNote: { type: ['string', 'null'] },
+          pr: { type: ['string', 'null'], description: "the node's `pr:` frontmatter URL, null for a pre-PR node" },
+        },
+      },
+    },
+    remaining: { type: 'number' },
+    blocked: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'blockedOn'],
+        properties: {
+          id: { type: 'string' },
+          blockedOn: { type: 'array', items: { type: 'string' } },
+        },
+      },
+    },
+  },
+}
+
+const APPLY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['applied'],
+  properties: {
+    applied: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'status'],
+        properties: {
+          id: { type: 'string' },
+          status: { type: 'string', enum: ['done', 'parked', 'pr-open'] },
+        },
+      },
+    },
+  },
+}
+
+const APPROVE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['changed'],
+  properties: { changed: { type: 'boolean' } },
+}
+
+const PROBE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['remaining', 'notDone'],
+  properties: {
+    remaining: { type: 'number' },
+    notDone: { type: 'array', items: { type: 'string' } },
+  },
+}
+
+const PR_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['prs', 'summary'],
+  properties: {
+    prs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'url', 'skipped', 'reason'],
+        properties: {
+          id: { type: 'string' },
+          url: { type: ['string', 'null'] },
+          skipped: { type: 'boolean' },
+          reason: { type: ['string', 'null'] },
+        },
+      },
+    },
+    summary: { type: 'string' },
+  },
+}
+
+// --- shared adversarial review loop (plan flow + feedback flow) --------------
+
+const PLAN_LENSES = {
+  a: 'completeness: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared',
+  b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), and steps that cannot work as written',
+}
+
+function ruleBlock(rules) {
+  return rules.map(r => `- ${r.id} (${r.source}): ${r.text}`).join('\n')
+}
+
+function digest(seen) {
+  if (!seen.length) return '(none — first round)'
+  return seen.map(f => `- [${f.severity}] ${f.key}: ${f.what} (round ${f.round}, ${f.status})`).join('\n')
+}
+
+// Runs the bounded adversarial review loop (2 rule-partitioned reviewers,
+// refute pass, dedup-vs-seen consolidation writing reviews/<prefix>-round-<N>.md,
+// reviser, final-round confirmation pass) over an ask + an artifact.
+// opts: { ask, repos, artifactDescription, artifactLocation, artifactNoun,
+//         refuteArtifactPhrase, reviserPromptFn(newConfirmed, roundFile),
+//         roundFilePrefix, maxRounds }
+async function runReviewLoop(opts) {
+  const maxRounds = opts.maxRounds
+  const artifactNounCap = opts.artifactNoun.charAt(0).toUpperCase() + opts.artifactNoun.slice(1)
+
+  function reviewerPrompt(which, rules, seen, round) {
+    return `You are an adversarial plan reviewer with fresh context. Your job is to find real gaps between ${opts.artifactDescription} and the original ask, before any code is written.
+
+Original ask: ${opts.ask}
+${artifactNounCap} under review, in ${cfg.dir}: ${opts.artifactLocation}.
+Conventions the plan must follow: ${cfg.conventionsFile}
+Target repos (explore any of these as needed to check the plan's claims against reality):
+${repoList(opts.repos)}
+
+Read the original ask first, then the whole ${opts.artifactNoun}, then verify claims against the actual codebase(s) where they matter.
+
+Your lens (your main hunting ground beyond the rules): ${PLAN_LENSES[which]}.
+${which === 'b' ? `\nSoundness — multi-repo checks specific to this run: verify each deliverable has a \`repo:\` field naming one of the target repos above; verify each deliverable's \`base:\` obeys the cross-repo base rule (it is a branch in the SAME repo as the deliverable, or that repo's \`main\` for roots and for cross-repo children — a deliverable can never base on a branch in a different repo); and verify that no cross-repo dep is a true code dependency (cross-repo deps are ordering-only — flag any cross-repo child that would need its parent's unmerged code, since it bases on its own repo's \`main\` and does not have that code).\n` : ''}
+Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
+${ruleBlock(rules)}
+
+Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
+${digest(seen)}
+
+Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
+
+You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), plus your findings. Round: ${round}.`
+  }
+
+  function refutePrompt(f) {
+    return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in ${opts.refuteArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check the claim:
+${repoList(opts.repos)}
+
+Claim [${f.severity}] at ${f.location}: ${f.what}
+Why: ${f.why}
+Evidence: ${f.evidence}
+
+Your stance: this is NOT a real gap unless the documents prove otherwise. Read the ask and the ${opts.artifactNoun} files yourself — the claimed-missing item may be covered elsewhere in the ${opts.artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Return your verdict, a corrected confidence (0-100) that the gap is real, and one line of evidence.`
+  }
+
+  const seen = []
+  let converged = false
+  let roundsUsed = 0
+  let outstanding = []
+
+  async function runReviewRound(round, confirmation) {
+    const rules = cfg.rulesByRound[round - 1]
+    const seedUsed = cfg.seed + round
+    const roundLabel = confirmation ? `${round}-confirm` : `${round}`
+    const phaseLabel = confirmation ? `Confirm ${round}` : `Review ${round}`
+
+    phase(phaseLabel)
+    const reviews = await parallel([
+      () => agent(reviewerPrompt('a', rules.a, seen, round), { label: `plan-review:a:r${roundLabel}`, schema: FINDINGS_SCHEMA }),
+      () => agent(reviewerPrompt('b', rules.b, seen, round), { label: `plan-review:b:r${roundLabel}`, schema: FINDINGS_SCHEMA }),
+    ])
+
+    const tagged = reviews.map((r, i) => ({ r, which: i === 0 ? 'a' : 'b' })).filter(x => x.r)
+    const allFindings = tagged.flatMap(x => x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}` })))
+    const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist]))
+    const gating = allFindings.filter(f => f.severity !== 'suggestion')
+    const suggestions = allFindings.filter(f => f.severity === 'suggestion')
+    log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
+
+    const verified = await parallel(
+      gating.map(f => () =>
+        agent(refutePrompt(f), { label: `refute:${f.id}`, phase: 'Verify', effort: 'low', schema: REFUTE_SCHEMA })
+          .then(v => ({ ...f, refute: v }))
+      )
+    )
+    // A null refuter result is a vote NOT cast — never dereferenced, and a
+    // finding without a cast confirming vote does not survive.
+    const noVote = verified.filter(f => f && !f.refute)
+    if (noVote.length) log(`round ${roundLabel}: refuter cast no vote on ${noVote.length} finding(s) — excluded`)
+    const surviving = verified
+      .filter(Boolean)
+      .filter(f => f.refute && f.refute.verdict !== 'refuted' && f.refute.confidence >= cfg.confidenceMin)
+
+    const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`
+    const consolidation = await agent(
+      `You are consolidating verified plan-review findings for round ${roundLabel} of strapped run "${cfg.slug}". Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
+
+Surviving verified findings:
+${JSON.stringify(surviving, null, 2)}
+
+Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+Seen digest from prior rounds:
+${digest(seen)}
+
+Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — read them.
+
+Tasks:
+1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists.
+3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`,
+      { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: CONSOLIDATE_SCHEMA }
+    )
+
+    const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map(f => f.id))
+    const newConfirmed = surviving.filter(f => newIds.has(f.id))
+    log(`round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`)
+    return { newConfirmed, newIds, roundFile }
+  }
+
+  let lastRoundFixedAll = false
+  let revisionFailed = false
+  for (let round = 1; round <= maxRounds; round++) {
+    roundsUsed = round
+    lastRoundFixedAll = false
+
+    const { newConfirmed, newIds, roundFile } = await runReviewRound(round, false)
+    for (const f of newConfirmed) seen.push({ ...f, round, status: 'open' })
+
+    if (newConfirmed.length === 0) {
+      converged = true
+      outstanding = []
+      break
+    }
+    outstanding = newConfirmed
+
+    phase(`Revise ${round}`)
+    const revision = await agent(opts.reviserPromptFn(newConfirmed, roundFile), { label: `revise:r${round}`, phase: `Revise ${round}` })
+    if (revision) {
+      for (const f of seen) if (newIds.has(f.id)) f.status = 'fixed'
+      lastRoundFixedAll = true
+    } else {
+      revisionFailed = true
+      break
+    }
+  }
+
+  if (!converged && !revisionFailed && lastRoundFixedAll) {
+    const { newConfirmed } = await runReviewRound(maxRounds, true)
+    for (const f of newConfirmed) seen.push({ ...f, round: maxRounds, status: 'open' })
+    if (newConfirmed.length === 0) {
+      converged = true
+      outstanding = []
+    }
+  }
+
+  if (!converged) {
+    outstanding = seen.filter(f => f.status === 'open')
+  }
+
+  return {
+    converged,
+    rounds: roundsUsed,
+    outstanding: outstanding.map(f => ({ id: f.id, key: f.key, severity: f.severity, what: f.what })),
+  }
+}
+
+// --- stage: plan --------------------------------------------------------------
+
+async function planStage(ctx) {
+  const a = stageArgsFor('plan')
+
+  const plan = await agent(
+    `You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
+
+Source plan (the original ask): ${a.sourcePlan}
+Target repos (the run state is keyed by the run slug, not by any repo; the work spans these repos — an unordered set):
+${repoList(a.repos)}
+Output directory (already scaffolded): ${cfg.dir}
+Conventions you MUST follow for every file format: ${cfg.conventionsFile}
+
+Procedure:
+1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
+2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
+3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
+4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
+5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
+6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, budgets — record the EFFECTIVE budgets of this run: plan_rounds: ${cfg.planRounds}, code_rounds: ${cfg.codeRounds}, confidence_min: ${cfg.confidenceMin} — the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
+
+Return the deliverable list and a one-paragraph summary.`,
+    { label: 'planner', schema: PLAN_SCHEMA }
+  )
+  if (!plan) throw new Error('plan stage: planner agent failed')
+  log(`plan produced: ${plan.deliverables.length} deliverable(s)`)
+
+  const review = await runReviewLoop({
+    ask: a.sourcePlan,
+    repos: a.repos,
+    artifactDescription: 'a produced implementation plan',
+    artifactLocation: 'manifest.md, research.md, and every file in deliverables/',
+    artifactNoun: 'plan',
+    refuteArtifactPhrase: 'the implementation plan',
+    roundFilePrefix: 'plan-round',
+    maxRounds: cfg.planRounds,
+    reviserPromptFn: (newConfirmed, roundFile) =>
+      `You are the plan reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing the plan files in ${cfg.dir} (manifest.md, research.md, deliverables/*.md), keeping every file conformant to ${cfg.conventionsFile}. Original ask for reference: ${a.sourcePlan}. Target repos (fix repo assignments and cross-repo base rules against these):
+${repoList(a.repos)}
+
+Confirmed findings to close (full bodies also in ${roundFile}):
+${JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
+
+For each finding: apply the fix (this may mean splitting a deliverable that mixes unrelated themes or exceeds the ~1,000-line meaningful-diff threshold, adding a missing deliverable, fixing deps in BOTH the manifest and the deliverable frontmatter, adding acceptance criteria or tests, or correcting a wrong assumption after re-checking the code). Then update ${roundFile}: flip each addressed finding's status from open to fixed. Return one line per finding: id — what you changed.`,
+  })
+
+  // Auto-approval belongs ONLY to a chained dispatch — a singleton ["plan"]
+  // run leaves approval to the skill's interactive gate.
+  if (review.converged && ctx.hasLaterStage) {
+    const approve = await agent(
+      `You are a mechanical executor for strapped run "${cfg.slug}". Run exactly this command via Bash and return its JSON output (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
+
+node ${stateScript} manifest-status ${cfg.dir} approved
+
+Return { "changed": <the command's changed field> }. Do not run anything else.`,
+      { label: 'approve', effort: 'low', schema: APPROVE_SCHEMA }
+    )
+    if (!approve) throw new Error('plan stage: approve executor agent failed')
+    log('plan converged — manifest approved for the chained stages')
+  }
+
+  return {
+    converged: review.converged,
+    rounds: review.rounds,
+    deliverables: plan.deliverables,
+    outstanding: review.outstanding,
+    summary: plan.summary,
+  }
+}
+
+// --- stage: feedback-synth ----------------------------------------------------
+
+async function feedbackSynthStage() {
+  const a = stageArgsFor('feedback-synth')
+
+  const synth = await agent(
+    `You are the PR-feedback synthesis agent for strapped run "${cfg.slug}". Turn fetched PR review comments into ONE consolidated, cross-deliverable set of fix tasks, each placed on the CORRECT existing deliverable.
+
+State root for this run: ${cfg.dir}
+- Read the DAG + repos map: ${cfg.dir}/manifest.md
+- Read EVERY deliverable file under ${cfg.dir}/deliverables/ — each one's \`## Files to touch\` map tells you which files that deliverable owns, so you can route a comment's anchored file path to the deliverable that actually owns it (which may DIFFER from the PR the comment was left on).
+
+Fetched PR review comments (grouped by the deliverable whose PR they were left on; each carries the anchored \`path\`/\`line\` where present, plus the three categories: line-anchored review comments, review-SUBMISSION bodies with their \`state\` — a CHANGES_REQUESTED/COMMENTED/APPROVED summary — and global/issue comments):
+${JSON.stringify(a.comments, null, 2)}
+
+Tasks:
+1. For each comment (or cluster of related comments), decide which EXISTING deliverable should carry the fix. Use the anchored file path against each deliverable's \`Files to touch\` map — a comment left on a child PR may belong on its parent (or another node). A non-empty CHANGES_REQUESTED review-submission body states the overarching problem: treat it as GLOBAL feedback for that deliverable and route its implied fixes to the owning node(s).
+2. Append a \`## Feedback addendum\` section to each affected deliverable's file at ${cfg.dir}/deliverables/<id>-*.md. The section lists concrete, in-scope fix tasks (imperative, testable), each referencing the originating comment/PR. Keep the file conformant to ${cfg.conventionsFile}. If a deliverable already has a \`## Feedback addendum\` section from a prior feedback pass, append new tasks under it rather than duplicating the heading.
+3. Do NOT create new deliverable files, branches, or worktrees. Every fix attaches to an EXISTING deliverable.
+
+Return, per affected deliverable: its id, the source PR the comments came from, whether any task was routed cross-deliverable (placed on a node different from the PR it was left on), and the list of tasks. Plus a one-paragraph summary of the consolidated feedback plan.`,
+    { label: 'feedback-synth', schema: SYNTH_SCHEMA }
+  )
+  if (!synth) throw new Error('feedback-synth stage: synthesis agent failed')
+  log(`feedback addenda produced for ${synth.addenda.length} deliverable(s)`)
+
+  const review = await runReviewLoop({
+    ask: `The fetched PR review comments for strapped run "${cfg.slug}" (line-anchored review comments, review-submission bodies including CHANGES_REQUESTED summaries, and global/issue comments):\n${JSON.stringify(a.comments, null, 2)}`,
+    repos: a.repos,
+    artifactDescription: 'the amended deliverable set — every file in deliverables/ including the newly-added `## Feedback addendum` sections synthesized from the PR review comments',
+    artifactLocation: 'every file in deliverables/ including the newly-added `## Feedback addendum` sections synthesized from the PR review comments',
+    artifactNoun: 'deliverable set',
+    refuteArtifactPhrase: 'the amended deliverable set',
+    roundFilePrefix: 'feedback-round',
+    maxRounds: cfg.planRounds,
+    reviserPromptFn: (newConfirmed, roundFile) =>
+      `You are the PR-feedback addenda reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing ONLY the \`## Feedback addendum\` sections of the affected deliverable files under ${cfg.dir}/deliverables/, keeping every file conformant to ${cfg.conventionsFile}. Original ask (the fetched PR review comments) for reference: ${cfg.slug} feedback batch. You MUST NOT edit ${cfg.dir}/manifest.md or ${cfg.dir}/research.md, and you MUST NOT create new deliverable files, branches, or worktrees — the feedback flow attaches fixes only to EXISTING deliverables' \`## Feedback addendum\` sections.
+
+Confirmed findings to close (full bodies also in ${roundFile}):
+${JSON.stringify(newConfirmed.map(f => ({ id: f.id, key: f.key, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
+
+For each finding: apply the fix by editing the relevant deliverable's \`## Feedback addendum\` section only (add/correct/reassign fix tasks; keep them concrete, in-scope, and testable). Do not touch any \`## Files to touch\`, \`## Implementation steps\`, or other original plan sections, and never touch manifest.md/research.md. Then update ${roundFile}: flip each addressed finding's status from open to fixed. Return one line per finding: id — what you changed.`,
+  })
+
+  return {
+    converged: review.converged,
+    rounds: review.rounds,
+    outstanding: review.outstanding,
+    addenda: synth.addenda,
+    summary: synth.summary,
+  }
+}
+
+// --- stage: implement ---------------------------------------------------------
+
+const CODE_LENSES = {
+  a: 'correctness: logic bugs, unhandled edge cases, race conditions, broken error paths, and acceptance-criteria compliance',
+  b: 'convention and test fidelity: adherence to the assigned guidelines, and test quality — integration-style tests of public interfaces, no mocking, aiohttp test servers for network, polyfactory for stubs',
+}
+
+// One adversarial code-review round for one deliverable: 2 rule-partitioned
+// reviewers, per-finding refute pass, dedup-vs-seen consolidation.
+async function runCodeReviewRound({ item, round, confirmation, seen, recordSuffix }) {
+  const rules = cfg.rulesByRound[round - 1]
+  const roundLabel = confirmation ? `${round}-confirm` : `${round}`
+  const seedUsed = cfg.seed + round
+  const seenDigest = seen.length ? digest(seen) : ''
+
+  function reviewerPrompt(which) {
+    return `You are an adversarial code reviewer with fresh context. Review exactly one deliverable's implementation.
+
+Deliverable: ${item.id} of strapped run "${cfg.slug}".
+Worktree (the code under review lives here): ${item.worktree}${item.repo ? `\nTarget repo: ${item.repo}${item.repoRoot ? ` (root ${item.repoRoot})` : ''}` : ''}
+Branch: ${item.branch}   Base: ${item.base}
+
+Procedure:
+1. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do.
+2. In the worktree, run: git diff ${item.base}...${item.branch}
+3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
+${item.validations && item.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${item.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
+Your lens (your main hunting ground beyond the rules): ${CODE_LENSES[which]}.
+
+Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly:
+${ruleBlock(rules[which])}
+
+Known findings from earlier rounds — do NOT re-report these unless the code has regressed:
+${seenDigest || '(none — first round)'}
+
+Report only real, evidenced issues. Severity: "blocking" = bug or guideline violation that must be fixed; "concern" = likely problem needing a fix or justification; "suggestion" = optional polish (never drives rework). For each finding give a stable key "<rule-id-or-gap>:<file-or-location>". Set confidence honestly — findings under ${cfg.confidenceMin} will be dropped.
+
+You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), plus your findings.`
+  }
+
+  function refutePrompt(f) {
+    return `You are a skeptical verifier with fresh context. A code reviewer claims the following issue in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
+
+Claim [${f.severity}] at ${f.location}: ${f.what}
+Why the reviewer thinks so: ${f.why}
+Their evidence: ${f.evidence}
+
+Your stance: this is NOT a real issue unless the code proves otherwise. Read the actual code in the worktree and try to refute the claim — look for handling the reviewer missed, misread control flow, or a claim about code that does not exist. Return your verdict, a corrected confidence (0-100) that the issue is real, and one line of evidence.`
+  }
+
+  const reviews = await parallel([
+    () => agent(reviewerPrompt('a'), { label: `review:${item.id}:a:r${roundLabel}`, phase: 'Review', schema: FINDINGS_SCHEMA }),
+    () => agent(reviewerPrompt('b'), { label: `review:${item.id}:b:r${roundLabel}`, phase: 'Review', schema: FINDINGS_SCHEMA }),
+  ])
+
+  const tagged = reviews
+    .map((r, i) => ({ r, which: i === 0 ? 'a' : 'b' }))
+    .filter(x => x.r)
+  const allFindings = tagged.flatMap(x =>
+    x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}`, reviewer: x.which }))
+  )
+  const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist]))
+
+  const gating = allFindings.filter(f => f.severity !== 'suggestion')
+  const suggestions = allFindings.filter(f => f.severity === 'suggestion')
+  log(`${item.id} round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
+
+  const verified = await parallel(
+    gating.map(f => () =>
+      agent(refutePrompt(f), { label: `refute:${item.id}:${f.id}`, phase: 'Verify', effort: 'low', schema: REFUTE_SCHEMA })
+        .then(v => ({ ...f, refute: v }))
+    )
+  )
+  // Null refuter result = vote not cast; never dereferenced, never surviving.
+  const surviving = verified
+    .filter(Boolean)
+    .filter(f => f.refute && f.refute.verdict !== 'refuted' && f.refute.confidence >= cfg.confidenceMin)
+  const dropped = gating.length - surviving.length
+  if (dropped > 0) log(`${item.id} round ${roundLabel}: refute pass dropped ${dropped} finding(s)`)
+
+  const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`
+  const consolidation = await agent(
+    `You are consolidating verified code-review findings for deliverable ${item.id}, round ${roundLabel}, of strapped run "${cfg.slug}". Follow the round-record format in ${cfg.conventionsFile}.
+
+Surviving verified findings (already passed the refute filter):
+${JSON.stringify(surviving, null, 2)}
+
+Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+Seen digest from prior rounds:
+${seenDigest || '(none — first round)'}
+
+Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-code-round-*${recordSuffix}.md — read them.
+
+Tasks:
+1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
+2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists.
+3. Return the ids of truly-NEW confirmed findings and the ids of duplicates.`,
+    { label: `consolidate:${item.id}:r${roundLabel}`, phase: 'Consolidate', effort: 'low', schema: CONSOLIDATE_SCHEMA }
+  )
+
+  const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map(f => f.id))
+  const newConfirmed = surviving.filter(f => newIds.has(f.id))
+  log(`${item.id} round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`)
+
+  return { newConfirmed, suggestions, roundFile, converged: newConfirmed.length === 0 }
+}
+
+function implementPrompt(item, addendumMode) {
+  if (addendumMode) {
+    return `You are the fix agent applying PR-review feedback to deliverable ${item.id} of strapped run "${cfg.slug}". This deliverable was ALREADY implemented on its branch; you are NOT re-implementing it from scratch.
+
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
+
+1. Read your deliverable plan in full: ${item.planFile} — focus on its \`## Feedback addendum\` section, which lists the concrete fix tasks synthesized from the PR review comments.
+2. Read the shared research digest: ${cfg.dir}/research.md
+3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
+${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.resumeNote}\n` : ''}
+Apply ONLY the \`## Feedback addendum\` section to the EXISTING code on this branch — a targeted change addressing the review feedback. Do NOT re-implement the deliverable from scratch and do NOT touch anything outside the addendum's scope. Note side-discoveries in your summary instead of fixing them.
+
+Before finishing, ALL validations must pass inside the worktree:
+${item.validations.map(v => `- ${v}`).join('\n')}
+
+Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id} and the feedback fix. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+  }
+  return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
+
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
+
+1. Read your deliverable plan in full: ${item.planFile}
+2. Read the shared research digest: ${cfg.dir}/research.md
+3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
+${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.resumeNote}\n` : ''}
+Implement exactly what the plan specifies — its acceptance criteria are the contract. Write the tests the plan names (integration-style, public interfaces). Stay in scope: anything under "Out of scope" is off limits; note side-discoveries in your summary instead of fixing them.
+
+Before finishing, ALL validations must pass inside the worktree:
+${item.validations.map(v => `- ${v}`).join('\n')}
+
+Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id}. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+}
+
+function fixPrompt(item, findings, round, recordSuffix) {
+  return `You are the fix agent for deliverable ${item.id} of strapped run "${cfg.slug}", code-review round ${round}. Fresh context — everything you need is below.
+
+Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
+
+1. Read the deliverable plan: ${item.planFile}
+2. Read the research digest: ${cfg.dir}/research.md
+3. Read the full round record: ${cfg.dir}/reviews/${item.id}-code-round-${round}${recordSuffix}.md
+
+Confirmed findings you must fix:
+${JSON.stringify(findings.map(f => ({ id: f.id, key: f.key, severity: f.severity, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
+
+Fix every finding. Then re-run ALL validations inside the worktree until green:
+${item.validations.map(v => `- ${v}`).join('\n')}
+
+Commit the fixes on ${item.branch}. Update the round record: flip each fixed finding's status from open to fixed. Return status "implemented" with validations_green true, or "blocked" with the blocker if a finding cannot be fixed as recommended (do not silently skip it).`
+}
+
+async function implementOne(item, addendumMode) {
+  const result = await agent(implementPrompt(item, addendumMode), {
+    label: `implement:${item.id}`,
+    phase: 'Implement',
+    schema: IMPLEMENT_SCHEMA,
+  })
+  if (!result) return { item, outcome: 'parked', parkedReason: 'implementer agent failed', roundsUsed: 0 }
+  if (result.status === 'blocked' || !result.validations_green) {
+    return { item, outcome: 'parked', parkedReason: result.blocker || 'validations not green after implementation', roundsUsed: 0, summary: result.summary }
+  }
+  return { item, outcome: 'implemented', summary: result.summary, roundsUsed: 0 }
+}
+
+async function reviewFixLoop(state, recordSuffix) {
+  if (state.outcome === 'parked') return { ...state, suggestions: [] }
+  const item = state.item
+  const seen = []
+  const suggestions = []
+  let converged = false
+  let roundsUsed = 0
+  let parkedReason = null
+
+  let lastRoundFixedAll = false
+  for (let round = 1; round <= cfg.codeRounds; round++) {
+    roundsUsed = round
+    lastRoundFixedAll = false
+    const review = await runCodeReviewRound({ item, round, confirmation: false, seen, recordSuffix })
+    suggestions.push(...review.suggestions)
+    if (review.converged) {
+      converged = true
+      break
+    }
+    for (const f of review.newConfirmed) seen.push({ ...f, round, status: 'open' })
+
+    const fix = await agent(fixPrompt(item, review.newConfirmed, round, recordSuffix), {
+      label: `fix:${item.id}:r${round}`,
+      phase: 'Fix',
+      schema: IMPLEMENT_SCHEMA,
+    })
+    if (!fix || fix.status === 'blocked' || !fix.validations_green) {
+      parkedReason = (fix && fix.blocker) || `fix agent failed on round ${round}`
+      break
+    }
+    for (const f of seen) if (f.status === 'open') f.status = 'fixed'
+    lastRoundFixedAll = true
+  }
+
+  if (!converged && !parkedReason && lastRoundFixedAll) {
+    const confirm = await runCodeReviewRound({ item, round: cfg.codeRounds, confirmation: true, seen, recordSuffix })
+    suggestions.push(...confirm.suggestions)
+    if (confirm.converged) {
+      converged = true
+    } else {
+      for (const f of confirm.newConfirmed) seen.push({ ...f, round: cfg.codeRounds, status: 'open' })
+      parkedReason = `confirmation pass after round ${cfg.codeRounds} surfaced open findings: ${confirm.newConfirmed.map(f => f.key).join(', ')}`
+    }
+  }
+
+  if (converged) {
+    return { item, outcome: 'done', roundsUsed, summary: state.summary, suggestions }
+  }
+  const open = seen.filter(f => f.status === 'open').map(f => f.key)
+  return {
+    item,
+    outcome: 'parked',
+    roundsUsed,
+    parkedReason:
+      parkedReason ||
+      `code-review budget (${cfg.codeRounds}) exhausted with open findings: ${open.join(', ')}`,
+    summary: state.summary,
+    suggestions,
+  }
+}
+
+function coordinatorPrompt(pass, { only, addendumMode, recordSuffix, roundsField }, processed = []) {
+  const header = `You are the wave coordinator (pass ${pass}) of the implement stage of strapped run "${cfg.slug}". You are a mechanical executor: run exactly the commands below via Bash and return the JSON described — the scripts do all the computing, you are a pipe. Contract for every script: the "Harness scripts" section of ${cfg.conventionsFile}.
+
+Run root: ${cfg.dir}
+State script: node ${stateScript} <command> ...
+Worktree script: ${worktreeScript}
+${pass === 1 ? `\nFirst pass only — flip the manifest first: run \`node ${stateScript} manifest-status ${cfg.dir} implementing\` (a same-status flip is an idempotent no-op on resume).\n` : ''}`
+
+  if (addendumMode) {
+    const doneIds = processed.filter(o => o.outcome === 'done').map(o => o.id)
+    const parkedIds = processed.filter(o => o.outcome !== 'done').map(o => o.id)
+    const ledger = processed.length
+      ? `Progress ledger — the workflow tracked these across the passes of THIS dispatch and it is the ONLY authoritative progress signal: addendum applied (done): ${JSON.stringify(doneIds)}; parked this dispatch: ${JSON.stringify(parkedIds)}. Never dispatch a ledger node again.`
+      : `Progress ledger: empty — this is the first pass of this dispatch, so treat EVERY affected node's addendum as unapplied.`
+    return `${header}
+This is a FEEDBACK (addendum) pass — the "Feedback loop" section of ${cfg.conventionsFile} is authoritative. The affected set is every deliverable whose file under ${cfg.dir}/deliverables/ contains a \`## Feedback addendum\` section${only ? ` intersected with the single node ${only}` : ''}. No new deliverables, branches, or worktrees are minted.
+
+${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from existing ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md records, or from node statuses — all of those can be left over from a PRIOR feedback batch, and the feedback lifecycle is status-neutral (a node returns to its pre-addendum status after its fix lands).
+
+1. Run \`node ${stateScript} dag ${cfg.dir}\` for the nodes, their frontmatter, and the authoritative \`topo\` order — never hand-roll them.
+2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
+3. This pass's wave is the next topological RANK of the affected set counting ONLY nodes not in the progress ledger (parents before children — a parent's fixes must land before its children's wave). A ledger node (done or parked) is never dispatched again; a node whose current status is \`parked\` is not dispatched either.
+4. Per node in the wave:
+   - Node with an open PR (\`pr:\` frontmatter non-null — status \`pr-open\`, or \`fixing\` on resume): \`node ${stateScript} transition <deliverableFile> fixing\` (idempotent when already \`fixing\`).
+   - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
+   - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
+   - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
+  }
+
+  return `${header}
+1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ''}\` — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself.
+2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
+3. For EACH node in \`ready\` (this pass's wave):
+   - Look up its repo's { root, validations, worktreeRoot, provisioning } via the node's \`repo\` field.
+   - Worktree path: <worktreeRoot>/${cfg.slug}/<id>; branch and base come from the node's frontmatter.
+   - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
+   - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
+   - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), the dag's \`remaining\` verbatim, and its \`blocked\` list verbatim. When \`remaining\` is 0, return items: [].`
+}
+
+function applyPrompt(pass, results, { addendumMode, roundsField }) {
+  const outcomes = results.map(r => ({
+    id: r.item.id,
+    deliverableFile: r.item.planFile,
+    outcome: r.outcome,
+    roundsUsed: r.roundsUsed,
+    parkedReason: r.parkedReason || null,
+    pr: r.item.pr || null,
+  }))
+  return `You are the outcome applier (pass ${pass}) of the implement stage of strapped run "${cfg.slug}". You are a mechanical executor: apply each outcome below to its deliverable's frontmatter by running exactly the state-script commands described (contract: the "Harness scripts" section of ${cfg.conventionsFile}) and return the JSON described. Never hand-edit frontmatter.
+
+State script: node ${stateScript} <command> ...
+
+Wave outcomes:
+${JSON.stringify(outcomes, null, 2)}
+
+Per outcome:${addendumMode ? `
+- outcome "done" (feedback fix converged) with a non-null \`pr\` in its outcome above: \`node ${stateScript} transition <deliverableFile> in-review\` then return the node to its PR state — \`node ${stateScript} transition <deliverableFile> pr-open\`.
+- outcome "done" with \`pr: null\` (pre-PR node — it was dispatched at \`done\` and never entered \`fixing\`): \`node ${stateScript} transition <deliverableFile> done\` (an idempotent no-op). Report the final status per node.
+- outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
+- always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\` — the feedback counter, NEVER review_rounds_used.` : `
+- outcome "done": \`node ${stateScript} transition <deliverableFile> done\`.
+- outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
+- always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\`.`}
+
+Return applied: one entry per outcome { id, status } with the final on-disk status. Do not run anything else.`
+}
+
+async function implementStage() {
+  const a = stageArgsFor('implement')
+  const addendumMode = Boolean(a.addendumMode)
+  const recordSuffix = a.recordSuffix || ''
+  const roundsField = addendumMode ? 'feedback_rounds_used' : 'review_rounds_used'
+  const coordinatorCtx = { only: a.only || null, addendumMode, recordSuffix, roundsField }
+
+  const outcomes = []
+  let blocked = []
+  let allDone = false
+  let pass = 0
+  let maxPasses = Infinity
+
+  while (pass < maxPasses) {
+    pass++
+    const wave = await agent(coordinatorPrompt(pass, coordinatorCtx, outcomes), {
+      label: `coordinate:${pass}`,
+      phase: 'Implement',
+      schema: WAVE_SCHEMA,
+    })
+    if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass}`)
+    if (pass === 1) maxPasses = wave.remaining + 1
+    blocked = wave.blocked
+
+    if (wave.remaining === 0) {
+      allDone = true
+      break
+    }
+    if (!wave.items.length) {
+      // Nothing dispatchable but work remains (parked nodes / blocked children):
+      // park, don't spin.
+      log(`pass ${pass}: no dispatchable node with ${wave.remaining} remaining — stopping`)
+      break
+    }
+
+    log(`pass ${pass} wave: ${wave.items.map(i => i.id).join(', ')}`)
+    const results = await pipeline(
+      wave.items,
+      item => implementOne(item, addendumMode),
+      state => reviewFixLoop(state, recordSuffix)
+    )
+    const waveResults = results.filter(Boolean)
+
+    const applied = await agent(applyPrompt(pass, waveResults, coordinatorCtx), {
+      label: `apply:${pass}`,
+      phase: 'Implement',
+      effort: 'low',
+      schema: APPLY_SCHEMA,
+    })
+    if (!applied) throw new Error(`implement stage: outcome-applier agent failed on pass ${pass}`)
+
+    outcomes.push(
+      ...waveResults.map(r => ({
+        id: r.item.id,
+        outcome: r.outcome,
+        roundsUsed: r.roundsUsed,
+        parkedReason: r.parkedReason || null,
+        summary: r.summary || null,
+        suggestions: (r.suggestions || []).map(s => ({ key: s.key, what: s.what, location: s.location })),
+      }))
+    )
+
+    if (!waveResults.some(r => r.outcome === 'done')) {
+      // Zero newly-done progress terminates the loop (park-don't-spin).
+      log(`pass ${pass}: zero newly-done progress — stopping`)
+      break
+    }
+  }
+
+  return { outcomes, allDone, blocked }
+}
+
+// --- stage: pr ----------------------------------------------------------------
+
+async function prStage(ctx) {
+  const a = stageArgsFor('pr')
+  const dryRun = Boolean(a.dryRun)
+
+  // Gate: every node must be done-or-later. Chained after implement, that
+  // stage's allDone already proved it (the dispatch loop stops on !allDone);
+  // otherwise a fresh dag probe must show no node earlier than done.
+  if (!ctx.ranImplement) {
+    const probe = await agent(
+      `You are a mechanical executor for strapped run "${cfg.slug}". Run exactly this command via Bash and return the JSON described (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
+
+node ${stateScript} dag ${cfg.dir}
+
+Return { "remaining": <the dag's remaining field verbatim — never recompute it>, "notDone": [<the ids of the nodes whose status is NOT done/pr-open/merged>] }. Do not run anything else.`,
+      { label: 'pr-gate', phase: 'PR', effort: 'low', schema: PROBE_SCHEMA }
+    )
+    if (!probe) throw new Error('pr stage: dag probe agent failed')
+    if (probe.remaining > 0) {
+      log(`pr stage gate failed: ${probe.remaining} node(s) not yet done`)
+      return {
+        gateFailed: true,
+        notDone: probe.notDone,
+        prs: [],
+        dryRun,
+        summary: `pr stage did not run: ${probe.remaining} node(s) not yet done — ${probe.notDone.join(', ')}`,
+      }
+    }
+  }
+
+  const result = await agent(
+    `You are the PR stage of strapped run "${cfg.slug}". Create the stacked GitHub PRs for this run's done deliverables — mechanically, per the documented procedure. All state reads/writes go through the state script: \`node ${stateScript} <command> ...\` (contract in the "Harness scripts" section of ${cfg.conventionsFile}).
+
+Procedure — the "Stacked PRs" section of ${cfg.conventionsFile} is authoritative; read it first:
+1. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (each repo's absolute root) and \`node ${stateScript} dag ${cfg.dir}\` for the nodes and the authoritative \`topo\` order — never hand-roll either.
+2. Candidates: \`status: done\` nodes whose parents are all done, pr-open, or merged, processed in \`topo\` order.
+3. Per candidate, in that deliverable's OWN repo (every git/gh operation pinned to it via \`git -C <repoRoot>\` / running gh inside <repoRoot>):
+   - \`git -C <repoRoot> push -u origin <branch>\`
+   - \`gh pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>\` — base per the cross-repo base rule (the parent deliverable's branch only when the parent is in the same repo; a root or cross-repo child bases on that repo's main). Body: one-paragraph summary, the acceptance criteria as a checklist, a Stack table of the whole DAG grouped by repo, and \`Depends on #<parent PR>\` for same-repo non-roots.
+   - Record via the state script: \`node ${stateScript} set <deliverableFile> pr <url>\` then \`node ${stateScript} transition <deliverableFile> pr-open\`.
+4. After all creations, refresh every stack table via \`gh pr edit <num> --body-file <regenerated>\` so earlier PRs link the later ones.
+
+Guardrails (binding):
+- Never push \`main\`, never merge PRs, never \`--force\` (only \`--force-with-lease\`) — enforced per repo (every git op runs \`-C <deliverableRepoRoot>\`).
+- If \`gh\` is unauthenticated or a branch has no commits beyond its base, report and skip that node rather than failing the stage: return it with \`skipped: true\` and a human-readable \`reason\`, and continue with the remaining nodes.
+${dryRun ? '\nDRY RUN — print-only: execute NOTHING that mutates (no push, no pr create/edit, no state-script set/transition). Print every would-be git/gh/state command, return them in `summary`, and return every candidate with `url: null` and `skipped: true`.\n' : ''}
+Return \`prs\` — one entry per candidate node \`{ id, url, skipped, reason }\` (\`url\` null when skipped, \`reason\` null when created) — and a one-paragraph \`summary\` of what was created and what was skipped.`,
+    { label: 'pr-create', phase: 'PR', schema: PR_SCHEMA }
+  )
+  if (!result) throw new Error('pr stage: pr agent failed')
+  log(`pr stage: ${result.prs.length} node(s) processed${dryRun ? ' (dry run)' : ''}`)
+
+  return { prs: result.prs, summary: result.summary, dryRun }
+}
+
+// --- dispatch loop -------------------------------------------------------------
+
+const STAGES = {
+  plan: planStage,
+  'feedback-synth': feedbackSynthStage,
+  implement: implementStage,
+  pr: prStage,
+}
+
+function gateFailed(name, result) {
+  if (name === 'plan' || name === 'feedback-synth') return !result.converged
+  if (name === 'implement') return !result.allDone
+  if (name === 'pr') return Boolean(result.gateFailed)
+  return false
+}
+
+const results = {}
+const completed = []
+let stoppedAt = null
+
+for (let i = 0; i < cfg.stages.length; i++) {
+  const name = cfg.stages[i]
+  phase(name)
+  const ctx = {
+    hasLaterStage: i < cfg.stages.length - 1,
+    ranImplement: completed.includes('implement'),
+  }
+  const result = await STAGES[name](ctx)
+  if (!result) throw new Error(`stage "${name}" returned no result`)
+  results[name] = result
+  if (gateFailed(name, result)) {
+    stoppedAt = name
+    log(`stage "${name}" gate failed — stopping the dispatch`)
+    break
+  }
+  completed.push(name)
+}
+
+return { slug: cfg.slug, stages: cfg.stages, completed, stoppedAt, results }

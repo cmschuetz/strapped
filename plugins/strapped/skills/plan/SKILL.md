@@ -89,33 +89,39 @@ The manifest (written by the planner agent in step 3) must carry the `repos:` ma
 1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md, one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
 2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions, adapted to emit full rule objects — for each round `1..max_rounds`, a `{"a": [{"id", "source", "text"}...], "b": [...]}` pair, shuffled with `random.Random(seed + round)` and split in half. Save the JSON output; it goes into the workflow args verbatim. Never use ad-hoc randomness — the seed is the only entropy source.
 
-## Step 3 — Run the plan loop workflow
+## Step 3 — Run the plan stage of the mono-workflow
 
-Invoke the `strapped-plan-loop` workflow — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/plan-loop.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (all paths absolute):
+Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (all paths absolute; full contract in the conventions' **Composable chains** section):
 
 ```json
 {
   "slug": "<slug>",
   "dir": "<runRoot>/<slug>",
-  "sourcePlan": "<abs path to the source plan.md>",
-  "repos": [
-    { "name": "<targetRepo1>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] },
-    { "name": "<targetRepo2>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }
-  ],
+  "stages": ["plan"],
+  "stageArgs": {
+    "plan": {
+      "sourcePlan": "<abs path to the source plan.md>",
+      "repos": [
+        { "name": "<targetRepo1>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] },
+        { "name": "<targetRepo2>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }
+      ]
+    }
+  },
+  "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "reviewLoopScript": "$PLUGIN_ROOT/workflows/review-loop.js",
   "rulesByRound": [<the per-round splits from step 2>],
-  "maxRounds": 3,
+  "planRounds": 3,
+  "codeRounds": 3,
   "confidenceMin": 70,
   "seed": 42
 }
 ```
 
-`reviewLoopScript` is an explicit absolute scriptPath for the extracted plan-review loop (`plan-loop.js` runs its planner phase, then delegates the review loop to `review-loop.js` via `workflow(...)`). Passing it explicitly honors the "scriptPath, not name" convention — name resolution can serve a stale registration — so the plan flow never depends on the bare-string `strapped-review-loop` name fallback.
+`planRounds` is the `--max-rounds` value (default 3); `codeRounds` is the run's code-review budget — the planner records BOTH (plus the seed) in the manifest's `budgets:`, so overridden budgets persist on disk without skill-side patching.
 
-`repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses `repos` to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
+`stageArgs.plan.repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses it to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
 
-The workflow runs the planner (which writes `research.md`, `manifest.md`, and the deliverable files), then up to `maxRounds` adversarial review rounds. It returns `{converged, rounds, deliverables, outstanding, summary}`.
+The plan stage runs the planner (which writes `research.md`, `manifest.md`, and the deliverable files), then up to `planRounds` adversarial review rounds. The workflow returns `{slug, stages, completed, stoppedAt, results}` — read `results.plan` for `{converged, rounds, deliverables, outstanding, summary}`. A singleton `["plan"]` dispatch NEVER auto-approves the manifest — approval is this skill's interactive gate (steps 5–6).
 
 ## Step 4 — Handle the outcome
 
@@ -128,4 +134,10 @@ Walk the user through the plan: theme summary, the DAG (render it), then each de
 
 ## Step 6 — Approve
 
-Set `status: approved` in `manifest.md`. Tell the user the next command: `/strapped:implement <slug>`, and that `/strapped:status <slug>` shows state at any time.
+Flip the manifest via the harness script (never hand-edit):
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs manifest-status <runRoot>/<slug> approved
+```
+
+Tell the user the next command: `/strapped:implement <slug>`, and that `/strapped:status <slug>` shows state at any time.

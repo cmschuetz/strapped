@@ -309,6 +309,63 @@ The idempotent worktree recipe from [Worktrees and branches](#worktrees-and-bran
 
 Output is one JSON object `{"worktree", "branch", "created"}` on stdout; git failures exit non-zero with git's stderr passed through.
 
+## Composable chains
+
+All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.name `strapped-run`). Workflow files cannot import each other (they are not modules), but plain functions in one file compose freely — so every loop that used to be its own stage workflow (planner + plan-review loop, feedback synthesis, the implement wave loop with bounded code review, the stacked-PR create pass) is a stage FUNCTION in this single file, selected by the injected `args.stages` list. The file makes **zero `workflow()` calls**, so the nesting limit recorded below never engages. A chain is just a longer stage list.
+
+### Canonical stage table
+
+`stages` must be a non-empty **ordered subset** of, in canonical order (unknown, out-of-order, duplicate, or empty → the workflow throws):
+
+| stage | does | returns | gate (dispatch stops when it fails) |
+| --- | --- | --- | --- |
+| `plan` | planner writes research/manifest/deliverables (recording the run's EFFECTIVE seed + `plan_rounds`/`code_rounds` budgets in the manifest), then the bounded adversarial plan-review loop (`reviews/plan-round-<N>.md`) | `{converged, rounds, deliverables, outstanding, summary}` | `converged` |
+| `feedback-synth` | synthesize fetched PR comments (passed via `stageArgs`; fetching stays skill-side via `gh`) into `## Feedback addendum` sections, then the SAME review loop (`reviews/feedback-round-<N>.md`) | `{converged, rounds, outstanding, addenda, summary}` | `converged` |
+| `implement` | the FULL DAG wave loop: per pass a coordinator executor agent drives `state.mjs dag`/`resolve` + `ensure-worktree.sh` + status flips; per ready node a fresh implementer, validations, and bounded code-review/fix rounds; an outcome-applier agent flips `done`/`parked` + rounds counters. Zero newly-done progress terminates the loop (park-don't-spin) | `{outcomes, allDone, blocked}` — `allDone` = the dag's `remaining` is 0 (done-or-later, verbatim from `state.mjs dag`) | `allDone` |
+| `pr` | the stacked-PR create pass: one `pr-create` agent runs the [Stacked PRs](#stacked-prs) procedure through `state.mjs`, carrying the pr skill's Guardrails verbatim (never push `main`, never merge, never `--force` — only `--force-with-lease`; unauthenticated `gh` or a branch with no commits beyond base → report-and-skip via `prs[].skipped`/`reason`); `dryRun` = print-only, no mutation | `{prs: [{id, url, skipped, reason}], summary, dryRun}` | the done-or-later probe below |
+
+`feedback-synth` is reachable via skill dispatch only — chain configs are restricted to `{plan, implement, pr}`.
+
+### Args shape
+
+```json
+{
+  "slug": "<slug>", "dir": "<runRoot>/<slug>",
+  "stages": ["plan", "implement", "pr"],
+  "stageArgs": {
+    "plan": { "sourcePlan": "<abs>", "repos": [{ "name": "...", "root": "<abs>" }] },
+    "feedback-synth": { "comments": ["<fetched PR comments>"], "repos": [] },
+    "implement": { "only": null, "addendumMode": false, "recordSuffix": "" },
+    "pr": { "dryRun": false }
+  },
+  "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
+  "conventionsFile": "$PLUGIN_ROOT/conventions.md",
+  "seed": 42, "confidenceMin": 70, "planRounds": 3, "codeRounds": 3,
+  "rulesByRound": ["<per-round {a, b} rule splits, computed skill-side>"]
+}
+```
+
+Returns `{ slug, stages, completed, stoppedAt, results }` — `results` keyed by stage name, `completed` the stages whose gate passed, `stoppedAt` the gate-failing stage (its result still lands in `results`; parked/blocked details surface there — the dispatch never proceeds silently).
+
+### Gate semantics
+
+- **Approve only when chained.** After `plan` converges, the manifest is auto-flipped to `approved` (via a `state.mjs manifest-status` executor agent) ONLY when a later stage follows in the same dispatch. A singleton `["plan"]` dispatch leaves approval to the skill's interactive gate.
+- **The `implementing` flip is owned by implement's first coordinator pass** (`state.mjs manifest-status <runDir> implementing`, a same-status no-op on resume) — skills no longer flip it.
+- **Done-or-later pr gate.** `pr` requires every node at `done`/`pr-open`/`merged`: chained after `implement`, that stage's `allDone` already proved it; otherwise (pr first, or dispatched without implement) a fresh `state.mjs dag` probe must show `remaining: 0`, else the stage returns `gateFailed: true` naming the not-done nodes and the dispatch stops.
+
+### Singleton dispatch rule for skills
+
+The standalone skills dispatch the SAME file with singleton stage lists — `/strapped:plan` → `["plan"]`, `/strapped:implement` → `["implement"]`, `/strapped:pr` (create mode) → `["pr"]`, `/strapped:feedback` → `["feedback-synth"]` then, after its approval gate, `["implement"]` with `addendumMode`/`recordSuffix` — always via the explicit absolute `scriptPath` (scriptPath, not name: name resolution can serve a stale registration). There is exactly one source of truth for every loop; interactive gates (final plan review, feedback approval) stay in the skills.
+
+### Workflow nesting limit (verified; moot by design)
+
+Verified 2026-07-11 against the real Workflow tool, with throwaway scriptPath chains dispatched at depths 2, 3, and 4:
+
+- **Depth 2** — a root workflow dispatching one child via `workflow({ scriptPath })` — **works**: the child's return value and its `phase`/`log` output surface at the root.
+- **Depth 3 and depth 4 fail**: a CHILD workflow may not call `workflow()` at all. Exact runtime error: `workflow() cannot be called from within a child workflow — nesting is limited to one level. Inline the inner script or call its agents directly.`
+
+This limit is why the retired multi-file architecture (stage workflows dispatching each other — the planner and feedback flows each dispatching a shared review-loop file, the wave workflow dispatching a code-review file, and a chain orchestrator above them) could not be built, and why everything was consolidated into the single strapped-run file: with zero `workflow()` calls the limit never engages. Kept as the record for anyone tempted to reintroduce sub-workflow dispatch.
+
 ## Validations
 
 Every command in the **deliverable's repo's** config `validations` must be green before code review and after every fix round, run inside the deliverable's worktree.
@@ -357,14 +414,14 @@ Flow, **batched over the whole run** (stacked-PR comments are interdependent —
 
 1. **Fetch** review comments from every in-scope deliverable PR (default: every deliverable with a `pr:` URL that has review comments or a request-changes/comment review; `--deliverable`/`--pr` narrows). THREE categories: line-anchored review comments (`/pulls/{n}/comments`), review-SUBMISSION bodies (`/pulls/{n}/reviews` — `state` + `body`, where a CHANGES_REQUESTED reviewer states the overarching problem; fed into synthesis as GLOBAL feedback), and global/issue comments (`gh pr view --json comments`). The anchored `path` is carried so synthesis can reassign a comment cross-deliverable.
 2. **Synthesize cross-deliverable addenda** — ONE consolidated plan. A comment left on one PR can produce a fix task on a DIFFERENT deliverable (routed via each deliverable's `Files to touch` map); each fix is appended as a `## Feedback addendum` section on the CORRECT **existing** deliverable file. **No new deliverables, branches, or worktrees are minted.**
-3. **Adversarial review** the synthesized addenda through the SAME machinery — the plan-review loop, extracted into the standalone workflow `review-loop.js` and invoked via the ambient `workflow({ scriptPath })` helper (NOT a JS `import`; a workflow file is not a loadable module). Reviewers/refute/dedup/consolidate/revise + the final-round confirmation pass run bounded by the budget. Records land as `reviews/feedback-round-<N>.md` — **distinct from** the original run's `plan-round-<N>.md`.
+3. **Adversarial review** the synthesized addenda through the SAME machinery — the shared review loop inside `strapped-run.js` (the `feedback-synth` stage runs synthesis, then that loop). Reviewers/refute/dedup/consolidate/revise + the final-round confirmation pass run bounded by the budget. Records land as `reviews/feedback-round-<N>.md` — **distinct from** the original run's `plan-round-<N>.md`.
 4. **Explicit user approval** — the same final-review gate `/strapped:plan` uses, before any implementation. `--dry-run` stops here after printing the plan and the would-run commands, mutating nothing.
-5. **Implement in topological (stack) order** so a parent's fixes land before children rebase. Reuse `implement-wave.js` on each affected deliverable's EXISTING branch/worktree via its `addendumMode` seam (the implement stage APPLIES the `## Feedback addendum` to the existing code instead of re-implementing), and `code-review.js` threaded with a `recordSuffix` so feedback code-review rounds write `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`); `implement-wave.js` derives the fix agent's round-record READ path from the SAME suffix so writer and reader agree. Freeze rule preserved. Never force-push or merge here.
+5. **Implement in topological (stack) order** so a parent's fixes land before children rebase. Reuse the `implement` stage of `strapped-run.js` on each affected deliverable's EXISTING branch/worktree via its `addendumMode` seam (the implementer APPLIES the `## Feedback addendum` to the existing code instead of re-implementing; the coordinator drives the feedback re-entry transitions and processes one topological rank per wave). Cross-pass progress is tracked by the **workflow itself**, not read off disk: each coordinator pass receives a progress ledger of the ids already processed in THIS dispatch (split done vs parked), the wave is the next topological rank of the affected set counting only un-ledgered nodes, and `remaining` is the count of affected nodes not in the ledger's done list. On-disk markers are NEVER treated as addendum-applied signals — `feedback_rounds_used` and existing `-feedback` records can be left over from a prior feedback batch, and the feedback lifecycle is status-neutral (a node returns to its pre-addendum status), so an empty ledger (pass 1) means every affected node's addendum is unapplied. Thread `recordSuffix: "-feedback"` so feedback code-review rounds write `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`); the fix agent's round-record READ path derives from the SAME suffix so writer and reader agree. Freeze rule preserved. Never force-push or merge here.
 6. **Cascade** — after fixes change a parent branch, the stacked-child rebase/re-push is the existing `/strapped:pr <slug> --update` freeze-rule path, offered ONCE for the whole batch.
 
-**Reuse mechanism.** The plan-review loop lives in `review-loop.js` (its own `export const meta` + injected ambient helpers). BOTH `plan-loop.js`'s planner phase (ask = the source plan, `roundFilePrefix: plan-round`) and `feedback-synth.js` (ask = the fetched PR review comments, artifact = the amended deliverable set, `roundFilePrefix: feedback-round`) invoke it via `workflow(cfg.reviewLoopScript ? { scriptPath: cfg.reviewLoopScript } : 'strapped-review-loop', …)` — a bare-string NAME fallback, an absolute path only ever inside `{ scriptPath }`, exactly mirroring `implement-wave.js`'s `codeReviewScript` call to `code-review.js`. Both the plan flow and the feedback flow pass the explicit absolute scriptPath (never the name fallback), honoring "scriptPath, not name". Neither invokes `strapped-plan-loop` for feedback (that would run the planner phase and clobber the addenda).
+**Reuse mechanism.** The adversarial review loop is one shared function inside `strapped-run.js`, parameterized by ask/artifact/round-file prefix: the `plan` stage runs it with ask = the source plan and `roundFilePrefix: plan-round`; the `feedback-synth` stage runs it with ask = the fetched PR review comments, artifact = the amended deliverable set, and `roundFilePrefix: feedback-round`. The feedback flow dispatches the `feedback-synth` stage, never the `plan` stage (that would run the planner and clobber the addenda). See [Composable chains](#composable-chains).
 
-**Status re-entry & counters.** Feedback enters when a deliverable is already `pr-open` (triggered off `sync-prs.sh`'s `CHANGES_REQUESTED` warning). The re-entry edge is `pr-open → fixing ⇄ in-review → pr-open`: the deliverable drops into the `fixing`/`in-review` sub-cycle for the fix, then returns to `pr-open` (its PR stays open; `--update` re-pushes the branch, it does not reopen). It never returns to `pending`/`ready`/`in-progress`. Feedback rounds use a **separate counter** `feedback_rounds_used` (a frontmatter field, default 0), NOT the original `review_rounds_used`, mirroring the separate record-file naming — so the original run's round budget/audit stays intact.
+**Status re-entry & counters.** Feedback enters when a deliverable is already `pr-open` (triggered off `sync-prs.sh`'s `CHANGES_REQUESTED` warning). The re-entry edge is `pr-open → fixing ⇄ in-review → pr-open`: the deliverable drops into the `fixing`/`in-review` sub-cycle for the fix, then returns to `pr-open` (its PR stays open; `--update` re-pushes the branch, it does not reopen). It never returns to `pending`/`ready`/`in-progress`. A **pre-PR** node (`pr:` null — e.g. the pr stage report-and-skipped it) with an unapplied addendum is admitted too, but skips the sub-cycle: there is no `done>fixing` edge, so the coordinator dispatches it without a transition and it stays `done` while the addendum applies on its existing branch. Feedback rounds use a **separate counter** `feedback_rounds_used` (a frontmatter field, default 0), NOT the original `review_rounds_used`, mirroring the separate record-file naming — so the original run's round budget/audit stays intact.
 
 ## Cleanup recipe
 
