@@ -1,10 +1,12 @@
-// Test environment builder for plugins/strapped/scripts/sync-prs.sh.
+// Test environment builder for the plugins/strapped SessionStart hook scripts
+// (sync-prs.sh and preamble.sh).
 //
-// Builds a temp state-root fixture (<stateRoot>/runs/<slug>/deliverables/*.md
-// with given frontmatter), a bin dir holding symlinks to the coreutils the
-// script needs plus an optional stub `gh`, and a spawn helper that runs the
-// REAL script with controlled HOME / PATH / STRAPPED_STATE_ROOT / cwd, so the
-// user's real ~/.claude/strapped.json and real gh can never leak in.
+// Builds a temp state-root fixture (<stateRoot>/runs/<slug>/manifest.md and
+// <stateRoot>/runs/<slug>/deliverables/*.md with given frontmatter), a bin dir
+// holding symlinks to the coreutils the scripts need plus an optional stub
+// `gh`, and a spawn helper that runs the REAL script with controlled HOME /
+// PATH / STRAPPED_STATE_ROOT / cwd, so the user's real ~/.claude/strapped.json
+// and real gh can never leak in.
 
 import { spawnSync } from 'node:child_process'
 import {
@@ -24,8 +26,12 @@ export const SYNC_PRS_SCRIPT = fileURLToPath(
   new URL('../../plugins/strapped/scripts/sync-prs.sh', import.meta.url)
 )
 
-// Everything sync-prs.sh may exec besides gh. bash covers the stub gh's shebang.
-const TOOLS = ['bash', 'grep', 'sed', 'basename', 'dirname', 'ls', 'head', 'cut', 'tr', 'timeout', 'git']
+export const PREAMBLE_SCRIPT = fileURLToPath(
+  new URL('../../plugins/strapped/scripts/preamble.sh', import.meta.url)
+)
+
+// Everything the hook scripts may exec besides gh. bash covers the stub gh's shebang.
+const TOOLS = ['bash', 'grep', 'sed', 'basename', 'dirname', 'ls', 'head', 'cut', 'tr', 'timeout', 'git', 'cat', 'sort', 'uniq']
 
 function resolveTool(name) {
   for (const dir of (process.env.PATH || '').split(':')) {
@@ -35,7 +41,7 @@ function resolveTool(name) {
 }
 
 /**
- * Build an isolated environment for spawning sync-prs.sh.
+ * Build an isolated environment for spawning a hook script (default sync-prs.sh).
  *
  * @param {object} [opts]
  * @param {string|null} [opts.gh] body of a stub `gh` script to put on PATH;
@@ -43,8 +49,9 @@ function resolveTool(name) {
  * @returns {{
  *   home: string, stateRoot: string, bin: string,
  *   addDeliverable: (slug: string, filename: string, frontmatter: object, body?: string) => string,
+ *   addManifest: (slug: string, frontmatter: object, body?: string) => string,
  *   readDeliverable: (slug: string, filename: string) => string,
- *   run: (opts?: {cwd?: string, env?: object}) => import('node:child_process').SpawnSyncReturns<string>
+ *   run: (opts?: {script?: string, cwd?: string, env?: object}) => import('node:child_process').SpawnSyncReturns<string>
  * }}
  */
 export function makeHookEnv({ gh = null } = {}) {
@@ -74,10 +81,19 @@ export function makeHookEnv({ gh = null } = {}) {
     return file
   }
 
+  const addManifest = (slug, frontmatter, body = 'Body.') => {
+    const dir = join(stateRoot, 'runs', slug)
+    mkdirSync(dir, { recursive: true })
+    const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`)
+    const file = join(dir, 'manifest.md')
+    writeFileSync(file, `---\n${lines.join('\n')}\n---\n${body}\n`)
+    return file
+  }
+
   const readDeliverable = (slug, filename) => readFileSync(deliverablePath(slug, filename), 'utf8')
 
-  const run = ({ cwd = home, env = {} } = {}) =>
-    spawnSync(join(bin, 'bash'), [SYNC_PRS_SCRIPT], {
+  const run = ({ script = SYNC_PRS_SCRIPT, cwd = home, env = {} } = {}) =>
+    spawnSync(join(bin, 'bash'), [script], {
       cwd,
       encoding: 'utf8',
       env: {
@@ -88,7 +104,7 @@ export function makeHookEnv({ gh = null } = {}) {
       },
     })
 
-  return { home, stateRoot, bin, addDeliverable, readDeliverable, run }
+  return { home, stateRoot, bin, addDeliverable, addManifest, readDeliverable, run }
 }
 
 /** A stub `gh` that passes `gh auth status` and answers `gh pr view` with the given compact JSON. */

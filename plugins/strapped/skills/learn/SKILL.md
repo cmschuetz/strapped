@@ -11,7 +11,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Turn the user's recurring corrections into durable guidelines. Source format is in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`).
+Turn the user's recurring corrections into durable guidelines. Source format is in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`). The plugin's SessionStart hook auto-injects the conventions as the **strapped preamble** — assume they are in context; if the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding.
 
 ## Step 1 — Collect
 

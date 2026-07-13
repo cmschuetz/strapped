@@ -54,6 +54,10 @@ Zero dependencies (no `npm install` needed). The suite chains three gates:
 
 For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
 
+## Session preamble
+
+The strapped operating context loads itself: a SessionStart hook runs `plugins/strapped/scripts/preamble.sh`, which injects the full `plugins/strapped/conventions.md` plus a live state summary (every run under `<stateRoot>/runs/` with its manifest status and per-status deliverable counts) into the orchestrator's context. The injection's first line carries the sentinel `strapped-preamble-v1`. It fires on `startup`, `clear`, and `compact` — deliberately NOT on `resume`, because a resumed session's transcript already contains the earlier injection (clear/compact evict it, so those re-inject) — and never fires for subagents (workflows seed subagents with the conventions file explicitly). Skills assume the preamble is present and fall back to reading `conventions.md` themselves only when the sentinel is missing from context.
+
 ## PR tracking
 
 Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which checks every `pr-open` deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, and notes newly unblocked children. It exits silently in milliseconds when a project has no strapped state or nothing is `pr-open`, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.

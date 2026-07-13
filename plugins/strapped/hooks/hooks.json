@@ -8,6 +8,11 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/sync-prs.sh",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/preamble.sh",
+            "timeout": 10
           }
         ]
       },
@@ -18,6 +23,26 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/sync-prs.sh",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/preamble.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/preamble.sh",
+            "timeout": 10
           }
         ]
       }
