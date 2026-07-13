@@ -14,7 +14,13 @@ import { NODE } from './helpers/node-bin.ts'
 
 const SCRIPT = fileURLToPath(new URL('../plugins/strapped/scripts/sync-chain-skills.mjs', import.meta.url))
 
-function makeHome(anchor) {
+interface SyncJson {
+  written: string[]
+  unchanged: string[]
+  pruned: string[]
+}
+
+function makeHome(anchor?: unknown): string {
   const home = mkdtempSync(join(tmpdir(), 'strapped-sync-'))
   mkdirSync(join(home, '.claude'), { recursive: true })
   if (anchor !== undefined) {
@@ -23,22 +29,25 @@ function makeHome(anchor) {
   return home
 }
 
-function runSync(home, extra = []) {
+function runSync(home: string, extra: string[] = []) {
   // HOME deliberately points elsewhere: --home must fully isolate the run.
   // NODE, not process.execPath: under `bun test` execPath is bun (deploy parity).
   const res = spawnSync(NODE, [SCRIPT, '--home', home, ...extra], {
     encoding: 'utf8',
     env: { HOME: join(home, 'decoy-home'), PATH: process.env.PATH },
   })
-  return { ...res, json: res.status === 0 ? JSON.parse(res.stdout) : null }
+  const json: SyncJson | null = res.status === 0 ? (JSON.parse(res.stdout) as SyncJson) : null
+  return { ...res, json }
 }
 
-const wrapperFile = (home, chain) => join(home, '.claude', 'skills', `strapped-run-${chain}`, 'SKILL.md')
+const wrapperFile = (home: string, chain: string): string =>
+  join(home, '.claude', 'skills', `strapped-run-${chain}`, 'SKILL.md')
 
 test('writes wrappers for builtins + config chains with marker, chain_source, and delegation line', () => {
   const home = makeHome({ stateRoot: '/abs/state', chains: { automode: ['plan', 'implement', 'pr'] } })
   const res = runSync(home)
   assert.equal(res.status, 0, res.stderr)
+  assert.ok(res.json)
   assert.deepEqual(res.json.written.sort(), ['auto', 'automode', 'ship'])
   assert.deepEqual(res.json.unchanged, [])
   assert.deepEqual(res.json.pruned, [])
@@ -60,6 +69,7 @@ test('second run → all unchanged', () => {
   assert.equal(runSync(home).status, 0)
   const again = runSync(home)
   assert.equal(again.status, 0, again.stderr)
+  assert.ok(again.json)
   assert.deepEqual(again.json.written, [])
   assert.deepEqual(again.json.unchanged.sort(), ['auto', 'automode', 'ship'])
   assert.deepEqual(again.json.pruned, [])
@@ -79,6 +89,7 @@ test('removed anchor chain → wrapper pruned; unmarked sibling dir untouched', 
   writeFileSync(join(home, '.claude', 'strapped.json'), JSON.stringify({ chains: {} }))
   const res = runSync(home)
   assert.equal(res.status, 0, res.stderr)
+  assert.ok(res.json)
   assert.deepEqual(res.json.pruned, ['automode'])
   assert.ok(!existsSync(wrapperFile(home, 'automode')), 'stale marked wrapper must be deleted')
   assert.equal(readFileSync(join(manualDir, 'SKILL.md'), 'utf8'), manualContent, 'unmarked dir must be untouched')
@@ -95,6 +106,7 @@ test('an existing unmarked file at a wrapper path is never overwritten', () => {
 
   const res = runSync(home)
   assert.equal(res.status, 0, res.stderr)
+  assert.ok(res.json)
   assert.ok(!res.json.written.includes('automode'))
   assert.equal(readFileSync(join(dir, 'SKILL.md'), 'utf8'), mine)
   assert.match(res.stderr, /without the "generated_by: strapped" marker/)
@@ -104,6 +116,7 @@ test('--dry-run reports but writes nothing', () => {
   const home = makeHome({ chains: { automode: ['plan', 'implement', 'pr'] } })
   const res = runSync(home, ['--dry-run'])
   assert.equal(res.status, 0, res.stderr)
+  assert.ok(res.json)
   assert.deepEqual(res.json.written.sort(), ['auto', 'automode', 'ship'])
   assert.ok(!existsSync(join(home, '.claude', 'skills')), 'dry run must create nothing')
 })
@@ -115,6 +128,7 @@ test('--dry-run reports a would-be prune without deleting', () => {
 
   const res = runSync(home, ['--dry-run'])
   assert.equal(res.status, 0, res.stderr)
+  assert.ok(res.json)
   assert.deepEqual(res.json.pruned, ['automode'])
   assert.ok(existsSync(wrapperFile(home, 'automode')), 'dry run must not delete')
 })

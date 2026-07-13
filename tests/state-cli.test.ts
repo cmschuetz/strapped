@@ -3,12 +3,62 @@
 // state-root fixtures in the exact conventions.md file shapes.
 
 import assert from 'node:assert/strict'
+import { type SpawnSyncReturns } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
-import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.js'
+import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.ts'
 
-const parse = res => JSON.parse(res.stdout)
+interface RepoJson {
+  name: string | null
+  root: string | null
+  config: string
+  configExists: boolean
+  validations: string[] | null
+  worktreeRoot: string | null
+  provisioning: string | null
+}
+
+interface ResolveJson {
+  slug: string
+  stateRoot: string
+  runRoot: string
+  runDir: string
+  manifest: string
+  exists: boolean
+  status: string | null
+  seed: number | null
+  budgets: Record<string, number> | null
+  repos: RepoJson[]
+}
+
+interface DagNodeJson {
+  id: string
+  file: string
+  title: string | null
+  status: string
+  deps: string[]
+  repo: string | null
+  branch: string | null
+  base: string | null
+  worktree: string | null
+  pr: string | null
+  review_rounds_used: number
+  feedback_rounds_used: number
+  parked_reason: string | null
+  estimated_diff_lines: number | null
+}
+
+interface DagJson {
+  manifest: { status: string | null; seed: number | null; budgets: Record<string, number> | null }
+  nodes: DagNodeJson[]
+  ready: string[]
+  topo: string[]
+  blocked: { id: string; blockedOn: string[] }[]
+  remaining: number
+}
+
+const parse = <T = unknown>(res: SpawnSyncReturns<string>): T => JSON.parse(res.stdout) as T
 
 // --- resolve -----------------------------------------------------------------
 
@@ -27,7 +77,7 @@ test('resolve: env stateRoot + existing manifest → exists true, repos map with
   })
   const res = env.runState(['resolve', 'my-run'])
   assert.equal(res.status, 0, res.stderr)
-  const json = parse(res)
+  const json = parse<ResolveJson>(res)
   assert.equal(json.exists, true)
   assert.equal(json.slug, 'my-run')
   assert.equal(json.stateRoot, env.stateRoot)
@@ -62,7 +112,7 @@ test('resolve: anchor-file stateRoot with ~ prefix expands against isolated HOME
   })
   const res = env.runState(['resolve', 'my-run'], { env: { STRAPPED_STATE_ROOT: undefined } })
   assert.equal(res.status, 0, res.stderr)
-  const json = parse(res)
+  const json = parse<ResolveJson>(res)
   assert.equal(json.stateRoot, expanded)
   assert.equal(json.exists, true)
 })
@@ -71,7 +121,7 @@ test('resolve: missing manifest → exists false, exit 0', () => {
   const env = makeStateEnv()
   const res = env.runState(['resolve', 'no-such-run'])
   assert.equal(res.status, 0, res.stderr)
-  const json = parse(res)
+  const json = parse<ResolveJson>(res)
   assert.equal(json.exists, false)
   assert.equal(json.runDir, env.runDir('no-such-run'))
   assert.deepEqual(json.repos, [])
@@ -81,7 +131,7 @@ test('resolve: no env, no anchor → default ~/.claude/strapped under isolated H
   const env = makeStateEnv()
   const res = env.runState(['resolve', 'my-run'], { env: { STRAPPED_STATE_ROOT: undefined } })
   assert.equal(res.status, 0, res.stderr)
-  assert.equal(parse(res).stateRoot, join(env.home, '.claude', 'strapped'))
+  assert.equal(parse<ResolveJson>(res).stateRoot, join(env.home, '.claude', 'strapped'))
 })
 
 test('resolve: relative stateRoot (env or anchor) → exit 1 with one-line stderr', () => {
@@ -109,7 +159,8 @@ test('resolve: repo config missing → configExists false, exit 0', () => {
   })
   const res = env.runState(['resolve', 'my-run'])
   assert.equal(res.status, 0, res.stderr)
-  const [repo] = parse(res).repos
+  const [repo] = parse<ResolveJson>(res).repos
+  assert.ok(repo)
   assert.equal(repo.configExists, false)
   assert.equal(repo.validations, null)
   assert.equal(repo.worktreeRoot, null)
@@ -134,7 +185,7 @@ test('dag: roots ready, child blocked until parent done/pr-open/merged', () => {
   ])
   const res = env.runState(['dag', dir])
   assert.equal(res.status, 0, res.stderr)
-  const json = parse(res)
+  const json = parse<DagJson>(res)
   assert.deepEqual(json.ready, ['D1', 'D4'])
   assert.deepEqual(json.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
   assert.deepEqual(json.topo, ['D1', 'D2', 'D3', 'D4'])
@@ -143,6 +194,7 @@ test('dag: roots ready, child blocked until parent done/pr-open/merged', () => {
   assert.equal(json.remaining, 3)
   assert.equal(json.manifest.status, 'approved')
   const d2 = json.nodes.find(n => n.id === 'D2')
+  assert.ok(d2)
   assert.deepEqual(d2.deps, ['D1'])
   assert.equal(d2.status, 'pending')
   assert.equal(d2.repo, 'repo-a')
@@ -159,7 +211,7 @@ test('dag: remaining counts pr-open/merged nodes as complete (partially-shipped 
   ])
   const res = env.runState(['dag', dir])
   assert.equal(res.status, 0, res.stderr)
-  const json = parse(res)
+  const json = parse<DagJson>(res)
   assert.equal(json.remaining, 1)
   assert.deepEqual(json.ready, ['D4'])
   assert.deepEqual(json.blocked, [])
@@ -174,7 +226,7 @@ test('dag: --only readmits a parked node', () => {
   ])
   const res = env.runState(['dag', dir, '--only', 'D2'])
   assert.equal(res.status, 0, res.stderr)
-  assert.deepEqual(parse(res).ready, ['D2'])
+  assert.deepEqual(parse<DagJson>(res).ready, ['D2'])
 })
 
 test('dag: --only readmits an in-progress node', () => {
@@ -186,7 +238,7 @@ test('dag: --only readmits an in-progress node', () => {
   ])
   const res = env.runState(['dag', dir, '--only', 'D2'])
   assert.equal(res.status, 0, res.stderr)
-  assert.deepEqual(parse(res).ready, ['D2'])
+  assert.deepEqual(parse<DagJson>(res).ready, ['D2'])
 })
 
 test('dag: unknown dep / cycle → exit 1 naming the offender', () => {
@@ -232,6 +284,37 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
   assert.equal(env.readFile(file), afterLines.join('\n'))
 })
 
+test('set: untouched lines with unusual spacing survive byte-for-byte (full-file equality except the one line)', () => {
+  const env = makeStateEnv()
+  // Hand-written fixture with irregular bytes the writer must NOT normalize:
+  // extra spaces after colons, trailing whitespace/tabs, indented body lines,
+  // and no trailing newline.
+  const dir = join(env.runDir('my-run'), 'deliverables')
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, 'D9-x.md')
+  const original = [
+    '---',
+    'id: D9',
+    'title:   Deliverable   D9  ',
+    'deps: []',
+    'status: pending',
+    'pr: null',
+    'parked_reason:    null\t',
+    '---',
+    '# Body',
+    '',
+    '  indented line with trailing spaces   ',
+    'last line, no trailing newline',
+  ].join('\n')
+  writeFileSync(file, original)
+
+  const res = env.runState(['set', file, 'status', 'in-progress'])
+  assert.equal(res.status, 0, res.stderr)
+  const after = env.readFile(file)
+  const expected = original.replace('status: pending', 'status: in-progress')
+  assert.equal(after, expected, 'every byte outside the target line must be preserved')
+})
+
 test('set: newline-bearing value → exit 1, file untouched (no frontmatter line injection)', () => {
   const env = makeStateEnv()
   const file = env.addDeliverable('my-run', 'D1-x.md', deliverableFrontmatter('D1', { status: 'done' }))
@@ -252,12 +335,13 @@ test('set: newline-bearing value → exit 1, file untouched (no frontmatter line
 test('transition: skip-edges pending→in-progress, in-progress→done, in-progress→parked, parked→in-progress each accepted', () => {
   const env = makeStateEnv()
   const file = env.addDeliverable('my-run', 'D1-x.md', deliverableFrontmatter('D1'))
-  for (const [to, from] of [
+  const edges: [string, string][] = [
     ['in-progress', 'pending'],
     ['parked', 'in-progress'],
     ['in-progress', 'parked'],
     ['done', 'in-progress'],
-  ]) {
+  ]
+  for (const [to, from] of edges) {
     const res = env.runState(['transition', file, to, '--from', from])
     assert.equal(res.status, 0, `${from} → ${to}: ${res.stderr}`)
     assert.deepEqual(parse(res), { file, from, to, changed: true })
@@ -303,10 +387,11 @@ test('transition: feedback re-entry pr-open→fixing accepted; illegal edge exit
 
 test('transition: pr --update rebase-conflict park edges pr-open→parked and done→parked accepted', () => {
   const env = makeStateEnv()
-  for (const [id, from] of [
+  const cases: [string, string][] = [
     ['D1', 'pr-open'],
     ['D2', 'done'],
-  ]) {
+  ]
+  for (const [id, from] of cases) {
     const file = env.addDeliverable('my-run', `${id}-x.md`, deliverableFrontmatter(id, { status: from }))
     const res = env.runState(['transition', file, 'parked', '--from', from])
     assert.equal(res.status, 0, `${from} → parked: ${res.stderr}`)

@@ -21,10 +21,11 @@ export interface BuildSpec {
   outfile: string
 }
 
-// Registry of deployables. D2 (state, sync-chain-skills) and D3 (workflow)
-// append here.
+// Registry of deployables. D3 (workflow) appends here.
 export const BUILDS: readonly BuildSpec[] = [
   { entry: 'src/scripts/resolve-chain.ts', outfile: 'plugins/strapped/scripts/resolve-chain.mjs' },
+  { entry: 'src/scripts/state.ts', outfile: 'plugins/strapped/scripts/state.mjs' },
+  { entry: 'src/scripts/sync-chain-skills.ts', outfile: 'plugins/strapped/scripts/sync-chain-skills.mjs' },
 ]
 
 /** Bundle one CLI entry and return the finished artifact text (in memory). */
