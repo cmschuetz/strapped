@@ -8,7 +8,7 @@
 // PATH / STRAPPED_STATE_ROOT / cwd, so the user's real ~/.claude/strapped.json
 // and real gh can never leak in.
 
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -33,8 +33,27 @@ export const PREAMBLE_SCRIPT = fileURLToPath(
 // Everything the hook scripts may exec besides gh. bash covers the stub gh's shebang.
 const TOOLS = ['bash', 'grep', 'sed', 'basename', 'dirname', 'ls', 'head', 'cut', 'tr', 'timeout', 'git', 'cat', 'sort', 'uniq']
 
-function resolveTool(name) {
-  for (const dir of (process.env.PATH || '').split(':')) {
+/** Frontmatter as raw `key: value` strings. */
+export type RawFrontmatter = Record<string, string>
+
+export interface RunOptions {
+  script?: string
+  cwd?: string
+  env?: Record<string, string | undefined>
+}
+
+export interface HookEnv {
+  home: string
+  stateRoot: string
+  bin: string
+  addDeliverable: (slug: string, filename: string, frontmatter: RawFrontmatter, body?: string) => string
+  addManifest: (slug: string, frontmatter: RawFrontmatter, body?: string) => string
+  readDeliverable: (slug: string, filename: string) => string
+  run: (opts?: RunOptions) => SpawnSyncReturns<string>
+}
+
+function resolveTool(name: string): string {
+  for (const dir of (process.env.PATH ?? '').split(':')) {
     if (dir && existsSync(join(dir, name))) return join(dir, name)
   }
   throw new Error(`cannot find ${name} on PATH`)
@@ -43,18 +62,10 @@ function resolveTool(name) {
 /**
  * Build an isolated environment for spawning a hook script (default sync-prs.sh).
  *
- * @param {object} [opts]
- * @param {string|null} [opts.gh] body of a stub `gh` script to put on PATH;
- *   omit (or pass null) to build a PATH with coreutils but NO gh at all.
- * @returns {{
- *   home: string, stateRoot: string, bin: string,
- *   addDeliverable: (slug: string, filename: string, frontmatter: object, body?: string) => string,
- *   addManifest: (slug: string, frontmatter: object, body?: string) => string,
- *   readDeliverable: (slug: string, filename: string) => string,
- *   run: (opts?: {script?: string, cwd?: string, env?: object}) => import('node:child_process').SpawnSyncReturns<string>
- * }}
+ * `gh` is the body of a stub `gh` script to put on PATH; omit (or pass null) to
+ * build a PATH with coreutils but NO gh at all.
  */
-export function makeHookEnv({ gh = null } = {}) {
+export function makeHookEnv({ gh = null }: { gh?: string | null } = {}): HookEnv {
   const base = mkdtempSync(join(tmpdir(), 'strapped-hook-'))
   const home = join(base, 'home')
   const stateRoot = join(base, 'state')
@@ -69,10 +80,10 @@ export function makeHookEnv({ gh = null } = {}) {
     chmodSync(join(bin, 'gh'), 0o755)
   }
 
-  const deliverablePath = (slug, filename) =>
+  const deliverablePath = (slug: string, filename: string): string =>
     join(stateRoot, 'runs', slug, 'deliverables', filename)
 
-  const addDeliverable = (slug, filename, frontmatter, body = 'Body.') => {
+  const addDeliverable = (slug: string, filename: string, frontmatter: RawFrontmatter, body = 'Body.'): string => {
     const dir = join(stateRoot, 'runs', slug, 'deliverables')
     mkdirSync(dir, { recursive: true })
     const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`)
@@ -81,7 +92,7 @@ export function makeHookEnv({ gh = null } = {}) {
     return file
   }
 
-  const addManifest = (slug, frontmatter, body = 'Body.') => {
+  const addManifest = (slug: string, frontmatter: RawFrontmatter, body = 'Body.'): string => {
     const dir = join(stateRoot, 'runs', slug)
     mkdirSync(dir, { recursive: true })
     const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`)
@@ -90,9 +101,10 @@ export function makeHookEnv({ gh = null } = {}) {
     return file
   }
 
-  const readDeliverable = (slug, filename) => readFileSync(deliverablePath(slug, filename), 'utf8')
+  const readDeliverable = (slug: string, filename: string): string =>
+    readFileSync(deliverablePath(slug, filename), 'utf8')
 
-  const run = ({ script = SYNC_PRS_SCRIPT, cwd = home, env = {} } = {}) =>
+  const run = ({ script = SYNC_PRS_SCRIPT, cwd = home, env = {} }: RunOptions = {}): SpawnSyncReturns<string> =>
     spawnSync(join(bin, 'bash'), [script], {
       cwd,
       encoding: 'utf8',
@@ -108,7 +120,7 @@ export function makeHookEnv({ gh = null } = {}) {
 }
 
 /** A stub `gh` that passes `gh auth status` and answers `gh pr view` with the given compact JSON. */
-export function ghStub(prViewJson) {
+export function ghStub(prViewJson: string): string {
   return `#!/usr/bin/env bash
 if [ "$1" = "auth" ]; then exit 0; fi
 if [ "$1" = "pr" ]; then printf '%s\\n' '${prViewJson}'; exit 0; fi

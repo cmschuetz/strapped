@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
-import { ghStub, makeHookEnv } from './helpers/hook-env.js'
+import { ghStub, makeHookEnv } from './helpers/hook-env.ts'
 import { NODE } from './helpers/node-bin.ts'
 import { STATE_SCRIPT } from './helpers/state-env.ts'
 
@@ -28,7 +28,7 @@ function runState(env, args) {
 
 // Write a pr-open deliverable fixture under an arbitrary state root (the
 // helper's addDeliverable is pinned to its own stateRoot).
-function writeDeliverable(stateRoot, slug, filename) {
+function writeDeliverable(stateRoot: string, slug: string, filename: string): string {
   const dir = join(stateRoot, 'runs', slug, 'deliverables')
   mkdirSync(dir, { recursive: true })
   const file = join(dir, filename)

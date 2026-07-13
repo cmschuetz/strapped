@@ -41,7 +41,24 @@ Add the marketplace by local path instead of GitHub so edits are live without pu
 
 Edit, then `/reload-plugins`. Push when happy; other machines pick it up via marketplace update.
 
-**TypeScript sources vs committed deployables.** Development happens in TypeScript under `src/` (bundled) and runs on [bun](https://bun.sh), managed by [asdf](https://asdf-vm.com) (`asdf install` in the repo root materializes the pinned `.tool-versions` toolchain, then `bun install` for the dev dependencies). The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-chain.mjs` — are **generated, committed artifacts**: plain node-runnable ESM with zero runtime dependencies, at the exact paths skills and conventions reference (marketplace installs run node, never bun). The loop is: edit `src/`, run `bun run build`, commit the regenerated artifacts alongside the sources. Never hand-edit a file with a `// GENERATED` header — `tests/build-sync.test.ts` runs `bun tools/build.ts --check` and fails the suite whenever a committed artifact is stale or hand-edited.
+**TypeScript sources vs committed deployables.** Development happens in TypeScript under `src/` (bundled) and runs on [bun](https://bun.sh), managed by [asdf](https://asdf-vm.com). One-time toolchain setup in the repo root:
+
+```
+asdf install      # materializes the pinned .tool-versions (bun + node)
+bun install       # dev dependencies (typescript, @types/bun); runtime deps stay zero
+```
+
+The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-chain.mjs` and `plugins/strapped/workflows/strapped-run.js` — are **generated, committed artifacts**: plain node-runnable ESM with zero runtime dependencies, at the exact paths skills and conventions reference (marketplace installs run node, never bun). The full pipeline is:
+
+```
+# edit src/ …
+bun run typecheck   # tsc --noEmit, strict mode over src/, tools/, tests/
+bun run build       # regenerate the committed deployables from src/
+bun test            # behavioral suite (or `npm test` for every gate — see Testing)
+git commit          # commit the regenerated artifacts ALONGSIDE the sources
+```
+
+Never hand-edit a file with a `// GENERATED` header. Two guard tests keep source and deployables honest: `tests/build-sync.test.ts` runs `bun tools/build.ts --check` and fails whenever a committed artifact is stale or hand-edited, and `tests/no-stray-js.test.ts` fails if any tracked `.js`/`.mjs`/`.cjs` is not one of those four marker-carrying deployables — so the only JavaScript in the repo is, and stays, the generated output (everything else is TypeScript or bash).
 
 ## Testing
 
@@ -49,12 +66,12 @@ Edit, then `/reload-plugins`. Push when happy; other machines pick it up via mar
 npm test
 ```
 
-Requires the asdf-pinned toolchain (`asdf install`, then `bun install`); `bun run test` is equivalent. Runtime dependencies remain zero — `typescript` and `@types/bun` are dev-only. The suite chains four gates:
+Requires the asdf-pinned toolchain (`asdf install`, then `bun install`). `npm test` is the canonical entry point kept as a working alias for CI/validation compatibility — npm just runs the script, and bun is on `PATH` via asdf; `bun run test` is equivalent. Runtime dependencies remain zero — `typescript` and `@types/bun` are dev-only. The suite chains four gates:
 
 1. `claude plugin validate . --strict` — marketplace manifest (warnings are errors),
 2. `claude plugin validate plugins/strapped --strict` — plugin manifest, skills, hooks,
-3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and the `.ts` tests,
-4. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.js`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, and `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
+3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and all of `tests/` (the entire suite is TypeScript),
+4. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.ts`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`, and `tests/no-stray-js.test.ts` enforces both the deployables-only JS rule and a zero-`any`/no-suppression scan across every `.ts` source. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
 
 For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
 
