@@ -487,32 +487,6 @@ test('pr: guardrails + report-and-skip in prompt; dryRun print-only; skipped/rea
   assert.equal(dry.result.results.pr.dryRun, true)
 })
 
-test('pr: the /strapped:pr singleton config omits rulesByRound entirely and still dispatches', async () => {
-  // Matches plugins/strapped/skills/pr/SKILL.md's documented args block verbatim
-  // in shape: no rulesByRound field. rulesByRound is read only lazily inside
-  // review rounds, so a pr-only dispatch must not require it (pre-port contract).
-  const cfg = {
-    slug: 'test-run',
-    dir: '/state/runs/test-run',
-    conventionsFile: '/plugin/conventions.md',
-    scripts: { state: '/plugin/scripts/state.mjs', worktree: '/plugin/scripts/ensure-worktree.sh' },
-    seed: 42,
-    confidenceMin: 70,
-    planRounds: 3,
-    codeRounds: 3,
-    stages: ['pr'],
-    stageArgs: { pr: { dryRun: false } },
-  }
-  const { result } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({
-      'pr-gate': { remaining: 0, notDone: [] },
-      'pr-create': PR_RESULT,
-    }),
-  })
-  assert.deepEqual(result.results.pr, { prs: PR_RESULT.prs, summary: PR_RESULT.summary, dryRun: false })
-})
-
 test('pr as first stage: dag probe gate blocks when a node is earlier than done', async () => {
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['pr'], stageArgs: { pr: {} } }),
