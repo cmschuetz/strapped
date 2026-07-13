@@ -14,7 +14,7 @@ allowed-tools:
 
 Implement an approved strapped plan.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` — read it first, every time. This skill cold-starts entirely from the run root `<runRoot>/<slug>/` (resolved per the conventions' Config resolution) plus the per-repo config — it needs no memory of the planning session.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md`, which the plugin's SessionStart hook auto-injects as the **strapped preamble** — assume it is in context. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. This skill cold-starts entirely from the run root `<runRoot>/<slug>/` (resolved per the conventions' Config resolution) plus the per-repo config — it needs no memory of the planning session.
 
 ## Arguments
 

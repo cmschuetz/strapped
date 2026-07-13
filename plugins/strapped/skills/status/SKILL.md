@@ -9,7 +9,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`)). Strictly read-only: no Edit/Write, no git mutations.
+Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`)). The plugin's SessionStart hook auto-injects the conventions as the **strapped preamble** — assume they are in context; if the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. Strictly read-only: no Edit/Write, no git mutations.
 
 ## Arguments
 

@@ -2,6 +2,16 @@
 
 Shared reference for the `strapped` skill suite. Every skill and workflow script defers to this file for state layout, formats, naming, budgets, and procedures. All state is designed so any skill can cold-start from disk alone after a full context clear.
 
+## Session preamble
+
+The plugin's SessionStart hook (`scripts/preamble.sh`) injects this entire file, plus a live state summary — every run under `<stateRoot>/runs/` with its manifest status and per-status deliverable counts — into the orchestrator's context as the **strapped preamble**. The injection's first line carries the sentinel literal `strapped-preamble-v1`, so skills and agents can cheaply detect its presence.
+
+It fires on the `startup`, `clear`, and `compact` matchers, and deliberately NOT on `resume`: a resumed session's transcript already contains the earlier injection, while clear/compact evict it and so re-inject. (`scripts/sync-prs.sh` keeps its own `startup` + `resume` wiring — PR state can change while a session is suspended; the preamble content cannot.)
+
+**Fallback rule**: every skill assumes the preamble is present. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding.
+
+The injection is orchestrator-facing only — SessionStart hooks never fire for subagents, so workflows still seed subagents with `conventionsFile` explicitly.
+
 ## Repos
 
 A strapped run targets one or more **target repos** — the repos where code changes actually land. Repo identity is an **explicit input** to `/strapped:plan` (see [Config resolution](#config-resolution)), never derived from the cwd: the cwd may be a plans repo, `~`, or any directory unrelated to the work.

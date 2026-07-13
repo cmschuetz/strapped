@@ -31,6 +31,45 @@ test('hooks.json parses and every hook command resolves to an existing executabl
   }
 })
 
+test('preamble hook fires on startup/clear/compact and not resume; sync-prs wiring untouched', () => {
+  const hooks = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
+  const matchersFor = script =>
+    hooks.hooks.SessionStart.filter(entry =>
+      entry.hooks.some(h => h.type === 'command' && h.command.endsWith(`/scripts/${script}`))
+    )
+      .map(entry => entry.matcher)
+      .sort()
+  assert.deepEqual(matchersFor('preamble.sh'), ['clear', 'compact', 'startup'])
+  assert.deepEqual(matchersFor('sync-prs.sh'), ['resume', 'startup'])
+})
+
+test('sentinel literal strapped-preamble-v1 is consistent everywhere', () => {
+  const sentinel = 'strapped-preamble-v1'
+  const skillsDir = join(PLUGIN_ROOT, 'skills')
+  const files = [
+    join(PLUGIN_ROOT, 'scripts', 'preamble.sh'),
+    join(PLUGIN_ROOT, 'conventions.md'),
+    ...readdirSync(skillsDir).map(d => join(skillsDir, d, 'SKILL.md')),
+  ]
+  for (const file of files) {
+    assert.ok(readFileSync(file, 'utf8').includes(sentinel), `${file} lacks the sentinel ${sentinel}`)
+  }
+})
+
+test('no skill retains an unconditional conventions-read instruction; every skill carries the fallback nudge', () => {
+  const skillsDir = join(PLUGIN_ROOT, 'skills')
+  for (const dir of readdirSync(skillsDir)) {
+    const src = readFileSync(join(skillsDir, dir, 'SKILL.md'), 'utf8')
+    assert.ok(!src.includes('read it first'), `${dir}/SKILL.md still says "read it first"`)
+    assert.ok(!src.includes('first, every time'), `${dir}/SKILL.md still says "first, every time"`)
+    assert.ok(src.includes('strapped-preamble-v1'), `${dir}/SKILL.md lacks the sentinel in its fallback nudge`)
+    assert.ok(
+      src.includes('$PLUGIN_ROOT/conventions.md'),
+      `${dir}/SKILL.md fallback nudge lacks the conventions path`
+    )
+  }
+})
+
 test('marketplace.json plugin source dirs exist and hold a plugin manifest', () => {
   const marketplace = JSON.parse(readFileSync(join(REPO_ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'))
   assert.ok(Array.isArray(marketplace.plugins) && marketplace.plugins.length > 0)

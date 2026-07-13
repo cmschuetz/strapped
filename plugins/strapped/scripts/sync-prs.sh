@@ -3,18 +3,11 @@ set -u
 
 command -v gh >/dev/null 2>&1 || exit 0
 
-read_state_root() { grep -o '"stateRoot"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/'; }
+. "$(cd "$(dirname "$0")" && pwd)/lib/state-root.sh"
 
-# Resolve stateRoot per conventions: env > ~/.claude/strapped.json > default ~/.claude/strapped.
-anchor="$HOME/.claude/strapped.json"
-state_root="${STRAPPED_STATE_ROOT:-}"
-[ -n "$state_root" ] || { [ -f "$anchor" ] && state_root=$(read_state_root "$anchor"); }
-[ -n "$state_root" ] || state_root="$HOME/.claude/strapped"
-
-case "$state_root" in "~"|"~/"*) state_root="$HOME${state_root#\~}" ;; esac
-
-# stateRoot must be absolute; a relative value is invalid input — this hook exits silently.
-case "$state_root" in /*) ;; *) exit 0 ;; esac
+# stateRoot must resolve to an absolute path; invalid input — this hook exits silently.
+state_root=$(resolve_state_root)
+[ -n "$state_root" ] || exit 0
 runs_root="$state_root/runs"
 [ -d "$runs_root" ] || exit 0
 

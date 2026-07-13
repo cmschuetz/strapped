@@ -12,7 +12,7 @@ allowed-tools:
   - AskUserQuestion
 ---
 
-Create/update stacked PRs for `done` deliverables of one strapped run. Formats and naming are in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`) — read it first. Cold-starts from the run root `<runRoot>/<slug>/` alone.
+Create/update stacked PRs for `done` deliverables of one strapped run. Formats and naming are in `$PLUGIN_ROOT/conventions.md` (resolve `$PLUGIN_ROOT` = `realpath(<base directory for this skill>/../..)`), which the plugin's SessionStart hook auto-injects as the **strapped preamble** — assume it is in context. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. Cold-starts from the run root `<runRoot>/<slug>/` alone.
 
 ## Arguments
 
