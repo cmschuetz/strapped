@@ -260,6 +260,55 @@ Every target repo resolves its own config by its own name — never "the cwd rep
 
 The `validations` values above are an example.
 
+## Harness scripts
+
+Deterministic executables under `$PLUGIN_ROOT/scripts/`, invocable via Bash by skills and by workflow-dispatched agents. They are the **single source of truth** for config/run-root resolution, ready-set/topo computation, status transitions, and worktree creation — skills and workflow prompts invoke them and consume their JSON output; they must never hand-roll these mechanics in prose or reasoning. Every command prints exactly one JSON object on stdout and, on misuse, a one-line message on stderr with exit code 1. (`scripts/sync-prs.sh` is the exception: a SessionStart hook that must never break session start, so it always exits 0.)
+
+### state.mjs — `node $PLUGIN_ROOT/scripts/state.mjs <command> ...`
+
+Zero-dependency Node CLI. Frontmatter writes preserve every untouched line byte-for-byte and keep the single-space `key: value` line shape, so grep-based consumers (`sync-prs.sh`) keep working.
+
+- **`resolve <slug>`** — resolves `stateRoot` per [Config resolution](#config-resolution) (`$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json` → default `~/.claude/strapped`; leading `~` expanded; a value still relative after expansion is invalid input → exit 1) and probes `<stateRoot>/runs/<slug>/manifest.md` — the cwd-independent direct path, no glob. Output: `{ slug, stateRoot, runRoot, runDir, manifest, exists, status, seed, budgets, repos: [{ name, root, config, configExists, validations, worktreeRoot, provisioning }] }`, where `repos` comes from the manifest `repos:` map joined with each repo's config at `<stateRoot>/repos/<name>/config.json`. A missing manifest is NOT an error: `exists: false`, exit 0 (the plan skill treats a miss as "no existing run"; slug-addressed downstream skills stop themselves).
+- **`dag <runDir> [--only <Did>]`** — reads the manifest `deliverables` list and every deliverable file's frontmatter. Output: `{ manifest: {status, seed, budgets}, nodes: [{id, file, title, status, deps, repo, branch, base, worktree, pr, review_rounds_used, feedback_rounds_used, parked_reason, estimated_diff_lines}], ready, topo, blocked: [{id, blockedOn}], remaining }`. `ready` = `status: pending` nodes whose deps are all `done`/`pr-open`/`merged`; with `--only`, a `parked`/`in-progress` node is additionally admitted (implement's `--only` resume semantics) and `ready` is intersected with the named node. `topo` = stable topological order, parents before children, ties broken by id. `remaining` = count of nodes NOT yet `done`/`pr-open`/`merged` — done-or-later counts as complete, so a partially-shipped run reports the true remaining work; consumers read this field verbatim and never recompute it. Unknown dep id or dependency cycle → exit 1 naming the offender.
+- **`set <file> <field> <value>`** — idempotent single-field frontmatter write; `value` is written verbatim after `<field>: ` (`null` writes literal `null`). `value` must be a single line: a value containing `\n` or `\r` → exit 1, no write (a multi-line value would inject extra frontmatter lines). A field not already present in the file's frontmatter → exit 1 (no silent field invention). Output: `{file, field, old, new}`.
+- **`transition <file> <to> [--from <expected>]`** — guarded deliverable status flip over the on-disk edge table below. `--from` adds an exact-current-status guard. Transitioning to the current status is an idempotent no-op: exit 0, `{changed: false}`. An illegal edge → exit 1 naming the current status and requested edge, no write. Output: `{file, from, to, changed}`.
+- **`manifest-status <runDir> <to>`** — guarded manifest-level flip along `draft → in-review → approved → implementing → complete`, **forward-only**. Same-status flip is an idempotent no-op (exit 0, `{changed: false}`) — a resumed chain re-running it must not error; backward flips exit 1. Output: `{file, from, to, changed}`.
+
+#### On-disk transition edge table
+
+The lifecycle prose in [deliverables/D#-\<kebab\>.md](#deliverablesd-kebabmd) is the *conceptual* chain; this table is what `transition` enforces. `ready`, `implemented`, and the mid-wave `in-review` are **virtual** statuses — they exist in the conceptual chain and in agent schemas but are never written to deliverable frontmatter by any skill or workflow (implement flips `pending → in-progress` directly and applies wave outcomes as `in-progress → done`/`parked`), so the guard encodes the skip-edges actually written to disk:
+
+| from | to | written by |
+| --- | --- | --- |
+| pending | in-progress | implement (wave dispatch) |
+| parked | in-progress | implement `--only` resume |
+| in-progress | done | implement (wave outcome) |
+| in-progress | parked | implement (wave outcome) |
+| fixing | parked | fix loop exhausted/blocked |
+| in-review | parked | review loop exhausted |
+| done | parked | pr `--update` rebase conflict (pre-PR child) |
+| pr-open | parked | pr `--update` rebase conflict |
+| done | pr-open | pr |
+| pr-open | merged | sync-prs.sh / pr |
+| pr-open | fixing | feedback re-entry |
+| fixing | in-review | feedback fix sub-cycle |
+| in-review | fixing | feedback fix sub-cycle |
+| in-review | pr-open | feedback fix converged |
+| in-review | done | feedback fix converged (pre-PR node) |
+
+Everything else — including virtual-status edges like `pending → ready` or `in-progress → implemented` — is rejected.
+
+### ensure-worktree.sh — `$PLUGIN_ROOT/scripts/ensure-worktree.sh <repoRoot> <worktreePath> <branch> <base>`
+
+The idempotent worktree recipe from [Worktrees and branches](#worktrees-and-branches) as pure git + bash:
+
+- `<worktreePath>` exists and its checked-out branch equals `<branch>` → reuse: `{"worktree": ..., "branch": ..., "created": false}`, exit 0.
+- `<worktreePath>` exists on a different branch (or is not a git worktree) → one-line stderr, exit 1.
+- `<branch>` already exists in the repo but has no worktree → re-attach: `git -C <repoRoot> worktree add <worktreePath> <branch>` (no `-b`).
+- Otherwise create: `git -C <repoRoot> worktree add <worktreePath> -b <branch> <base>`.
+
+Output is one JSON object `{"worktree", "branch", "created"}` on stdout; git failures exit non-zero with git's stderr passed through.
+
 ## Validations
 
 Every command in the **deliverable's repo's** config `validations` must be green before code review and after every fix round, run inside the deliverable's worktree.

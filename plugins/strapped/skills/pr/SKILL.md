@@ -23,15 +23,21 @@ Create/update stacked PRs for `done` deliverables of one strapped run. Formats a
 
 ## Locating the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`. Absent → stop (`slug <slug> not found under <stateRoot>`).
+Run the harness script (contract in the conventions' **Harness scripts** section):
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>
+```
+
+It performs the conventions' *Cwd-independent slug → run-root resolution* (direct path keyed by slug, no glob, never the cwd) and prints `{ slug, stateRoot, runRoot, runDir, manifest, exists, …, repos }`. If `exists` is `false` → stop (`slug <slug> not found under <stateRoot>`). Do not hand-roll the resolution.
 
 ## Resolving the repos map
 
-Read the manifest `repos:` map (**required**) — each entry gives a repo `name`, absolute `root`, and `config`. Resolve each deliverable's required `repo:` to its repo root via `repos[<deliverable.repo>]`; all of that deliverable's git/gh operations run in that repo (`git -C <repoRoot> …`).
+`resolve`'s `repos` array (from the **required** manifest `repos:` map) gives each repo's `name`, absolute `root`, and `config`. Resolve each deliverable's required `repo:` to its repo root via `repos[<deliverable.repo>]`; all of that deliverable's git/gh operations run in that repo (`git -C <repoRoot> …`).
 
 ## Create mode (default)
 
-1. Read the manifest and all deliverable frontmatter; resolve the `repos:` map. Candidates: `status: done` nodes whose parents are all `done`, `pr-open`, or `merged`. Order them topologically (parents before children).
+1. Run `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>` — its `nodes` carry every deliverable's frontmatter (status, branch, base, pr, repo) and its `topo` is the authoritative topological order (parents before children); never hand-roll either. Candidates: `status: done` nodes whose parents are all `done`, `pr-open`, or `merged`, processed in `topo` order.
 2. For each candidate, generate a PR body from the deliverable file:
    - One-paragraph summary (from the deliverable title + plan Context).
    - The acceptance criteria as a checklist.
@@ -43,7 +49,12 @@ Read the manifest `repos:` map (**required**) — each entry gives a repo `name`
    gh -C <repoRoot> pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>
    ```
    (`gh` reads the repo from cwd; run it with the working directory set to `<repoRoot>`, e.g. `git -C <repoRoot> …` for git and invoke `gh` inside `<repoRoot>`.)
-4. Write the returned PR URL into the deliverable frontmatter (`pr:`) and set `status: pr-open`. After all creations, refresh every stack table via `gh pr edit <num> --body-file <regenerated>` so earlier PRs link the later ones.
+4. Record the result via the harness scripts (never hand-edit frontmatter):
+   ```bash
+   node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> pr <url>
+   node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> pr-open
+   ```
+   After all creations, refresh every stack table via `gh pr edit <num> --body-file <regenerated>` so earlier PRs link the later ones.
 5. With `--dry-run`/`--no-push`: print steps 3–4's commands and full bodies instead of running them; change no frontmatter.
 
 ## Update mode (`--update`)
@@ -58,11 +69,11 @@ The rebase applies to **same-repo parent→child edges only**. A cross-repo chil
    git -C <childWorktree> rebase --onto <new-parent-tip> <old-parent-tip> <child-branch>
    git -C <childWorktree> push --force-with-lease
    ```
-   `<old-parent-tip>` is the recorded merge-base from step 1. On rebase conflict: abort the rebase, mark the child `parked` with `parked_reason: "rebase conflict onto <parent>"`, and report — never force through a conflict.
+   `<old-parent-tip>` is the recorded merge-base from step 1. On rebase conflict: abort the rebase, park the child via `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> parked` plus `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> parked_reason "rebase conflict onto <parent>"`, and report — never force through a conflict.
 3. Refresh PR bodies/bases with `gh pr edit` (run in each deliverable's own repo).
 
 ## Guardrails
 
 - Never push `main`, never merge PRs, never `--force` (only `--force-with-lease`) — enforced **per repo** (every git op runs `-C <deliverableRepoRoot>`).
 - If `gh` is unauthenticated or the branch has no commits beyond its base, report and skip that node rather than failing the whole run.
-- When a PR is merged externally, a later invocation should notice via `gh pr view --json state` and flip frontmatter to `merged`. This also happens automatically at session start: the plugin's SessionStart hook runs `scripts/sync-prs.sh`, which performs the same idempotent flip.
+- When a PR is merged externally, a later invocation should notice via `gh pr view --json state` and flip the frontmatter with `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> merged`. This also happens automatically at session start: the plugin's SessionStart hook runs `scripts/sync-prs.sh`, which performs the same idempotent flip.

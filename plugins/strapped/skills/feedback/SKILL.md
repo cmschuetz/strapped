@@ -30,13 +30,19 @@ Drive PR review comments back into the plan→implement lifecycle for one strapp
 
 ## Step 0 — Locate the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
+Run the harness script (contract in the conventions' **Harness scripts** section):
 
-If `manifest.md` is absent, stop with a helpful message (slug not found under `<stateRoot>`; point at `/strapped:plan`).
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>
+```
+
+It performs the conventions' **Cwd-independent slug → run-root resolution** (direct path keyed by slug, no glob, never the cwd) and prints `{ slug, stateRoot, runRoot, runDir, manifest, exists, status, seed, budgets, repos }`. Do not hand-roll the resolution.
+
+If `exists` is `false`, stop with a helpful message (slug not found under `<stateRoot>`; point at `/strapped:plan`).
 
 ## Step 1 — Cold-start from disk
 
-Read `manifest.md` and every `deliverables/*.md` frontmatter. Read the manifest `repos:` map (**required**); for **each** repo resolve its per-repo config per the conventions' Config resolution (`<stateRoot>/repos/<repo>/config.json`), building a lookup `repo → { root, validations, worktreeRoot, provisioning }`. Each deliverable's `repo:` field is required and names one of the `repos:` entries.
+Step 0's `resolve` output already carries the manifest `seed`/`budgets` and the per-repo configs: its `repos` array (from the **required** manifest `repos:` map) gives per repo `{ name, root, config, configExists, validations, worktreeRoot, provisioning }` — the lookup `repo → { root, validations, worktreeRoot, provisioning }`. Read every deliverable's frontmatter (status, deps, branch, worktree, pr, repo) via `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>` — its `nodes` array is the per-node truth and its `topo` is the stack order Step 6 needs. Each deliverable's `repo:` field is required and names one of the `repos:` entries.
 
 Determine the **in-scope deliverable set**: every deliverable with a non-null `pr:` URL, intersected with `--deliverable`/`--pr` filters if given. A deliverable in scope is expected to be at `status: pr-open` (its PR is open, typically with changes requested — the same review `scripts/sync-prs.sh` warns on).
 
@@ -129,7 +135,7 @@ For each affected deliverable, in topological order (parents before children so 
 - `recordSuffix: "-feedback"` makes `code-review.js` write feedback code-review rounds as `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`), and `implement-wave.js` derives its fix agent's round-record READ path from the same suffix — writer and reader agree.
 - `rulesByRound`/`seed`/`confidenceMin`/`codeReviewScript` are threaded exactly as `/strapped:implement` does, because `reviewFixLoop` reads `cfg.rulesByRound[round-1]` per code-review round.
 
-**Status transition (feedback re-entry).** An affected deliverable is at `pr-open` when feedback starts. Drive it into the `fixing` ⇄ `in-review` sub-cycle for the fix, and on convergence return it to `pr-open` (its PR stays open — the branch is re-pushed via the later `--update`, not reopened). It NEVER re-enters `pending`/`ready`/`in-progress`. Increment the NEW `feedback_rounds_used` frontmatter counter (default 0), NOT the original `review_rounds_used`. If a node parks (fix blocked / budget exhausted), set `status: parked` + `parked_reason` and report it — do not force through.
+**Status transition (feedback re-entry).** An affected deliverable is at `pr-open` when feedback starts. Drive it into the `fixing` ⇄ `in-review` sub-cycle for the fix, and on convergence return it to `pr-open` (its PR stays open — the branch is re-pushed via the later `--update`, not reopened). It NEVER re-enters `pending`/`ready`/`in-progress`. Apply every flip via the guarded harness script (never hand-edit frontmatter): `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> fixing` on entry, then `... transition <deliverableFile> in-review` / `... transition <deliverableFile> fixing` around each review round, and `... transition <deliverableFile> pr-open` on convergence. Increment the NEW `feedback_rounds_used` frontmatter counter (default 0) via `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> feedback_rounds_used <n>`, NOT the original `review_rounds_used`. If a node parks (fix blocked / budget exhausted), run `... transition <deliverableFile> parked` + `... set <deliverableFile> parked_reason <reason>` and report it — do not force through.
 
 Dispatch one wave per topological rank (parents before children) so a parent's fixes are committed before its children's fix wave runs.
 

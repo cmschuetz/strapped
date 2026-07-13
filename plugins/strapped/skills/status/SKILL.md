@@ -19,17 +19,23 @@ Render the state of strapped runs entirely from disk (formats in `$PLUGIN_ROOT/c
 
 ## Locating the run root (cwd-independent)
 
-Resolve `<runRoot>/<slug>` from the `<slug>` alone, per the conventions' *Cwd-independent slug → run-root resolution* — a **direct path** keyed by slug, no glob, no fallback. **Never** consult the cwd — it may be a plans dir or `~`: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
+Run the harness script (contract in the conventions' **Harness scripts** section):
 
-If `manifest.md` is absent → stop with a helpful message (`slug <slug> not found under <stateRoot>`).
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>
+```
+
+It performs the conventions' *Cwd-independent slug → run-root resolution* (direct path keyed by slug, no glob, never the cwd — it may be a plans dir or `~`) and prints `{ slug, stateRoot, runRoot, runDir, manifest, exists, …, repos }`. Do not hand-roll the resolution.
+
+If `exists` is `false` → stop with a helpful message (`slug <slug> not found under <stateRoot>`).
 
 ## Resolving the repos map
 
-Read the manifest `repos:` map (**required**) — each entry gives a repo `name`, absolute `root`, and `config` path. Every repo-scoped check for a deliverable resolves through `repos[<deliverable.repo>]`. Each deliverable's `repo:` field is required.
+`resolve`'s `repos` array (from the **required** manifest `repos:` map) gives each repo's `name`, absolute `root`, `config` path, and config values. Every repo-scoped check for a deliverable resolves through `repos[<deliverable.repo>]`. Each deliverable's `repo:` field is required.
 
 ## With a slug
 
-1. Read `manifest.md` and every `deliverables/*.md` frontmatter. Resolve the `repos:` map.
+1. Run `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>` — its `manifest`, `nodes` (full per-deliverable frontmatter), `ready`, `topo`, `blocked`, and `remaining` are the dashboard's data source; never recompute ready-sets or topo order by hand. This skill uses ONLY the read commands `resolve` and `dag` — never `set`, `transition`, or `manifest-status` (strictly read-only).
 2. Cross-check reality (report drift, don't fix it), running each git/gh check **in the deliverable's own repo** — resolve the node's repo root from `repos[<deliverable.repo>]` and pass `git -C <repoRoot> …`: does each recorded `worktree` path exist (`git -C <repoRoot> worktree list`)? Does each `branch` exist in that repo? For `pr-open` nodes, `gh pr view <url> --json state` when `gh` is available. Do not assume all deliverables share one repo.
 3. Render:
    - Header: slug, manifest status, source plan, seed, budgets.

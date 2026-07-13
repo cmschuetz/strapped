@@ -25,15 +25,33 @@ Implement an approved strapped plan.
 
 ## Step 0 — Locate the run root (cwd-independent)
 
-`/strapped:implement` is invoked with only a `<slug>`, and the cwd may be a plans dir or anything unrelated to the work. Resolve `<runRoot>/<slug>` per the conventions' **Cwd-independent slug → run-root resolution** — a **direct path** keyed by slug, no glob, no fallback; NEVER consult the cwd: the run root is `<stateRoot>/runs/<slug>/`; probe `<stateRoot>/runs/<slug>/manifest.md`.
+`/strapped:implement` is invoked with only a `<slug>`, and the cwd may be a plans dir or anything unrelated to the work. Run the harness script (contract in the conventions' **Harness scripts** section):
 
-If `manifest.md` is absent, stop with a helpful message: the slug was not found under `<stateRoot>` (point at `/strapped:plan`).
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>
+```
+
+It performs the conventions' **Cwd-independent slug → run-root resolution** (direct path keyed by slug, no glob, never the cwd) and prints `{ slug, stateRoot, runRoot, runDir, manifest, exists, status, seed, budgets, repos }`. Do not hand-roll the resolution.
+
+If `exists` is `false`, stop with a helpful message: the slug was not found under `<stateRoot>` (point at `/strapped:plan`).
 
 ## Step 1 — Cold-start from disk
 
-Read `manifest.md` (must be `status: approved` or `implementing` — otherwise stop and say why) and every `deliverables/*.md` frontmatter. Set manifest `status: implementing` if not already. Build the DAG from the manifest `deliverables` list; per-node truth (status, branch, worktree, rounds used) comes from the deliverable files only.
+The `resolve` output already carries the manifest `status`, `seed`, `budgets`, and per-repo configs. The manifest must be `status: approved` or `implementing` — otherwise stop and say why. Flip it to `implementing` if not already (idempotent — a re-run on an already-`implementing` manifest is a no-op):
 
-**Resolve every target repo's config.** Read the manifest `repos:` map (**required** — a manifest with no `repos:` map is invalid input). For **each** repo in it, resolve that repo's per-repo config per the conventions' Config resolution — the location is fixed, parameterized by repo name: `<stateRoot>/repos/<repo>/config.json`. Build a lookup `repo → { root, validations, worktreeRoot, provisioning }`. If any target repo's config is missing, stop and point the user at `/strapped:plan`, which generates one per repo.
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs manifest-status <runDir> implementing
+```
+
+Build the DAG with:
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>
+```
+
+which reads the manifest `deliverables` list plus every deliverable file's frontmatter (per-node truth: status, branch, worktree, rounds used come from the deliverable files only) and prints `{ manifest, nodes, ready, topo, blocked, remaining }`.
+
+**Per-repo config.** `resolve`'s `repos` array (from the **required** manifest `repos:` map — a manifest without one is invalid input) gives per repo `{ name, root, config, configExists, validations, worktreeRoot, provisioning }`. If any target repo has `configExists: false`, stop and point the user at `/strapped:plan`, which generates one per repo.
 
 Each deliverable's `repo:` field is **required** and names one of the `repos:` entries — a deliverable with no `repo:` is invalid input.
 
@@ -45,11 +63,21 @@ As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing), 
 
 Repeat until no deliverable is runnable:
 
-1. **Ready set**: deliverables with `status: pending` (or `parked`/`in-progress` when named by `--only`) whose deps are all `done` or later (`pr-open`, `merged`). If `--only` was given, intersect with it. If the ready set is empty and nothing is `in-progress`, stop.
-2. **Worktrees** (idempotent, per the conventions). For each ready node, read its required `repo:` frontmatter and look up that repo's `{ root, worktreeRoot, provisioning }` from Step 1. The worktree path is `<worktreeRoot>/<slug>/<Did>`.
-   - If `worktree` frontmatter is set and the path exists with the right branch (scoped to this deliverable's repo), reuse it.
-   - Otherwise run `git -C <repoRoot> worktree add <worktreeRoot>/<slug>/<Did> -b <branch> <base>` **inside that repo's root**. `<base>` follows the conventions' cross-repo base rule: the parent deliverable's branch **when the parent is in the same repo**; otherwise (a root, or a cross-repo parent) that repo's `main`.
-   - Write `worktree` and set `status: in-progress` in the frontmatter. Apply that repo's config `provisioning` instructions to the fresh worktree (placeholder values only — never real secrets).
+1. **Ready set**: run `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>` (append `--only <Did>` when given — it readmits a `parked`/`in-progress` node and restricts `ready` to it) and use its `ready` array **verbatim** — never recompute readiness by hand. If `ready` is empty and nothing is `in-progress`, stop.
+2. **Worktrees** (idempotent). For each ready node, read its required `repo:` from the `dag` node and look up that repo's `{ root, worktreeRoot, provisioning }` from Step 0's `resolve` output. The worktree path is `<worktreeRoot>/<slug>/<Did>`; `<base>` follows the conventions' cross-repo base rule: the parent deliverable's branch **when the parent is in the same repo**; otherwise (a root, or a cross-repo parent) that repo's `main`. Run:
+
+   ```bash
+   $PLUGIN_ROOT/scripts/ensure-worktree.sh <repoRoot> <worktreeRoot>/<slug>/<Did> <branch> <base>
+   ```
+
+   (reuses an existing worktree whose branch matches, re-attaches an existing branch without `-b`, otherwise creates from `<base>`; exits 1 on a path/branch mismatch — stop and report, don't improvise). Then record it in the frontmatter via the harness scripts:
+
+   ```bash
+   node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> worktree <worktreePath>
+   node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> in-progress
+   ```
+
+   Apply that repo's config `provisioning` instructions to a fresh worktree (placeholder values only — never real secrets).
 3. **Resume note**: for a node being re-dispatched (was `in-progress`, `fixing`, or `parked`), compose a short `resumeNote` string from its frontmatter (`parked_reason`, `review_rounds_used`) and the latest `reviews/<Did>-code-round-*.md` — open findings and what was already done.
 4. **Dispatch** the `strapped-implement-wave` workflow — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/implement-wave.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (absolute paths):
 
@@ -71,8 +99,13 @@ Each `items[]` entry carries its own repo context (`repo`, `repoRoot`, and that 
 }
 ```
 
-5. **Apply outcomes** to each deliverable's frontmatter: `done` → `status: done`; `parked` → `status: parked`, `parked_reason: <reason>`; always update `review_rounds_used`. A parked node's children stay `pending` — they are simply never ready.
-6. Recompute the ready set (children of newly-`done` nodes become eligible) and loop.
+5. **Apply outcomes** to each deliverable's frontmatter via the harness scripts — never hand-edit the files:
+   - `done` → `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> done`
+   - `parked` → `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> parked` and `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> parked_reason <reason>`
+   - always `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> review_rounds_used <n>`
+
+   A parked node's children stay `pending` — they are simply never ready.
+6. Re-run `state.mjs dag <runDir>` to recompute the ready set (children of newly-`done` nodes become eligible) and loop.
 
 ## Step 4 — Report
 
