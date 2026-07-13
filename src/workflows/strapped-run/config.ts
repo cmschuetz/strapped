@@ -170,7 +170,10 @@ export function parseConfig(raw: unknown): RunConfig {
     confidenceMin: requireNumber(parsed, 'confidenceMin'),
     planRounds: requireNumber(parsed, 'planRounds'),
     codeRounds: requireNumber(parsed, 'codeRounds'),
-    rulesByRound: parseRulesByRound(parsed.rulesByRound),
+    // rulesByRound is read only lazily inside review rounds (rulesForRound),
+    // so pr-only / plan-less dispatches (e.g. the /strapped:pr singleton) omit
+    // it entirely — treat absent as [] to match the pre-port lazy contract.
+    rulesByRound: parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound),
     stages,
     stageArgs: parseStageArgsMap(parsed.stageArgs),
   }

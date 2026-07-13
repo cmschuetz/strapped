@@ -191,7 +191,7 @@ function parseConfig(raw) {
     confidenceMin: requireNumber(parsed, "confidenceMin"),
     planRounds: requireNumber(parsed, "planRounds"),
     codeRounds: requireNumber(parsed, "codeRounds"),
-    rulesByRound: parseRulesByRound(parsed.rulesByRound),
+    rulesByRound: parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound),
     stages,
     stageArgs: parseStageArgsMap(parsed.stageArgs)
   };
