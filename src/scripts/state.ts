@@ -9,11 +9,12 @@
 //   set <file> <field> <value>              single-field frontmatter write
 //   transition <file> <to> [--from <s>]     guarded deliverable status flip
 //   manifest-status <runDir> <to>           guarded forward-only manifest status flip
+//   feedback-index read|upsert|set ...      per-run PR-comment dedup index (JSON)
 //
 // Zero dependencies. Contracts documented in plugins/strapped/conventions.md
 // ("Harness scripts").
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 
 import { getProp, resolveStateRoot } from '../lib/anchor.ts'
@@ -277,9 +278,188 @@ function cmdManifestStatus(runDir: string, to: string): void {
   out({ file, from: current, to, changed: true })
 }
 
+// --- feedback-index ---------------------------------------------------------
+// A per-run JSON collection (NOT frontmatter — it is a keyed collection, so it
+// bypasses the js-yaml frontmatter helpers) keyed by GitHub external id,
+// tracking every fetched PR comment and its lifecycle status so multi-round
+// feedback loops dedupe already-addressed comments. Contracts in
+// conventions.md ("Feedback index").
+
+const FEEDBACK_STATUSES: ReadonlySet<string> = new Set([
+  'unaddressed',
+  'addressed',
+  'resolved',
+  'not_needed',
+  'ignored',
+])
+
+// Statuses upsert may reconcile to `resolved` when GitHub reports the thread
+// resolved. `ignored`/`not_needed` are deliberately excluded — never touched.
+const GITHUB_RECONCILABLE: ReadonlySet<string> = new Set(['unaddressed', 'addressed'])
+
+interface FeedbackComment {
+  externalId: string
+  threadId: string | null
+  deliverableId: string | null
+  pr: string | null
+  path: string | null
+  line: number | null
+  author: string | null
+  body: string | null
+  status: string
+  commit: string | null
+  githubResolved: boolean
+  updated: string
+}
+
+interface FeedbackIndex {
+  version: number
+  comments: FeedbackComment[]
+}
+
+function feedbackIndexPath(runDir: string): string {
+  return join(runDir, 'feedback-index.json')
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === 'number' ? value : null
+}
+
+/** Missing file → an empty v1 index; malformed JSON or shape → die. */
+function readFeedbackIndex(path: string): FeedbackIndex {
+  if (!existsSync(path)) return { version: 1, comments: [] }
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch {
+    die(`invalid JSON in feedback index ${path}`)
+  }
+  if (typeof parsed !== 'object' || parsed === null) die(`malformed feedback index ${path}`)
+  const obj = parsed as { version?: unknown; comments?: unknown }
+  const version = typeof obj.version === 'number' ? obj.version : 1
+  const comments = Array.isArray(obj.comments) ? (obj.comments as FeedbackComment[]) : []
+  return { version, comments }
+}
+
+function writeFeedbackIndex(path: string, index: FeedbackIndex): void {
+  writeFileSync(path, JSON.stringify(index, null, 2) + '\n')
+}
+
+function cmdFeedbackIndexRead(runDir: string): void {
+  const path = feedbackIndexPath(runDir)
+  if (!existsSync(path)) {
+    out({ path, exists: false, comments: [] })
+    return
+  }
+  out({ path, exists: true, comments: readFeedbackIndex(path).comments })
+}
+
+/** The incoming fetched-comment shape (all fields optional but externalId). */
+interface IncomingRecord {
+  externalId?: unknown
+  threadId?: unknown
+  deliverableId?: unknown
+  pr?: unknown
+  path?: unknown
+  line?: unknown
+  author?: unknown
+  body?: unknown
+  githubResolved?: unknown
+}
+
+function cmdFeedbackIndexUpsert(runDir: string, fromFile: string): void {
+  if (!existsSync(fromFile)) die(`--from file not found: ${fromFile}`)
+  let incoming: unknown = null
+  try {
+    incoming = JSON.parse(readFileSync(fromFile, 'utf8'))
+  } catch {
+    die(`invalid JSON in --from file ${fromFile}`)
+  }
+  if (!Array.isArray(incoming)) die(`--from file must contain a JSON array of comments: ${fromFile}`)
+
+  const path = feedbackIndexPath(runDir)
+  const index = readFeedbackIndex(path)
+  const byId = new Map<string, FeedbackComment>(index.comments.map(c => [c.externalId, c]))
+  const now = new Date().toISOString()
+  let inserted = 0
+  let updated = 0
+  let resolvedFromGithub = 0
+
+  for (const rec of incoming as IncomingRecord[]) {
+    const externalId = asString(rec.externalId)
+    if (externalId === null) die(`incoming comment missing externalId in ${fromFile}`)
+    const githubResolved = rec.githubResolved === true
+    const existing = byId.get(externalId)
+    if (existing === undefined) {
+      // New comment: insert as unaddressed, or resolved if it arrived resolved.
+      const comment: FeedbackComment = {
+        externalId,
+        threadId: asString(rec.threadId),
+        deliverableId: asString(rec.deliverableId),
+        pr: asString(rec.pr),
+        path: asString(rec.path),
+        line: asNumber(rec.line),
+        author: asString(rec.author),
+        body: asString(rec.body),
+        status: githubResolved ? 'resolved' : 'unaddressed',
+        commit: null,
+        githubResolved,
+        updated: now,
+      }
+      index.comments.push(comment)
+      byId.set(externalId, comment)
+      inserted += 1
+    } else {
+      // Existing comment: refresh github-derived fields, then reconcile status.
+      existing.threadId = asString(rec.threadId)
+      existing.pr = asString(rec.pr)
+      existing.path = asString(rec.path)
+      existing.line = asNumber(rec.line)
+      existing.author = asString(rec.author)
+      existing.body = asString(rec.body)
+      existing.githubResolved = githubResolved
+      // Reconcile to resolved only from a still-open status — an ignored or
+      // not_needed comment is NEVER changed here.
+      if (githubResolved && GITHUB_RECONCILABLE.has(existing.status)) {
+        existing.status = 'resolved'
+        resolvedFromGithub += 1
+      }
+      existing.updated = now
+      updated += 1
+    }
+  }
+
+  writeFeedbackIndex(path, index)
+  out({ inserted, updated, resolvedFromGithub, total: index.comments.length })
+}
+
+function cmdFeedbackIndexSet(runDir: string, externalId: string, status: string, commit: string | null): void {
+  if (!FEEDBACK_STATUSES.has(status)) die(`unknown feedback status "${status}"`)
+  const path = feedbackIndexPath(runDir)
+  if (!existsSync(path)) die(`no feedback index at ${path}`)
+  const index = readFeedbackIndex(path)
+  const comment = index.comments.find(c => c.externalId === externalId)
+  if (comment === undefined) die(`unknown externalId "${externalId}" in ${path}`)
+  const from = comment.status
+  const commitChanges = commit !== null && commit !== comment.commit
+  if (from === status && !commitChanges) {
+    out({ externalId, from, to: status, commit: comment.commit, changed: false })
+    return
+  }
+  comment.status = status
+  if (commit !== null) comment.commit = commit
+  comment.updated = new Date().toISOString()
+  writeFeedbackIndex(path, index)
+  out({ externalId, from, to: status, commit: comment.commit, changed: true })
+}
+
 // --- dispatch ---------------------------------------------------------------
 
-const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status> ...'
+const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status|feedback-index> ...'
 const [cmd, ...rest] = process.argv.slice(2)
 
 function takeFlag(args: string[], flag: string): string | null {
@@ -327,6 +507,38 @@ switch (cmd) {
     const toArg = rest[1]
     if (!runDirArg || !toArg) die('usage: state.mjs manifest-status <runDir> <to>')
     cmdManifestStatus(resolve(runDirArg), toArg)
+    break
+  }
+  case 'feedback-index': {
+    const sub = rest[0]
+    switch (sub) {
+      case 'read': {
+        const runDirArg = rest[1]
+        if (!runDirArg) die('usage: state.mjs feedback-index read <runDir>')
+        cmdFeedbackIndexRead(resolve(runDirArg))
+        break
+      }
+      case 'upsert': {
+        const from = takeFlag(rest, '--from')
+        const runDirArg = rest[1]
+        if (!runDirArg || !from) die('usage: state.mjs feedback-index upsert <runDir> --from <jsonFile>')
+        cmdFeedbackIndexUpsert(resolve(runDirArg), resolve(from))
+        break
+      }
+      case 'set': {
+        const commit = takeFlag(rest, '--commit')
+        const runDirArg = rest[1]
+        const externalId = rest[2]
+        const status = rest[3]
+        if (!runDirArg || externalId === undefined || status === undefined) {
+          die('usage: state.mjs feedback-index set <runDir> <externalId> <status> [--commit <sha>]')
+        }
+        cmdFeedbackIndexSet(resolve(runDirArg), externalId, status, commit)
+        break
+      }
+      default:
+        die('usage: state.mjs feedback-index <read|upsert|set> ...')
+    }
     break
   }
   default:

@@ -55,22 +55,42 @@ There is **NO** rule snapshot and **NO** `rulesByRound` here: feedback-lite runs
 
 For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:` URL and fetch ALL THREE categories (the same three the conventions' [Feedback loop](conventions.md#feedback-loop) Step 1 fetches):
 
-1. **Line-anchored review comments**:
+1. **Line-anchored review comments** via the GraphQL **`reviewThreads`** query (NOT REST `/pulls/{n}/comments` — no resolution field there). Fetch **ALL** threads, resolved and unresolved:
    ```bash
-   gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
+   gh api graphql -f query='
+   query($owner:String!,$repo:String!,$pr:Int!){
+     repository(owner:$owner,name:$repo){
+       pullRequest(number:$pr){
+         reviewThreads(first:100){
+           nodes{ id isResolved isOutdated
+             comments(first:100){ nodes{ databaseId body path startLine originalStartLine line originalLine diffSide diffHunk author{login} } } }
+         }
+       }
+     }
+   }' -F owner={owner} -F repo={repo} -F pr={n}
    ```
-   Capture the full anchored RANGE, not just one line: `path`, `start_line`/`original_start_line`, `line`/`original_line`, `start_side`, `side`, `diff_hunk` (the multi-line block/context — always keep it), `body`, `user.login`, `in_reply_to_id`. A single-line comment has a null `start_line`; a multi-line comment spans `start_line..line`.
-2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
+   Carry each thread's `isResolved` onto its comments as `githubResolved`, its node `id` as `threadId`, the first comment's `databaseId` (stringified) as `externalId`. Do NOT drop resolved threads; `isOutdated` is ignored. Capture the full anchored RANGE, not just one line: `path`, `startLine`/`originalStartLine`, `line`/`originalLine`, `diffSide`, and the `diffHunk` block (the multi-line context — always keep it), plus `body` and `author.login`. A single-line comment has a null `startLine`; a multi-line comment spans `startLine..line`.
+2. **Review-SUBMISSION bodies** (a DISTINCT category — the summary a reviewer types on submit):
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate
    ```
-   Capture `state` (APPROVED / CHANGES_REQUESTED / COMMENTED) and `body`. Feed each **non-empty** submission `body` — especially a CHANGES_REQUESTED one — into synthesis as GLOBAL feedback for that deliverable.
+   Capture `state` (APPROVED / CHANGES_REQUESTED / COMMENTED) and `body`. Feed each **non-empty** submission `body` — especially a CHANGES_REQUESTED one — into synthesis as GLOBAL feedback, indexed under `externalId = "review:<id>"`, `threadId: null`, `githubResolved: false`.
 3. **Global/issue comments**:
    ```bash
    gh pr view <url> --json comments
    ```
+   Indexed under `externalId = "issue:<id>"`, `threadId: null`, `githubResolved: false`.
 
-To keep the main agent's context lean, redirect the raw `gh` JSON to a scratch file under the run dir (e.g. `<runDir>/reviews/feedback-lite-comments-<ts>.json`) rather than dumping large output to stdout, and build the `comments` array from that file. Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [{ path, start_line, original_start_line, line, original_line, start_side, side, diff_hunk, body }], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow — each `lineComments` entry carries the full `start_line..line` range + the `diff_hunk` block, never collapsed to a single line.
+To keep the main agent's context lean, redirect the raw `gh` JSON to a scratch file under the run dir (e.g. `<runDir>/reviews/feedback-lite-comments-<ts>.json`) rather than dumping large output to stdout. Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Each line-comment record keeps its full `startLine..line` range + the `diffHunk` block, never collapsed to a single line.
+
+**Upsert then cross-check** (dedup — see the conventions' [Feedback index](conventions.md#feedback-index)). Write the fetched records (each carrying `externalId`/`threadId`/`deliverableId`/`pr`/`path`/`startLine`/`originalStartLine`/`line`/`originalLine`/`diffSide`/`diffHunk`/`author`/`body`/`githubResolved`) as a JSON array to that scratch file, then:
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index upsert <runDir> --from <scratch>
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index read <runDir>
+```
+
+The index read is the **status filter** only (it stores identity fields, not the full `diffHunk` block) — build the `comments` array from the **scratch records whose `externalId` is `status: unaddressed` in the index**, as `{ deliverableId, pr, lineComments: [{ path, startLine, originalStartLine, line, originalLine, diffSide, diffHunk, body }], reviewBodies: [{state, body}], issueComments: [...] }`, every `lineComments` entry carrying the full `startLine..line` range + `diffHunk` block from the scratch record. If nothing is `unaddressed`, report "no outstanding feedback" and stop.
 
 If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-scope PR has any comment/review, report that there is no feedback to process and stop.
 
@@ -121,7 +141,8 @@ No adversarial code review. In `topo` (stack) order over the affected deliverabl
 2. Record re-entry BEFORE applying: for a node with an open PR (`pr:` non-null, at `pr-open`), `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> fixing`. A **pre-PR** node (`pr:` null) is dispatched WITHOUT a transition — there is no `done>fixing` edge — and stays `done`.
 3. Apply the approved changes to the existing code (a targeted change, not a re-implementation), staying in scope.
 4. Run that repo's `validations` (from its config) until green, then commit on the existing branch.
-5. Record the exit: for a `pr-open` node, `transition <deliverableFile> in-review` then `transition <deliverableFile> pr-open`; for a pre-PR node, `transition <deliverableFile> done` (an idempotent no-op). Then bump the counter: `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> feedback_rounds_used <n+1>`.
+5. **Mark the index** for the comments the plan routed to THIS node (you routed every comment in-context in Step 4). With the node's fix commit `sha=$(git -C <worktree> rev-parse HEAD)`, for each such `externalId`: `node $PLUGIN_ROOT/scripts/state.mjs feedback-index set <runDir> <externalId> addressed --commit "$sha"` (covering its `review:`/`issue:` entries too). Leave comments routed to a **parked** node `unaddressed`.
+6. Record the exit: for a `pr-open` node, `transition <deliverableFile> in-review` then `transition <deliverableFile> pr-open`; for a pre-PR node, `transition <deliverableFile> done` (an idempotent no-op). Then bump the counter: `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> feedback_rounds_used <n+1>`.
 
 Use the SAME feedback re-entry edge and `feedback_rounds_used` counter the conventions' [Feedback loop](conventions.md#feedback-loop) documents — feedback-lite reuses that lifecycle, it does not invent one. Optionally persist the approved plan as a `## Feedback addendum` section per deliverable for audit/resumability. The freeze rule is preserved; never force-push or merge here. A node whose validations cannot go green parks (`transition <deliverableFile> parked` + `set <deliverableFile> parked_reason ...`) and is reported — never forced through.
 

@@ -73,6 +73,22 @@ The rebase applies to **same-repo parent→child edges only**. A cross-repo chil
    `<old-parent-tip>` is the recorded merge-base from step 1. On rebase conflict: abort the rebase, park the child via `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> parked` plus `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> parked_reason "rebase conflict onto <parent>"`, and report — never force through a conflict.
 3. Refresh PR bodies/bases with `gh pr edit` (run in each deliverable's own repo), keeping the conventions' **PR titles and bodies (Conventional Commits)** format for any regenerated title/body as the default — unless a PR-title/commit convention already established in context (repo config, the repo's CLAUDE.md, or the user's Claude settings/guidelines) applies, which takes precedence.
 
+### Feedback-index write-back (independent of the rebase)
+
+After the rebase, run an **INDEPENDENT** pass over the run's [Feedback index](conventions.md#feedback-index) — this is NOT gated to same-repo children (the same-repo gating above governs the *rebase* only; the write-back keys off each comment's own stored `pr`/`threadId`, topology-free). Read the index once and act on every `addressed` comment with a **non-null** `threadId` (root, same-repo child, or cross-repo alike):
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index read <runDir>
+# for each addressed comment with threadId != null, deriving {owner}/{repo}/{n} from its stored pr URL:
+gh api --method POST repos/{owner}/{repo}/pulls/{n}/comments/{externalId}/replies -f body="Fixed in <sha>"
+gh api graphql -f query='mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{isResolved}}}' -F id=<threadId>
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index set <runDir> <externalId> resolved
+```
+
+- Keep the reply **extremely short** — a few words plus the `commit` sha from the index entry.
+- **Skip** `ignored`/`not_needed` comments (never written to GitHub) and **skip** null-`threadId` entries (review-body / global comments — no thread to resolve; they stay `addressed`).
+- If `gh` is unauthenticated, **report-and-skip** the whole write-back — do not fail the run (Guardrails below).
+
 ## Guardrails
 
 - Never push `main`, never merge PRs, never `--force` (only `--force-with-lease`) — enforced **per repo** (every git op runs `-C <deliverableRepoRoot>`).

@@ -491,3 +491,194 @@ test('transition + sync-prs grep compatibility: flipped file still matches ^stat
   assert.match(src, /^deps: \[\]$/m)
   assert.match(src, /^pr: null$/m)
 })
+
+// --- feedback-index ----------------------------------------------------------
+
+interface IndexComment {
+  externalId: string
+  threadId: string | null
+  deliverableId: string | null
+  pr: string | null
+  path: string | null
+  line: number | null
+  author: string | null
+  body: string | null
+  status: string
+  commit: string | null
+  githubResolved: boolean
+  updated: string
+}
+interface ReadJson {
+  path: string
+  exists: boolean
+  comments: IndexComment[]
+}
+interface UpsertJson {
+  inserted: number
+  updated: number
+  resolvedFromGithub: number
+  total: number
+}
+interface SetJson {
+  externalId: string
+  from: string
+  to: string
+  commit: string | null
+  changed: boolean
+}
+
+/** Write a fetched-comments array to a scratch --from file and return its path. */
+function writeFrom(dir: string, name: string, records: unknown[]): string {
+  const file = join(dir, name)
+  writeFileSync(file, JSON.stringify(records))
+  return file
+}
+
+test('feedback-index read: fresh run dir → exists false, comments empty, exit 0', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+  const res = env.runState(['feedback-index', 'read', dir])
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<ReadJson>(res)
+  assert.equal(json.exists, false)
+  assert.deepEqual(json.comments, [])
+  assert.equal(json.path, join(dir, 'feedback-index.json'))
+})
+
+test('feedback-index upsert: inserts as unaddressed, then an incoming githubResolved flips it to resolved and a new id inserts', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+
+  const first = writeFrom(dir, 'fetch-1.json', [
+    { externalId: '101', threadId: 'T101', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/a.ts', line: 5, author: 'octocat', body: 'fix a', githubResolved: false },
+    { externalId: '102', threadId: 'T102', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/b.ts', line: 9, author: 'octocat', body: 'fix b', githubResolved: false },
+  ])
+  const r1 = env.runState(['feedback-index', 'upsert', dir, '--from', first])
+  assert.equal(r1.status, 0, r1.stderr)
+  assert.deepEqual(parse<UpsertJson>(r1), { inserted: 2, updated: 0, resolvedFromGithub: 0, total: 2 })
+
+  const afterFirst = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  assert.deepEqual(afterFirst.comments.map(c => c.status), ['unaddressed', 'unaddressed'])
+  const c101 = afterFirst.comments.find(c => c.externalId === '101')
+  assert.ok(c101)
+  assert.equal(c101.threadId, 'T101')
+  assert.equal(c101.line, 5)
+  assert.equal(c101.commit, null)
+
+  // Second round: 101 comes back reviewer-self-resolved; 103 is brand new.
+  const second = writeFrom(dir, 'fetch-2.json', [
+    { externalId: '101', threadId: 'T101', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/a.ts', line: 5, author: 'octocat', body: 'fix a', githubResolved: true },
+    { externalId: '103', threadId: 'T103', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/c.ts', line: 2, author: 'octocat', body: 'fix c', githubResolved: false },
+  ])
+  const r2 = env.runState(['feedback-index', 'upsert', dir, '--from', second])
+  assert.equal(r2.status, 0, r2.stderr)
+  assert.deepEqual(parse<UpsertJson>(r2), { inserted: 1, updated: 1, resolvedFromGithub: 1, total: 3 })
+
+  const afterSecond = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  const byId = new Map(afterSecond.comments.map(c => [c.externalId, c]))
+  assert.equal(byId.get('101')?.status, 'resolved')
+  assert.equal(byId.get('101')?.githubResolved, true)
+  assert.equal(byId.get('102')?.status, 'unaddressed')
+  assert.equal(byId.get('103')?.status, 'unaddressed')
+})
+
+test('feedback-index upsert: review-body / global records (threadId null) insert as unaddressed and take a later set', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+  const from = writeFrom(dir, 'fetch.json', [
+    { externalId: 'review:55', threadId: null, deliverableId: 'D1', pr: 'https://gh/pr/1', path: null, line: null, author: 'octocat', body: 'overall: rework error paths', githubResolved: false },
+    { externalId: 'issue:77', threadId: null, deliverableId: 'D1', pr: 'https://gh/pr/1', path: null, line: null, author: 'octocat', body: 'a global note', githubResolved: false },
+  ])
+  const r = env.runState(['feedback-index', 'upsert', dir, '--from', from])
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(parse<UpsertJson>(r), { inserted: 2, updated: 0, resolvedFromGithub: 0, total: 2 })
+
+  const read = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  const review = read.comments.find(c => c.externalId === 'review:55')
+  assert.ok(review)
+  assert.equal(review.threadId, null)
+  assert.equal(review.status, 'unaddressed')
+
+  const set = env.runState(['feedback-index', 'set', dir, 'review:55', 'addressed', '--commit', 'deadbeef'])
+  assert.equal(set.status, 0, set.stderr)
+  assert.deepEqual(parse<SetJson>(set), { externalId: 'review:55', from: 'unaddressed', to: 'addressed', commit: 'deadbeef', changed: true })
+
+  const afterSet = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  const now = afterSet.comments.find(c => c.externalId === 'review:55')
+  assert.equal(now?.status, 'addressed')
+  assert.equal(now?.commit, 'deadbeef')
+  assert.equal(now?.threadId, null)
+})
+
+test('feedback-index upsert: an ignored / not_needed comment is never reconciled to resolved by an incoming githubResolved', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+  const seed = writeFrom(dir, 'seed.json', [
+    { externalId: '201', threadId: 'T201', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/x.ts', line: 1, author: 'octocat', body: 'x', githubResolved: false },
+    { externalId: '202', threadId: 'T202', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/y.ts', line: 2, author: 'octocat', body: 'y', githubResolved: false },
+  ])
+  env.runState(['feedback-index', 'upsert', dir, '--from', seed])
+  env.runState(['feedback-index', 'set', dir, '201', 'ignored'])
+  env.runState(['feedback-index', 'set', dir, '202', 'not_needed'])
+
+  const resolved = writeFrom(dir, 'resolved.json', [
+    { externalId: '201', threadId: 'T201', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/x.ts', line: 1, author: 'octocat', body: 'x', githubResolved: true },
+    { externalId: '202', threadId: 'T202', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/y.ts', line: 2, author: 'octocat', body: 'y', githubResolved: true },
+  ])
+  const r = env.runState(['feedback-index', 'upsert', dir, '--from', resolved])
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(parse<UpsertJson>(r), { inserted: 0, updated: 2, resolvedFromGithub: 0, total: 2 })
+
+  const read = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  const byId = new Map(read.comments.map(c => [c.externalId, c]))
+  assert.equal(byId.get('201')?.status, 'ignored')
+  assert.equal(byId.get('202')?.status, 'not_needed')
+  // github field still refreshes even though status is frozen.
+  assert.equal(byId.get('201')?.githubResolved, true)
+})
+
+test('feedback-index set: happy path writes status+commit, idempotent no-op, unknown status / unknown externalId each exit 1', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+  const from = writeFrom(dir, 'fetch.json', [
+    { externalId: '301', threadId: 'T301', deliverableId: 'D1', pr: 'https://gh/pr/1', path: 'src/a.ts', line: 3, author: 'octocat', body: 'a', githubResolved: false },
+  ])
+  env.runState(['feedback-index', 'upsert', dir, '--from', from])
+
+  const set = env.runState(['feedback-index', 'set', dir, '301', 'addressed', '--commit', 'abc123'])
+  assert.equal(set.status, 0, set.stderr)
+  assert.deepEqual(parse<SetJson>(set), { externalId: '301', from: 'unaddressed', to: 'addressed', commit: 'abc123', changed: true })
+
+  const noop = env.runState(['feedback-index', 'set', dir, '301', 'addressed'])
+  assert.equal(noop.status, 0, noop.stderr)
+  assert.deepEqual(parse<SetJson>(noop), { externalId: '301', from: 'addressed', to: 'addressed', commit: 'abc123', changed: false })
+
+  const badStatus = env.runState(['feedback-index', 'set', dir, '301', 'bogus'])
+  assert.equal(badStatus.status, 1)
+  assert.match(badStatus.stderr, /unknown feedback status "bogus"/)
+  assert.equal(badStatus.stderr.trim().split('\n').length, 1)
+
+  const badId = env.runState(['feedback-index', 'set', dir, '999', 'resolved'])
+  assert.equal(badId.status, 1)
+  assert.match(badId.stderr, /unknown externalId "999"/)
+
+  // The persisted state is unchanged by the two failed calls.
+  const read = parse<ReadJson>(env.runState(['feedback-index', 'read', dir]))
+  assert.equal(read.comments.find(c => c.externalId === '301')?.status, 'addressed')
+})
+
+test('feedback-index: misuse and unknown subcommand exit 1 with one stderr line', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1' }])
+  const noSub = env.runState(['feedback-index'])
+  assert.equal(noSub.status, 1)
+  assert.match(noSub.stderr, /feedback-index <read\|upsert\|set>/)
+
+  const badSub = env.runState(['feedback-index', 'frobnicate', dir])
+  assert.equal(badSub.status, 1)
+  assert.match(badSub.stderr, /feedback-index <read\|upsert\|set>/)
+
+  const setOnMissingIndex = env.runState(['feedback-index', 'set', dir, '1', 'resolved'])
+  assert.equal(setOnMissingIndex.status, 1)
+  assert.match(setOnMissingIndex.stderr, /no feedback index/)
+})
