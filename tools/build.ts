@@ -1,6 +1,8 @@
 // Deterministic build pipeline: bundles each src/scripts/<name>.ts entry into
 // its committed, node-runnable deployable (zero runtime dependencies, shebang +
-// GENERATED header, exec bit). Determinism is pinned by .tool-versions +
+// GENERATED header, exec bit), and bundles src/workflows/strapped-run/ into the
+// script-shaped workflow deployable the Claude Code workflow executor
+// evaluates as an AsyncFunction body. Determinism is pinned by .tool-versions +
 // bun.lock; tests/build-sync.test.ts runs `--check` so an unrebuilt src/ edit
 // fails the suite.
 //
@@ -11,6 +13,8 @@
 import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { meta as strappedRunMeta } from '../src/workflows/strapped-run/meta.ts'
+import { emitSchemasModule } from './gen-schemas.ts'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -21,14 +25,56 @@ export interface BuildSpec {
   outfile: string
 }
 
-// Registry of deployables. D3 (workflow) appends here.
+export interface WorkflowSpec extends BuildSpec {
+  kind: 'workflow'
+  /** The meta object (imported natively from its meta.ts, never bundled). */
+  meta: unknown
+}
+
+/**
+ * The generated schema module: emitted from types.ts, not bundled — it is a
+ * committed src/ artifact the workflow modules import and the bundle inlines.
+ * Listed first so a write pass regenerates it before the workflow bundle reads it.
+ */
+export interface SchemaSpec {
+  kind: 'schemas'
+  /** Repo-relative committed artifact path (imported by the workflow modules). */
+  outfile: string
+}
+
+export type Spec = BuildSpec | WorkflowSpec | SchemaSpec
+
+/** Registry of generated-source artifacts (emitted, not bundled; see buildSchemas). */
+export const SCHEMA_BUILDS: readonly SchemaSpec[] = [
+  { kind: 'schemas', outfile: 'src/workflows/strapped-run/schemas.generated.ts' },
+]
+
+/** Registry of CLI deployables (shebang + exec bit; see buildCli). */
 export const BUILDS: readonly BuildSpec[] = [
   { entry: 'src/scripts/resolve-chain.ts', outfile: 'plugins/strapped/scripts/resolve-chain.mjs' },
   { entry: 'src/scripts/state.ts', outfile: 'plugins/strapped/scripts/state.mjs' },
 ]
 
-/** Bundle one CLI entry and return the finished artifact text (in memory). */
-export async function buildCli(spec: BuildSpec): Promise<string> {
+/** Registry of workflow deployables (script-shaped executor contract; see buildWorkflow). */
+export const WORKFLOW_BUILDS: readonly WorkflowSpec[] = [
+  {
+    kind: 'workflow',
+    entry: 'src/workflows/strapped-run/main.ts',
+    outfile: 'plugins/strapped/workflows/strapped-run.js',
+    meta: strappedRunMeta,
+  },
+]
+
+export function isWorkflowSpec(spec: Spec): spec is WorkflowSpec {
+  return 'kind' in spec && spec.kind === 'workflow'
+}
+
+export function isSchemaSpec(spec: Spec): spec is SchemaSpec {
+  return 'kind' in spec && spec.kind === 'schemas'
+}
+
+/** Bundle one entry with Bun.build and return the raw output text. */
+async function bundle(entry: string): Promise<string> {
   // Bun's bundler emits source-path comments relative to the process cwd; pin
   // it for the build so artifacts are byte-identical no matter where the build
   // is invoked from (restored right after — tests import this module).
@@ -37,7 +83,7 @@ export async function buildCli(spec: BuildSpec): Promise<string> {
   let result: Awaited<ReturnType<typeof Bun.build>>
   try {
     result = await Bun.build({
-      entrypoints: [resolve(ROOT, spec.entry)],
+      entrypoints: [resolve(ROOT, entry)],
       target: 'node',
       format: 'esm',
       minify: false,
@@ -47,13 +93,18 @@ export async function buildCli(spec: BuildSpec): Promise<string> {
     process.chdir(prevCwd)
   }
   if (!result.success) {
-    throw new Error(`build failed for ${spec.entry}:\n${result.logs.map(l => String(l)).join('\n')}`)
+    throw new Error(`build failed for ${entry}:\n${result.logs.map(l => String(l)).join('\n')}`)
   }
   const artifact = result.outputs[0]
   if (!artifact || result.outputs.length !== 1) {
-    throw new Error(`build for ${spec.entry} produced ${result.outputs.length} outputs, expected exactly 1`)
+    throw new Error(`build for ${entry} produced ${result.outputs.length} outputs, expected exactly 1`)
   }
-  let code = await artifact.text()
+  return artifact.text()
+}
+
+/** Bundle one CLI entry and return the finished artifact text (in memory). */
+export async function buildCli(spec: BuildSpec): Promise<string> {
+  let code = await bundle(spec.entry)
   // Bun may forward a source shebang; ours is authored here, exactly once.
   if (code.startsWith('#!')) code = code.slice(code.indexOf('\n') + 1)
   return (
@@ -63,11 +114,107 @@ export async function buildCli(spec: BuildSpec): Promise<string> {
   )
 }
 
+// --- workflow artifact --------------------------------------------------------
+
+const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+function singleQuote(s: string): string {
+  return `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\r/g, '\\r').replace(/\n/g, '\\n')}'`
+}
+
+/**
+ * Serialize the meta object as a JS literal with single-quoted strings — the
+ * plugin-structure meta regex requires `name: '<name>'` single-quoted.
+ */
+export function serializeMeta(value: unknown, indent = ''): string {
+  if (typeof value === 'string') return singleQuote(value)
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  if (value === null) return 'null'
+  if (Array.isArray(value)) {
+    const items: unknown[] = value
+    if (!items.length) return '[]'
+    const inner = `${indent}  `
+    return `[\n${items.map(v => `${inner}${serializeMeta(v, inner)},`).join('\n')}\n${indent}]`
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (!entries.length) return '{}'
+    const inner = `${indent}  `
+    return `{\n${entries.map(([k, v]) => `${inner}${IDENTIFIER.test(k) ? k : singleQuote(k)}: ${serializeMeta(v, inner)},`).join('\n')}\n${indent}}`
+  }
+  throw new Error(`meta must be plain JSON-shaped data, found ${typeof value}`)
+}
+
+const WORKFLOW_PARAMS = ['args', 'agent', 'phase', 'workflow', 'parallel', 'pipeline', 'log']
+
+/**
+ * Parse-validate the artifact exactly as the executor contract demands: apply
+ * the harness meta rewrite (`export const meta` → `const meta` — an export
+ * statement is a syntax error inside a function body), then construct an
+ * AsyncFunction with the seven ambient-helper params. Construct only — never run.
+ */
+function assertExecutorShape(text: string, outfile: string): void {
+  const body = text.replace(/^export const meta\b/m, 'const meta')
+  const leftover = body.match(/^(import|export)\b.*$/m)
+  if (leftover) {
+    throw new Error(`workflow artifact ${outfile} kept a module statement the executor cannot evaluate: ${leftover[0]}`)
+  }
+  type AsyncFunctionConstructor = new (...params: string[]) => (...fnArgs: unknown[]) => Promise<unknown>
+  const AsyncFunction = (async () => {}).constructor as AsyncFunctionConstructor
+  try {
+    new AsyncFunction(...WORKFLOW_PARAMS, body)
+  } catch (err) {
+    throw new Error(`workflow artifact ${outfile} does not parse as an AsyncFunction body: ${String(err)}`)
+  }
+}
+
+/**
+ * Bundle the workflow entry into the script-shaped deployable: GENERATED
+ * header, leading `export const meta` (single-quoted), the bundled function
+ * declarations with the entry's export statement stripped, and a trailing
+ * top-level `return await main()`. The seven ambient helpers stay free
+ * identifiers throughout — bundlers never rename free identifiers, so they
+ * bind to the executor's AsyncFunction params at eval time.
+ */
+export async function buildWorkflow(spec: WorkflowSpec): Promise<string> {
+  let code = await bundle(spec.entry)
+
+  // Strip the entry's default-export statement and recover the local
+  // identifier it bound, failing loudly on any unexpected bundle shape.
+  const exported = code.match(/\nexport\s*\{\s*([A-Za-z_$][A-Za-z0-9_$]*) as default\s*\};\s*$/)
+  if (!exported || exported.index === undefined || typeof exported[1] !== 'string') {
+    throw new Error(`bundle for ${spec.entry} did not end with the expected \`export { <main> as default };\` statement — adjust buildWorkflow for the new bundler output shape`)
+  }
+  const mainName = exported[1]
+  code = code.slice(0, exported.index)
+
+  const artifact =
+    `// GENERATED by tools/build.ts from ${spec.entry} — do not edit; rebuild: bun run build\n` +
+    `export const meta = ${serializeMeta(spec.meta)}\n\n` +
+    `${code.trim()}\n\n` +
+    `return await ${mainName}()\n`
+
+  assertExecutorShape(artifact, spec.outfile)
+  return artifact
+}
+
+/** Emit the generated schema module text (no bundling — a plain src/ artifact). */
+export function buildSchemas(_spec: SchemaSpec): string {
+  return emitSchemasModule()
+}
+
+/** Build any spec in memory. */
+export async function buildArtifact(spec: Spec): Promise<string> {
+  if (isSchemaSpec(spec)) return buildSchemas(spec)
+  if (isWorkflowSpec(spec)) return buildWorkflow(spec)
+  return buildCli(spec)
+}
+
 /** Build every spec in memory and return the outfiles whose committed bytes differ. */
-export async function findStale(specs: readonly BuildSpec[]): Promise<string[]> {
+export async function findStale(specs: readonly Spec[]): Promise<string[]> {
   const stale: string[] = []
   for (const spec of specs) {
-    const expected = await buildCli(spec)
+    const expected = await buildArtifact(spec)
     const path = resolve(ROOT, spec.outfile)
     const actual = existsSync(path) ? readFileSync(path, 'utf8') : null
     if (actual !== expected) stale.push(spec.outfile)
@@ -77,8 +224,11 @@ export async function findStale(specs: readonly BuildSpec[]): Promise<string[]> 
 
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes('--check')
+  // Schema module first: a write pass regenerates it before the workflow bundle
+  // reads it back off disk.
+  const specs: readonly Spec[] = [...SCHEMA_BUILDS, ...BUILDS, ...WORKFLOW_BUILDS]
   if (check) {
-    const stale = await findStale(BUILDS)
+    const stale = await findStale(specs)
     if (stale.length > 0) {
       process.stderr.write(
         `tools/build.ts: stale generated artifacts:\n${stale.map(f => `  ${f}`).join('\n')}\n` +
@@ -88,11 +238,14 @@ async function main(): Promise<void> {
     }
     return
   }
-  for (const spec of BUILDS) {
+  for (const spec of specs) {
     const path = resolve(ROOT, spec.outfile)
-    writeFileSync(path, await buildCli(spec))
-    chmodSync(path, 0o755)
-    process.stdout.write(`built ${spec.outfile} from ${spec.entry}\n`)
+    writeFileSync(path, await buildArtifact(spec))
+    // Only the node-runnable CLI deployables get the exec bit. Workflow artifacts
+    // are evaluated as function bodies; the schema module is a plain src/ import.
+    if (!isWorkflowSpec(spec) && !isSchemaSpec(spec)) chmodSync(path, 0o755)
+    const from = isSchemaSpec(spec) ? 'src/workflows/strapped-run/types.ts' : spec.entry
+    process.stdout.write(`built ${spec.outfile} from ${from}\n`)
   }
 }
 
