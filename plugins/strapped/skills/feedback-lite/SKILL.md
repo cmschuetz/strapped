@@ -103,15 +103,21 @@ With `lite: true` the `feedback-synth` stage runs its synthesis subagent (OFF yo
 
 ## Step 4 — Plan mode (the user gate)
 
-**Enter plan mode programmatically FIRST — before reading anything or asking anything — by calling `EnterPlanMode`.** This is what actually *forces* the refinement pass into a plan: the harness then blocks every mutating tool (Edit/Write/etc.) until you call `ExitPlanMode`, so "no code edits before approval" is a harness-enforced guarantee, not a convention the model may drift from. `EnterPlanMode` surfaces its own entry consent, but invoking `/strapped:feedback-lite` IS that consent — the whole command is a plan-then-implement gate — so entry is expected here, not a separate decision to deliberate.
+**Call `EnterPlanMode` FIRST — before reading anything or asking anything.** This gives Claude's native plan-mode UX (a designated plan file, the built-in approval affordance). But the *hard* guarantee does NOT depend on the model remembering to call it: the plugin's `UserPromptExpansion` hook locked this session the instant `/strapped:feedback-lite` was invoked, and its `PreToolUse` hook (`scripts/plan-lock.sh guard`) **denies every edit tool — Write/Edit/MultiEdit/NotebookEdit — until the lock is cleared in Step 5, after the user approves.** So even a model that skipped `EnterPlanMode` physically cannot touch code before approval; `EnterPlanMode` is the nice UX layer on top of an unbypassable harness floor. Invoking `/strapped:feedback-lite` IS the plan-gate consent — entry is expected here, not a separate decision to deliberate. Do not attempt to work around the lock (e.g. writing files via `Bash`); it exists to protect the user's gate.
 
 With plan mode engaged, the main agent plans in Claude's **native plan mode**. Read the Step 3 digest + every in-scope deliverable plan under `<runDir>/deliverables/` + the existing code across the affected worktrees, and plan a cross-deliverable refactor that closes the review feedback. Resolve any ambiguity fast by asking the user with **AskUserQuestion** (routing decisions, scope calls, competing fixes). Make **NO code edits before approval** (plan mode enforces this — but never try to work around it). Present the finished plan via **ExitPlanMode** — the native-plan-mode approval gate that replaces `/strapped:feedback`'s adversarial review + explicit-approval gate. Call out cross-deliverable reassignments explicitly (a comment left on PR X routed to deliverable Y) and state the topological (stack) implement order.
 
-## Step 5 — Approve
+## Step 5 — Approve (release the plan-gate lock FIRST)
 
-The user tweaks/approves the plan. Apply the user's tweaks directly with Edit — **no subagents in this step**, same as `/strapped:plan` final review. For every generalizable correction, append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
+Once the user approves via `ExitPlanMode`, your **first action** is to release the harness plan-gate lock — otherwise the `PreToolUse` guard will deny the very tweak-edits this step makes:
 
-**With `--dry-run`:** stop HERE after presenting the plan and the commands that WOULD run. Mutate nothing — no addenda, no `state.mjs` transitions, no implementation, no branch changes.
+```bash
+bash $PLUGIN_ROOT/scripts/plan-lock.sh clear <slug>
+```
+
+This is the sanctioned unlock and the ONLY one — never delete lock files by hand or disable the hook. The lock is fail-closed: if this step is skipped, edits stay blocked (safe, recoverable) rather than ever allowing an unapproved edit. Then apply the user's tweaks directly with Edit — **no subagents in this step**, same as `/strapped:plan` final review. For every generalizable correction, append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
+
+**With `--dry-run`:** still clear the lock (`bash $PLUGIN_ROOT/scripts/plan-lock.sh clear <slug>` — the invocation set it regardless of dry-run), then stop HERE after presenting the plan and the commands that WOULD run. Mutate nothing else — no addenda, no `state.mjs` transitions, no implementation, no branch changes.
 
 ## Step 6 — Implement in the standard loop
 

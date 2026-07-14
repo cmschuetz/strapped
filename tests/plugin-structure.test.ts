@@ -43,9 +43,12 @@ test('hooks.json parses and every hook command resolves to an existing executabl
   for (const command of commands) {
     const resolved = command.replaceAll('${CLAUDE_PLUGIN_ROOT}', PLUGIN_ROOT)
     assert.ok(resolved.startsWith(PLUGIN_ROOT), `hook command escapes the plugin root: ${command}`)
-    const stat = statSync(resolved) // throws if missing
-    assert.ok(stat.isFile(), `hook command is not a file: ${resolved}`)
-    assert.ok(stat.mode & 0o111, `hook command is not executable: ${resolved}`)
+    // A hook command may carry arguments (e.g. `plan-lock.sh set`); the executable
+    // is the first whitespace-delimited token.
+    const [executable = resolved] = resolved.split(/\s+/)
+    const stat = statSync(executable) // throws if missing
+    assert.ok(stat.isFile(), `hook command is not a file: ${executable}`)
+    assert.ok(stat.mode & 0o111, `hook command is not executable: ${executable}`)
   }
 })
 
