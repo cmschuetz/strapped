@@ -4,11 +4,11 @@
 // The script is a SessionStart hook: every path must exit 0.
 
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
-import { ghStub, makeHookEnv } from './helpers/hook-env.ts'
+import { ghStub, makeHookEnv, type HookEnv } from './helpers/hook-env.ts'
 import { NODE } from './helpers/node-bin.ts'
 import { STATE_SCRIPT } from './helpers/state-env.ts'
 
@@ -16,8 +16,8 @@ const MERGED = ghStub('{"state":"MERGED","reviewDecision":null}')
 const CHANGES_REQUESTED = ghStub('{"state":"OPEN","reviewDecision":"CHANGES_REQUESTED"}')
 
 // Spawn the REAL state.mjs (under node) to write into the hook env's state root —
-// so downstream assertions run against gray-matter-produced files, not fixtures.
-function runState(env, args) {
+// so downstream assertions run against js-yaml-produced files, not fixtures.
+function runState(env: HookEnv, args: string[]): SpawnSyncReturns<string> {
   const res = spawnSync(NODE, [STATE_SCRIPT, ...args], {
     encoding: 'utf8',
     env: { ...process.env, HOME: env.home, STRAPPED_STATE_ROOT: env.stateRoot },
