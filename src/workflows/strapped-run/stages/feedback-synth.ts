@@ -4,7 +4,7 @@
 
 import { stageArgsFor } from '../config.ts'
 import { runReviewLoop } from '../review-loop.ts'
-import { SYNTH_SCHEMA } from '../schemas.ts'
+import { SYNTH_SCHEMA } from '../schemas.generated.ts'
 import type { FeedbackSynthStageResult, RunConfig, SynthResult } from '../types.ts'
 
 export async function feedbackSynthStage(cfg: RunConfig): Promise<FeedbackSynthStageResult> {

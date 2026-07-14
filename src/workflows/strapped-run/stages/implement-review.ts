@@ -4,7 +4,7 @@
 
 import { rulesForRound } from '../config.ts'
 import { digest, ruleBlock } from '../review-loop.ts'
-import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from '../schemas.ts'
+import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from '../schemas.generated.ts'
 import type {
   CodeFinding,
   ConsolidateResult,

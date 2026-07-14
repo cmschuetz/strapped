@@ -3,7 +3,7 @@
 // writing reviews/<prefix>-round-<N>.md, reviser, final-round confirmation.
 
 import { repoList, rulesForRound } from './config.ts'
-import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from './schemas.ts'
+import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from './schemas.generated.ts'
 import type {
   ConsolidateResult,
   Finding,

@@ -14,6 +14,7 @@ import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { meta as strappedRunMeta } from '../src/workflows/strapped-run/meta.ts'
+import { emitSchemasModule } from './gen-schemas.ts'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -30,7 +31,23 @@ export interface WorkflowSpec extends BuildSpec {
   meta: unknown
 }
 
-export type Spec = BuildSpec | WorkflowSpec
+/**
+ * The generated schema module: emitted from types.ts, not bundled — it is a
+ * committed src/ artifact the workflow modules import and the bundle inlines.
+ * Listed first so a write pass regenerates it before the workflow bundle reads it.
+ */
+export interface SchemaSpec {
+  kind: 'schemas'
+  /** Repo-relative committed artifact path (imported by the workflow modules). */
+  outfile: string
+}
+
+export type Spec = BuildSpec | WorkflowSpec | SchemaSpec
+
+/** Registry of generated-source artifacts (emitted, not bundled; see buildSchemas). */
+export const SCHEMA_BUILDS: readonly SchemaSpec[] = [
+  { kind: 'schemas', outfile: 'src/workflows/strapped-run/schemas.generated.ts' },
+]
 
 /** Registry of CLI deployables (shebang + exec bit; see buildCli). */
 export const BUILDS: readonly BuildSpec[] = [
@@ -50,6 +67,10 @@ export const WORKFLOW_BUILDS: readonly WorkflowSpec[] = [
 
 export function isWorkflowSpec(spec: Spec): spec is WorkflowSpec {
   return 'kind' in spec && spec.kind === 'workflow'
+}
+
+export function isSchemaSpec(spec: Spec): spec is SchemaSpec {
+  return 'kind' in spec && spec.kind === 'schemas'
 }
 
 /** Bundle one entry with Bun.build and return the raw output text. */
@@ -177,9 +198,16 @@ export async function buildWorkflow(spec: WorkflowSpec): Promise<string> {
   return artifact
 }
 
+/** Emit the generated schema module text (no bundling — a plain src/ artifact). */
+export function buildSchemas(_spec: SchemaSpec): string {
+  return emitSchemasModule()
+}
+
 /** Build any spec in memory. */
 export async function buildArtifact(spec: Spec): Promise<string> {
-  return isWorkflowSpec(spec) ? buildWorkflow(spec) : buildCli(spec)
+  if (isSchemaSpec(spec)) return buildSchemas(spec)
+  if (isWorkflowSpec(spec)) return buildWorkflow(spec)
+  return buildCli(spec)
 }
 
 /** Build every spec in memory and return the outfiles whose committed bytes differ. */
@@ -196,7 +224,9 @@ export async function findStale(specs: readonly Spec[]): Promise<string[]> {
 
 async function main(): Promise<void> {
   const check = process.argv.slice(2).includes('--check')
-  const specs: readonly Spec[] = [...BUILDS, ...WORKFLOW_BUILDS]
+  // Schema module first: a write pass regenerates it before the workflow bundle
+  // reads it back off disk.
+  const specs: readonly Spec[] = [...SCHEMA_BUILDS, ...BUILDS, ...WORKFLOW_BUILDS]
   if (check) {
     const stale = await findStale(specs)
     if (stale.length > 0) {
@@ -211,9 +241,11 @@ async function main(): Promise<void> {
   for (const spec of specs) {
     const path = resolve(ROOT, spec.outfile)
     writeFileSync(path, await buildArtifact(spec))
-    // Workflow artifacts are evaluated, never executed — no shebang, no exec bit.
-    if (!isWorkflowSpec(spec)) chmodSync(path, 0o755)
-    process.stdout.write(`built ${spec.outfile} from ${spec.entry}\n`)
+    // Only the node-runnable CLI deployables get the exec bit. Workflow artifacts
+    // are evaluated as function bodies; the schema module is a plain src/ import.
+    if (!isWorkflowSpec(spec) && !isSchemaSpec(spec)) chmodSync(path, 0o755)
+    const from = isSchemaSpec(spec) ? 'src/workflows/strapped-run/types.ts' : spec.entry
+    process.stdout.write(`built ${spec.outfile} from ${from}\n`)
   }
 }
 

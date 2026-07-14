@@ -4,7 +4,7 @@
 
 import { repoList, stageArgsFor } from '../config.ts'
 import { runReviewLoop } from '../review-loop.ts'
-import { APPROVE_SCHEMA, PLAN_SCHEMA } from '../schemas.ts'
+import { APPROVE_SCHEMA, PLAN_SCHEMA } from '../schemas.generated.ts'
 import type { ApproveResult, PlanResult, PlanStageResult, RunConfig, StageCtx } from '../types.ts'
 
 export async function planStage(cfg: RunConfig, ctx: StageCtx): Promise<PlanStageResult> {

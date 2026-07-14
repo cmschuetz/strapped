@@ -90,6 +90,7 @@ export type Severity = 'blocking' | 'concern' | 'suggestion'
 
 export interface Finding {
   id: string
+  /** <rule-id-or-gap>:<location>, stable across rounds for dedup */
   key: string
   rule: string | null
   severity: Severity
@@ -97,6 +98,10 @@ export interface Finding {
   what: string
   why: string
   evidence: string
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
   confidence: number
   recommendation: string
 }
@@ -116,6 +121,10 @@ export interface FindingsResult {
 /** REFUTE_SCHEMA */
 export interface RefuteResult {
   verdict: 'confirmed' | 'refuted' | 'uncertain'
+  /**
+   * @minimum 0
+   * @maximum 100
+   */
   confidence: number
   evidence: string
 }
@@ -157,6 +166,7 @@ export interface WaveItem {
   branch: string
   base: string
   resumeNote: string | null
+  /** the node's `pr:` frontmatter URL, null for a pre-PR node */
   pr: string | null
 }
 

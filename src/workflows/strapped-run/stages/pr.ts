@@ -3,7 +3,7 @@
 // otherwise a fresh dag probe must show no node earlier than done.
 
 import { stageArgsFor } from '../config.ts'
-import { PR_SCHEMA, PROBE_SCHEMA } from '../schemas.ts'
+import { PR_SCHEMA, PROBE_SCHEMA } from '../schemas.generated.ts'
 import type { PrResult, PrStageResult, ProbeResult, RunConfig, StageCtx } from '../types.ts'
 
 export async function prStage(cfg: RunConfig, ctx: StageCtx): Promise<PrStageResult> {

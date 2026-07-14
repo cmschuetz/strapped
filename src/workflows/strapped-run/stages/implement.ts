@@ -3,7 +3,7 @@
 // outcome applier. Park-don't-spin: zero newly-done progress stops the loop.
 
 import { stageArgsFor } from '../config.ts'
-import { APPLY_SCHEMA, IMPLEMENT_SCHEMA, WAVE_SCHEMA } from '../schemas.ts'
+import { APPLY_SCHEMA, IMPLEMENT_SCHEMA, WAVE_SCHEMA } from '../schemas.generated.ts'
 import { runCodeReviewRound } from './implement-review.ts'
 import type {
   ApplyResult,

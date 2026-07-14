@@ -212,216 +212,479 @@ function repoList(repos) {
 `);
 }
 
-// src/workflows/strapped-run/schemas.ts
+// src/workflows/strapped-run/schemas.generated.ts
 var PLAN_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["deliverables", "summary"],
   properties: {
     deliverables: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "file", "title", "deps"],
         properties: {
-          id: { type: "string" },
-          file: { type: "string" },
-          title: { type: "string" },
-          deps: { type: "array", items: { type: "string" } }
-        }
+          id: {
+            type: "string"
+          },
+          file: {
+            type: "string"
+          },
+          title: {
+            type: "string"
+          },
+          deps: {
+            type: "array",
+            items: {
+              type: "string"
+            }
+          }
+        },
+        required: [
+          "id",
+          "file",
+          "title",
+          "deps"
+        ],
+        additionalProperties: false
       }
     },
-    summary: { type: "string" }
-  }
+    summary: {
+      type: "string"
+    }
+  },
+  required: [
+    "deliverables",
+    "summary"
+  ],
+  additionalProperties: false
 };
 var FINDINGS_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["findings", "rule_checklist"],
   properties: {
     findings: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "key", "rule", "severity", "location", "what", "why", "evidence", "confidence", "recommendation"],
         properties: {
-          id: { type: "string" },
-          key: { type: "string", description: "<rule-id-or-gap>:<location>, stable across rounds for dedup" },
-          rule: { type: ["string", "null"] },
-          severity: { type: "string", enum: ["blocking", "concern", "suggestion"] },
-          location: { type: "string" },
-          what: { type: "string" },
-          why: { type: "string" },
-          evidence: { type: "string" },
-          confidence: { type: "number", minimum: 0, maximum: 100 },
-          recommendation: { type: "string" }
-        }
+          id: {
+            type: "string"
+          },
+          key: {
+            type: "string",
+            description: "<rule-id-or-gap>:<location>, stable across rounds for dedup"
+          },
+          rule: {
+            type: [
+              "string",
+              "null"
+            ]
+          },
+          severity: {
+            type: "string",
+            enum: [
+              "blocking",
+              "concern",
+              "suggestion"
+            ]
+          },
+          location: {
+            type: "string"
+          },
+          what: {
+            type: "string"
+          },
+          why: {
+            type: "string"
+          },
+          evidence: {
+            type: "string"
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 100
+          },
+          recommendation: {
+            type: "string"
+          }
+        },
+        required: [
+          "id",
+          "key",
+          "rule",
+          "severity",
+          "location",
+          "what",
+          "why",
+          "evidence",
+          "confidence",
+          "recommendation"
+        ],
+        additionalProperties: false
       }
     },
     rule_checklist: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["rule", "verdict", "evidence"],
         properties: {
-          rule: { type: "string" },
-          verdict: { type: "string", enum: ["pass", "violation", "na"] },
-          evidence: { type: "string" }
-        }
+          rule: {
+            type: "string"
+          },
+          verdict: {
+            type: "string",
+            enum: [
+              "pass",
+              "violation",
+              "na"
+            ]
+          },
+          evidence: {
+            type: "string"
+          }
+        },
+        required: [
+          "rule",
+          "verdict",
+          "evidence"
+        ],
+        additionalProperties: false
       }
     }
-  }
+  },
+  required: [
+    "findings",
+    "rule_checklist"
+  ],
+  additionalProperties: false
 };
 var REFUTE_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["verdict", "confidence", "evidence"],
   properties: {
-    verdict: { type: "string", enum: ["confirmed", "refuted", "uncertain"] },
-    confidence: { type: "number", minimum: 0, maximum: 100 },
-    evidence: { type: "string" }
-  }
+    verdict: {
+      type: "string",
+      enum: [
+        "confirmed",
+        "refuted",
+        "uncertain"
+      ]
+    },
+    confidence: {
+      type: "number",
+      minimum: 0,
+      maximum: 100
+    },
+    evidence: {
+      type: "string"
+    }
+  },
+  required: [
+    "verdict",
+    "confidence",
+    "evidence"
+  ],
+  additionalProperties: false
 };
 var CONSOLIDATE_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["new_confirmed_ids", "duplicate_ids"],
   properties: {
-    new_confirmed_ids: { type: "array", items: { type: "string" } },
-    duplicate_ids: { type: "array", items: { type: "string" } }
-  }
+    new_confirmed_ids: {
+      type: "array",
+      items: {
+        type: "string"
+      }
+    },
+    duplicate_ids: {
+      type: "array",
+      items: {
+        type: "string"
+      }
+    }
+  },
+  required: [
+    "new_confirmed_ids",
+    "duplicate_ids"
+  ],
+  additionalProperties: false
 };
 var SYNTH_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["addenda", "summary"],
   properties: {
     addenda: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["deliverableId", "sourcePr", "crossDeliverable", "tasks"],
         properties: {
-          deliverableId: { type: "string" },
-          sourcePr: { type: "string" },
-          crossDeliverable: { type: "boolean" },
-          tasks: { type: "array", items: { type: "string" } }
-        }
+          deliverableId: {
+            type: "string"
+          },
+          sourcePr: {
+            type: "string"
+          },
+          crossDeliverable: {
+            type: "boolean"
+          },
+          tasks: {
+            type: "array",
+            items: {
+              type: "string"
+            }
+          }
+        },
+        required: [
+          "deliverableId",
+          "sourcePr",
+          "crossDeliverable",
+          "tasks"
+        ],
+        additionalProperties: false
       }
     },
-    summary: { type: "string" }
-  }
+    summary: {
+      type: "string"
+    }
+  },
+  required: [
+    "addenda",
+    "summary"
+  ],
+  additionalProperties: false
 };
 var IMPLEMENT_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["status", "summary", "validations_green", "blocker"],
   properties: {
-    status: { type: "string", enum: ["implemented", "blocked"] },
-    summary: { type: "string" },
-    validations_green: { type: "boolean" },
-    blocker: { type: ["string", "null"] }
-  }
+    status: {
+      type: "string",
+      enum: [
+        "implemented",
+        "blocked"
+      ]
+    },
+    summary: {
+      type: "string"
+    },
+    validations_green: {
+      type: "boolean"
+    },
+    blocker: {
+      type: [
+        "string",
+        "null"
+      ]
+    }
+  },
+  required: [
+    "status",
+    "summary",
+    "validations_green",
+    "blocker"
+  ],
+  additionalProperties: false
 };
 var WAVE_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["items", "remaining", "blocked"],
   properties: {
     items: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "repo", "repoRoot", "validations", "planFile", "worktree", "branch", "base", "resumeNote", "pr"],
         properties: {
-          id: { type: "string" },
-          repo: { type: "string" },
-          repoRoot: { type: "string" },
-          validations: { type: "array", items: { type: "string" } },
-          planFile: { type: "string" },
-          worktree: { type: "string" },
-          branch: { type: "string" },
-          base: { type: "string" },
-          resumeNote: { type: ["string", "null"] },
-          pr: { type: ["string", "null"], description: "the node's `pr:` frontmatter URL, null for a pre-PR node" }
-        }
+          id: {
+            type: "string"
+          },
+          repo: {
+            type: "string"
+          },
+          repoRoot: {
+            type: "string"
+          },
+          validations: {
+            type: "array",
+            items: {
+              type: "string"
+            }
+          },
+          planFile: {
+            type: "string"
+          },
+          worktree: {
+            type: "string"
+          },
+          branch: {
+            type: "string"
+          },
+          base: {
+            type: "string"
+          },
+          resumeNote: {
+            type: [
+              "string",
+              "null"
+            ]
+          },
+          pr: {
+            type: [
+              "string",
+              "null"
+            ],
+            description: "the node's `pr:` frontmatter URL, null for a pre-PR node"
+          }
+        },
+        required: [
+          "id",
+          "repo",
+          "repoRoot",
+          "validations",
+          "planFile",
+          "worktree",
+          "branch",
+          "base",
+          "resumeNote",
+          "pr"
+        ],
+        additionalProperties: false
       }
     },
-    remaining: { type: "number" },
+    remaining: {
+      type: "number"
+    },
     blocked: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "blockedOn"],
         properties: {
-          id: { type: "string" },
-          blockedOn: { type: "array", items: { type: "string" } }
-        }
+          id: {
+            type: "string"
+          },
+          blockedOn: {
+            type: "array",
+            items: {
+              type: "string"
+            }
+          }
+        },
+        required: [
+          "id",
+          "blockedOn"
+        ],
+        additionalProperties: false
       }
     }
-  }
+  },
+  required: [
+    "items",
+    "remaining",
+    "blocked"
+  ],
+  additionalProperties: false
 };
 var APPLY_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["applied"],
   properties: {
     applied: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "status"],
         properties: {
-          id: { type: "string" },
-          status: { type: "string", enum: ["done", "parked", "pr-open"] }
-        }
+          id: {
+            type: "string"
+          },
+          status: {
+            type: "string",
+            enum: [
+              "done",
+              "parked",
+              "pr-open"
+            ]
+          }
+        },
+        required: [
+          "id",
+          "status"
+        ],
+        additionalProperties: false
       }
     }
-  }
+  },
+  required: [
+    "applied"
+  ],
+  additionalProperties: false
 };
 var APPROVE_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["changed"],
-  properties: { changed: { type: "boolean" } }
+  properties: {
+    changed: {
+      type: "boolean"
+    }
+  },
+  required: [
+    "changed"
+  ],
+  additionalProperties: false
 };
 var PROBE_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["remaining", "notDone"],
   properties: {
-    remaining: { type: "number" },
-    notDone: { type: "array", items: { type: "string" } }
-  }
+    remaining: {
+      type: "number"
+    },
+    notDone: {
+      type: "array",
+      items: {
+        type: "string"
+      }
+    }
+  },
+  required: [
+    "remaining",
+    "notDone"
+  ],
+  additionalProperties: false
 };
 var PR_SCHEMA = {
   type: "object",
-  additionalProperties: false,
-  required: ["prs", "summary"],
   properties: {
     prs: {
       type: "array",
       items: {
         type: "object",
-        additionalProperties: false,
-        required: ["id", "url", "skipped", "reason"],
         properties: {
-          id: { type: "string" },
-          url: { type: ["string", "null"] },
-          skipped: { type: "boolean" },
-          reason: { type: ["string", "null"] }
-        }
+          id: {
+            type: "string"
+          },
+          url: {
+            type: [
+              "string",
+              "null"
+            ]
+          },
+          skipped: {
+            type: "boolean"
+          },
+          reason: {
+            type: [
+              "string",
+              "null"
+            ]
+          }
+        },
+        required: [
+          "id",
+          "url",
+          "skipped",
+          "reason"
+        ],
+        additionalProperties: false
       }
     },
-    summary: { type: "string" }
-  }
+    summary: {
+      type: "string"
+    }
+  },
+  required: [
+    "prs",
+    "summary"
+  ],
+  additionalProperties: false
 };
 
 // src/workflows/strapped-run/review-loop.ts
