@@ -19,7 +19,7 @@ import type {
 
 export const CODE_LENSES: Record<ReviewerId, string> = {
   a: 'correctness: logic bugs, unhandled edge cases, race conditions, broken error paths, and acceptance-criteria compliance',
-  b: 'convention and test fidelity: adherence to the assigned guidelines, and test quality — integration-style tests of public interfaces, no mocking, aiohttp test servers for network, polyfactory for stubs',
+  b: 'convention and test fidelity plus dead-code hygiene: adherence to the assigned guidelines, and test quality — integration-style tests of public interfaces, no mocking, aiohttp test servers for network, polyfactory for stubs; AND dead/duplicated/superseded code — leftover or unreachable code, tests or fixtures orphaned by a changed idea (kept after the code they covered was rewritten or removed), and code no acceptance criterion or addendum task needs',
 }
 
 export interface CodeReviewRoundOpts {
@@ -54,7 +54,7 @@ Worktree (the code under review lives here): ${item.worktree}${item.repo ? `\nTa
 Branch: ${item.branch}   Base: ${item.base}
 
 Procedure:
-1. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do.
+1. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do. Enumerate every item under its \`## Acceptance criteria\` as AC1..ACn — and, if the plan ALSO carries a \`## Feedback addendum\` section, every addendum task under it too, continuing the numbering — and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line pointing at the code/test that satisfies or fails it }). An AC or addendum item the CODE fails to satisfy or leaves untested is a BLOCKING finding. This checks the actual code, not just the plan. A plan with neither section → \`ac_checklist: []\`.
 2. In the worktree, run: git diff ${item.base}...${item.branch}
 3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
 ${item.validations && item.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${item.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
@@ -68,7 +68,7 @@ ${seenDigest || '(none — first round)'}
 
 Report only real, evidenced issues. Severity: "blocking" = bug or guideline violation that must be fixed; "concern" = likely problem needing a fix or justification; "suggestion" = optional polish (never drives rework). For each finding give a stable key "<rule-id-or-gap>:<file-or-location>". Set confidence honestly — findings under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), plus your findings.`
+You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), the ac_checklist covering every AC (and addendum task) from step 1, plus your findings.`
   }
 
   function refutePrompt(f: CodeFinding): string {
@@ -93,6 +93,7 @@ Your stance: this is NOT a real issue unless the code proves otherwise. Read the
     x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}`, reviewer: x.which }))
   )
   const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist] as const))
+  const acChecklists = Object.fromEntries(tagged.map(x => [x.which, x.r.ac_checklist] as const))
 
   const gating = allFindings.filter(f => f.severity !== 'suggestion')
   const suggestions = allFindings.filter(f => f.severity === 'suggestion')
@@ -123,6 +124,8 @@ ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
 
+AC/addendum checklists (per-item AC pass/violation/na verdicts from each reviewer, enumerating the deliverable plan's \`## Acceptance criteria\` plus any \`## Feedback addendum\` tasks): ${JSON.stringify(acChecklists, null, 2)}
+
 Seen digest from prior rounds:
 ${seenDigest || '(none — first round)'}
 
@@ -130,7 +133,7 @@ Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-c
 
 Tasks:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
-2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists.
+2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
 3. Return the ids of truly-NEW confirmed findings and the ids of duplicates.`,
     { label: `consolidate:${item.id}:r${roundLabel}`, phase: 'Consolidate', effort: 'low', schema: CONSOLIDATE_SCHEMA }
   )

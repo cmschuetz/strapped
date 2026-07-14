@@ -20,7 +20,7 @@ import type {
 
 export const PLAN_LENSES: Record<ReviewerId, string> = {
   a: 'completeness: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared',
-  b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), and steps that cannot work as written',
+  b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), planned work that is dead, duplicated, or superseded within the plan (steps or files a later step obviates, two deliverables doing the same work, or acceptance criteria/tests no remaining step produces), and steps that cannot work as written',
 }
 
 export function ruleBlock(rules: readonly Rule[]): string {
@@ -42,6 +42,18 @@ export interface ReviewLoopOpts {
   reviserPromptFn: (newConfirmed: Array<Refuted<Finding>>, roundFile: string) => string
   roundFilePrefix: string
   maxRounds: number
+  /**
+   * Human label for the artifact's own enumerated items — 'AC' for the plan
+   * flow's acceptance criteria, 'FA' for the feedback flow's addendum tasks.
+   * The reviewers enumerate items as `<label>1..<label>n`.
+   */
+  enumeratedItemsLabel: string
+  /**
+   * The Markdown heading whose items the reviewers enumerate into the
+   * `ac_checklist` — `## Acceptance criteria` for plans, `## Feedback addendum`
+   * for the feedback flow.
+   */
+  enumeratedItemsSection: string
 }
 
 // Runs the bounded adversarial review loop (2 rule-partitioned reviewers,
@@ -70,9 +82,11 @@ ${ruleBlock(rules)}
 Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
 ${digest(seen)}
 
+Enumerated ${opts.enumeratedItemsLabel} checklist — you and the other reviewer BOTH return this every round (it is NOT partitioned like the guideline rules): read EVERY artifact file's \`${opts.enumeratedItemsSection}\` section, enumerate each item in order as ${opts.enumeratedItemsLabel}1..${opts.enumeratedItemsLabel}n across the whole artifact, and return one ac_checklist entry per item ({ id: "${opts.enumeratedItemsLabel}<k>", verdict: pass|violation|na, evidence: one line }). An item the ${opts.artifactNoun} fails to satisfy, or that no step/test covers, is a BLOCKING finding carrying full guideline-rule weight — enumerating and checking these items is as load-bearing as the rule checklist. If no file has a \`${opts.enumeratedItemsSection}\` section, return \`ac_checklist: []\`.
+
 Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), plus your findings. Round: ${round}.`
+You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`
   }
 
   function refutePrompt(f: Finding): string {
@@ -108,6 +122,7 @@ Your stance: this is NOT a real gap unless the documents prove otherwise. Read t
       .filter((x): x is { r: FindingsResult; which: ReviewerId } => Boolean(x.r))
     const allFindings = tagged.flatMap(x => x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}` })))
     const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist] as const))
+    const acChecklists = Object.fromEntries(tagged.map(x => [x.which, x.r.ac_checklist] as const))
     const gating = allFindings.filter(f => f.severity !== 'suggestion')
     const suggestions = allFindings.filter(f => f.severity === 'suggestion')
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
@@ -138,6 +153,8 @@ ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
 
+AC/addendum checklists (per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts from each reviewer): ${JSON.stringify(acChecklists, null, 2)}
+
 Seen digest from prior rounds:
 ${digest(seen)}
 
@@ -145,7 +162,7 @@ Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — re
 
 Tasks:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists.
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
 3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`,
       { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: CONSOLIDATE_SCHEMA }
     )

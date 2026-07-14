@@ -118,10 +118,25 @@ export interface RuleCheck {
   evidence: string
 }
 
+/**
+ * One reviewer verdict on a single enumerated acceptance-criterion or feedback
+ * addendum item. Kept as its OWN required list (not folded into
+ * `rule_checklist`) so a reviewer can never silently omit the per-item AC/addendum
+ * verdicts: a required, separate field is enforced by the structured-output schema
+ * every round, giving ACs and addendums the same weight as guideline rules.
+ */
+export interface AcCheck {
+  id: string
+  verdict: 'pass' | 'violation' | 'na'
+  evidence: string
+}
+
 /** FINDINGS_SCHEMA */
 export interface FindingsResult {
   findings: Finding[]
   rule_checklist: RuleCheck[]
+  /** Per-item AC/addendum verdicts — required (may be empty when the artifact has no enumerated section). */
+  ac_checklist: AcCheck[]
 }
 
 /** REFUTE_SCHEMA */

@@ -25,7 +25,7 @@ State root for this run: ${cfg.dir}
 - Read the DAG + repos map: ${cfg.dir}/manifest.md
 - Read EVERY deliverable file under ${cfg.dir}/deliverables/ — each one's \`## Files to touch\` map tells you which files that deliverable owns, so you can route a comment's anchored file path to the deliverable that actually owns it (which may DIFFER from the PR the comment was left on).
 
-Fetched PR review comments (grouped by the deliverable whose PR they were left on; each carries the anchored \`path\`/\`line\` where present, plus the three categories: line-anchored review comments, review-SUBMISSION bodies with their \`state\` — a CHANGES_REQUESTED/COMMENTED/APPROVED summary — and global/issue comments):
+Fetched PR review comments (grouped by the deliverable whose PR they were left on; each carries the anchored \`path\`/\`line\` where present, plus the three categories: line-anchored review comments, review-SUBMISSION bodies with their \`state\` — a CHANGES_REQUESTED/COMMENTED/APPROVED summary — and global/issue comments). Each line comment carries its full anchored range \`start_line..line\` (with \`start_side\`/\`side\`) and a \`diff_hunk\` block — use that range + hunk as the code context the comment refers to, not just the single \`line\`:
 ${JSON.stringify(a.comments, null, 2)}
 
 Tasks:
@@ -54,6 +54,8 @@ Return, per affected deliverable: its id, the source PR the comments came from, 
     refuteArtifactPhrase: 'the amended deliverable set',
     roundFilePrefix: 'feedback-round',
     maxRounds: cfg.planRounds,
+    enumeratedItemsLabel: 'FA',
+    enumeratedItemsSection: '## Feedback addendum',
     reviserPromptFn: (newConfirmed, roundFile) =>
       `You are the PR-feedback addenda reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing ONLY the \`## Feedback addendum\` sections of the affected deliverable files under ${cfg.dir}/deliverables/, keeping every file conformant to ${cfg.conventionsFile}. Original ask (the fetched PR review comments) for reference: ${cfg.slug} feedback batch. You MUST NOT edit ${cfg.dir}/manifest.md or ${cfg.dir}/research.md, and you MUST NOT create new deliverable files, branches, or worktrees — the feedback flow attaches fixes only to EXISTING deliverables' \`## Feedback addendum\` sections.
 

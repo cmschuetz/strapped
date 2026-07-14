@@ -139,11 +139,42 @@ export const FINDINGS_SCHEMA = {
         ],
         "additionalProperties": false
       }
+    },
+    "ac_checklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "violation",
+              "na"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "description": "One reviewer verdict on a single enumerated acceptance-criterion or feedback addendum item. Kept as its OWN required list (not folded into `rule_checklist`) so a reviewer can never silently omit the per-item AC/addendum verdicts: a required, separate field is enforced by the structured-output schema every round, giving ACs and addendums the same weight as guideline rules."
+      },
+      "description": "Per-item AC/addendum verdicts — required (may be empty when the artifact has no enumerated section)."
     }
   },
   "required": [
     "findings",
-    "rule_checklist"
+    "rule_checklist",
+    "ac_checklist"
   ],
   "additionalProperties": false
 }
