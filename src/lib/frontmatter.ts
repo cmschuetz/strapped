@@ -73,28 +73,28 @@ export function writeFrontmatterFile(file: string, data: Frontmatter, content: s
 /**
  * Coerce a CLI-supplied value string to the scalar it denotes (so `set pr null`
  * stores YAML null → `pr: null`, `set x 100` stores 100 → `x: 100`), letting the
- * writer emit it faithfully. Falls back to the raw string when the input is not a
- * parseable scalar (or parses to nothing).
+ * writer emit it faithfully.
  *
- * A colon-space (`: `) free-text value parses to a YAML mapping, not a scalar —
- * `parked_reason "typecheck failed: TS2322"` would otherwise be corrupted into a
- * nested `{ "typecheck failed": "TS2322" }` object on disk. So any parse that
- * yields a plain object (non-null, non-array) is rejected and the literal string
- * is stored instead; only true scalars (null/number/bool) and the `[...]` deps
- * array form are coerced.
+ * We match the original `state.mjs` `parseScalar`/`parseBracketList` shapes
+ * EXPLICITLY rather than passing the raw string through the full YAML loader.
+ * The loader (js-yaml's core schema) coerces YAML numeric-adjacent tokens that
+ * the original CLI stored verbatim — `0x1F` → 31 (hex), `010` → 10, and under a
+ * YAML 1.1 loader `12:30` → 750 (sexagesimal) — silently changing a free-text
+ * field's on-disk representation. Restricting coercion to the intended forms
+ * (empty/`null`, a plain base-10 integer `-?\d+`, and the `[...]` deps flow
+ * array) reproduces the original parse behavior exactly; every other value —
+ * including colon-bearing free text like `parked_reason "typecheck failed:
+ * TS2322"` — is stored as the literal string.
  */
 export function coerceValue(value: string): unknown {
-  let parsed: unknown
-  try {
-    parsed = yaml.load(value)
-  } catch {
-    return value
+  const v = value.trim()
+  if (v === '' || v === 'null') return null
+  if (/^-?\d+$/.test(v)) return Number(v)
+  if (v.startsWith('[') && v.endsWith(']')) {
+    const inner = v.slice(1, -1).trim()
+    return inner === '' ? [] : inner.split(',').map(s => s.trim())
   }
-  if (parsed === undefined) return value
-  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    return value
-  }
-  return parsed
+  return value
 }
 
 /** Render a parsed frontmatter value as the string the CLI reports (`null` → "null"). */

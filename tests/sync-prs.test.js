@@ -107,7 +107,7 @@ test('unblocked child: pending D2 with deps [D1] gets an unblocked hint when D1 
 test('real-file round-trip: sync-prs.sh parses the grep shapes state.mjs (gray-matter) actually writes', () => {
   const env = makeHookEnv({ gh: MERGED })
   // Seed two deliverables, then let the gray-matter writer produce every
-  // grep-consumed shape: a pr-open status, a (js-yaml-quoted) pr URL, and a
+  // grep-consumed shape: a pr-open status, a single-space `pr:` URL line, and a
   // deps flow array — never hand-authored fixtures.
   const d1 = env.addDeliverable('my-run', 'D1-thing.md', {
     id: 'D1', title: 'Thing', deps: '[]', status: 'done', pr: 'null',
@@ -119,8 +119,10 @@ test('real-file round-trip: sync-prs.sh parses the grep shapes state.mjs (gray-m
   runState(env, ['set', d1, 'pr', 'https://github.com/o/r/pull/1'])
   runState(env, ['set', d2, 'deps', '[D1]'])
 
-  // The writer quoted the colon-bearing URL and kept the deps flow array.
-  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^pr: 'https:\/\/github\.com\/o\/r\/pull\/1'$/m)
+  // The writer emits the URL as a single-space `pr:` scalar line (the shape
+  // sync-prs.sh greps — js-yaml's core schema leaves this colon-bearing value
+  // unquoted) and keeps the deps flow array.
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^pr: https:\/\/github\.com\/o\/r\/pull\/1$/m)
   assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^status: pr-open$/m)
   assert.match(env.readDeliverable('my-run', 'D2-follow.md'), /^deps: \[D1\]$/m)
 
