@@ -1,6 +1,12 @@
-// Frontmatter parse + write through gray-matter (a bundled dependency). The
-// hand-rolled parser/single-field writer this file used to hold was dropped:
-// gray-matter owns BOTH parse and stringify now.
+// Frontmatter parse + write through js-yaml directly. The hand-rolled
+// parser/single-field writer this file used to hold was dropped: one js-yaml
+// engine owns BOTH parse and stringify now.
+//
+// (This previously went through gray-matter, but gray-matter statically pulls in
+// its own js-yaml@3 — while the write shape below needs a js-yaml@4 dump engine —
+// so the bundle carried TWO copies of js-yaml. gray-matter's only real job here
+// was splitting the `---` fences, which is the tiny `FENCE` regex below; dropping
+// the wrapper collapses the bundle to a single js-yaml with byte-identical output.)
 //
 // The one thing the CLI must guarantee is that the two shapes grep-based bash
 // consumers depend on survive a write:
@@ -8,42 +14,48 @@
 //      `sed 's/^deps:[[:space:]]*\[\(.*\)\]/\1/'`, which requires the `[...]` form;
 //   2. single-space `key: value` scalar block lines — `sync-prs.sh`/`preamble.sh`
 //      grep `^status:`/`^pr:`/`^id:`.
-// gray-matter serializes via js-yaml; the default dump reflows depth-1 arrays to
-// block sequences (`deps:\n  - D1`), which would break (1). So we hand gray-matter
-// a js-yaml engine pinned to `flowLevel: 1` (depth-1 nodes — the `deps` array — go
-// flow) + `condenseFlow` + `lineWidth: -1`; scalars stay single-space block lines,
-// satisfying both shapes at once. The manifest's `repos:`/`deliverables:`/`budgets:`
-// maps are NOT grep-consumed (only state.ts reads them, via gray-matter), so their
-// reflow to flow style under this engine is inconsequential.
+// A default js-yaml dump reflows depth-1 arrays to block sequences (`deps:\n  - D1`),
+// which would break (1). So the dump is pinned to `flowLevel: 1` (depth-1 nodes —
+// the `deps` array — go flow) + `condenseFlow` + `lineWidth: -1`; scalars stay
+// single-space block lines, satisfying both shapes at once. The manifest's
+// `repos:`/`deliverables:`/`budgets:` maps are NOT grep-consumed (only state.ts
+// reads them), so their reflow to flow style is inconsequential.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import matter from 'gray-matter'
 import yaml from 'js-yaml'
 
 /** Never returns — writes one prefixed line to stderr and exits 1. */
 export type Die = (msg: string) => never
 
-/** A parsed frontmatter block: gray-matter yields arbitrary YAML values. */
+/** A parsed frontmatter block: js-yaml yields arbitrary YAML values. */
 export type Frontmatter = Record<string, unknown>
 
 /** Back-compat aliases for consumers that annotated frontmatter values/list items. */
 export type FrontmatterValue = unknown
 export type ListItem = unknown
 
-// A js-yaml engine that keeps depth-1 arrays (the deliverable `deps` list) inline
-// while every scalar stays a single-space block line — the two grep-consumed shapes.
-const yamlEngine = {
-  parse: (input: string): object => (yaml.load(input) ?? {}) as object,
-  stringify: (data: object): string =>
-    yaml.dump(data, { flowLevel: 1, lineWidth: -1, condenseFlow: true }),
+// Leading `---` fence block: captures the YAML between the delimiters and consumes
+// the trailing newline, so `content` begins exactly where gray-matter's did.
+const FENCE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
+
+/** Dump a data block keeping depth-1 arrays inline and scalars as block lines. */
+function dumpBlock(data: Frontmatter): string {
+  return yaml.dump(data, { flowLevel: 1, lineWidth: -1, condenseFlow: true })
 }
 
-const MATTER_OPTIONS = { engines: { yaml: yamlEngine } }
+/** Split a source doc into its parsed data block and the remaining body. */
+function splitFrontmatter(src: string): FrontmatterFile {
+  const match = FENCE.exec(src)
+  if (!match) return { data: {}, content: src }
+  const consumed = match[0] ?? ''
+  const block = match[1] ?? ''
+  return { data: (yaml.load(block) ?? {}) as Frontmatter, content: src.slice(consumed.length) }
+}
 
 /** Parse a frontmatter document's data block; die on malformed YAML. */
 export function parseFrontmatter(src: string, file: string, die: Die): Frontmatter {
   try {
-    return matter(src, MATTER_OPTIONS).data
+    return splitFrontmatter(src).data
   } catch (err) {
     return die(`invalid frontmatter in ${file}: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -58,8 +70,7 @@ export interface FrontmatterFile {
 export function readFrontmatterFile(file: string, die: Die): FrontmatterFile {
   if (!existsSync(file)) die(`no such file: ${file}`)
   try {
-    const parsed = matter(readFileSync(file, 'utf8'), MATTER_OPTIONS)
-    return { data: parsed.data, content: parsed.content }
+    return splitFrontmatter(readFileSync(file, 'utf8'))
   } catch (err) {
     return die(`invalid frontmatter in ${file}: ${err instanceof Error ? err.message : String(err)}`)
   }
@@ -67,7 +78,8 @@ export function readFrontmatterFile(file: string, die: Die): FrontmatterFile {
 
 /** Re-serialize a frontmatter document through the pinned engine (whole-block write). */
 export function writeFrontmatterFile(file: string, data: Frontmatter, content: string): void {
-  writeFileSync(file, matter.stringify(content, data, MATTER_OPTIONS))
+  const out = Object.keys(data).length === 0 ? content : `---\n${dumpBlock(data)}---\n${content}`
+  writeFileSync(file, out)
 }
 
 /**
