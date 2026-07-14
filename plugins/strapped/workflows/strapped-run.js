@@ -68,7 +68,7 @@ const PLAN_SCHEMA = {
 const FINDINGS_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['findings', 'rule_checklist'],
+  required: ['findings', 'rule_checklist', 'ac_checklist'],
   properties: {
     findings: {
       type: 'array',
@@ -98,6 +98,25 @@ const FINDINGS_SCHEMA = {
         required: ['rule', 'verdict', 'evidence'],
         properties: {
           rule: { type: 'string' },
+          verdict: { type: 'string', enum: ['pass', 'violation', 'na'] },
+          evidence: { type: 'string' },
+        },
+      },
+    },
+    // The artifact's OWN normative items (acceptance criteria in the plan flow,
+    // `## Feedback addendum` tasks in the feedback flow), enumerated by the
+    // reviewer off disk as AC1..ACn / FA1..FAn. Required but may be empty (a
+    // reviewer with no ACs/addenda in scope returns []), so the AC/addendum
+    // verdict can never be silently omitted — the enforcement win over folding
+    // these into rule_checklist.
+    ac_checklist: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'verdict', 'evidence'],
+        properties: {
+          id: { type: 'string', description: 'AC1..ACn (plan/acceptance criteria) or FA1..FAn (feedback addendum tasks)' },
           verdict: { type: 'string', enum: ['pass', 'violation', 'na'] },
           evidence: { type: 'string' },
         },
@@ -267,7 +286,7 @@ const PR_SCHEMA = {
 
 const PLAN_LENSES = {
   a: 'completeness: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared',
-  b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), and steps that cannot work as written',
+  b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), planned work that is dead, duplicated, or superseded within the plan (a deliverable/step that no acceptance criterion needs, or that another deliverable already covers), and steps that cannot work as written',
 }
 
 function ruleBlock(rules) {
@@ -305,12 +324,14 @@ ${which === 'b' ? `\nSoundness — multi-repo checks specific to this run: verif
 Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
 ${ruleBlock(rules)}
 
+Acceptance-criteria / addendum checklist — the artifact's OWN contract, checked by BOTH reviewers every round (NOT partitioned like the guideline rules above): read every ${opts.artifactNoun} file's \`${opts.enumeratedItemsSection}\` section from the files you already opened in ${cfg.dir}, enumerate each item as \`${opts.enumeratedItemsLabel}1..${opts.enumeratedItemsLabel}n\`, and return an \`ac_checklist\` entry (id, verdict pass/violation/na, one line of evidence) for every one. Verify each item is fully and correctly covered by the ${opts.artifactNoun}; any gap is a BLOCKING finding at the same weight as a guideline-rule violation. If no ${opts.enumeratedItemsSection} section exists in scope, return \`ac_checklist: []\`.
+
 Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
 ${digest(seen)}
 
 Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), plus your findings. Round: ${round}.`
+You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}) AND an ac_checklist covering every enumerated ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`
   }
 
   function refutePrompt(f) {
@@ -344,6 +365,7 @@ Your stance: this is NOT a real gap unless the documents prove otherwise. Read t
     const tagged = reviews.map((r, i) => ({ r, which: i === 0 ? 'a' : 'b' })).filter(x => x.r)
     const allFindings = tagged.flatMap(x => x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}` })))
     const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist]))
+    const acChecklists = Object.fromEntries(tagged.map(x => [x.which, x.r.ac_checklist]))
     const gating = allFindings.filter(f => f.severity !== 'suggestion')
     const suggestions = allFindings.filter(f => f.severity === 'suggestion')
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
@@ -374,6 +396,8 @@ ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
 
+Acceptance-criteria / addendum checklists (the artifact's own ${opts.enumeratedItemsLabel} items): ${JSON.stringify(acChecklists, null, 2)}
+
 Seen digest from prior rounds:
 ${digest(seen)}
 
@@ -381,7 +405,7 @@ Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — re
 
 Tasks:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists.
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists and both acceptance-criteria/addendum checklists.
 3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`,
       { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: CONSOLIDATE_SCHEMA }
     )
@@ -475,6 +499,8 @@ Return the deliverable list and a one-paragraph summary.`,
     artifactNoun: 'plan',
     refuteArtifactPhrase: 'the implementation plan',
     roundFilePrefix: 'plan-round',
+    enumeratedItemsLabel: 'AC',
+    enumeratedItemsSection: '## Acceptance criteria',
     maxRounds: cfg.planRounds,
     reviserPromptFn: (newConfirmed, roundFile) =>
       `You are the plan reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing the plan files in ${cfg.dir} (manifest.md, research.md, deliverables/*.md), keeping every file conformant to ${cfg.conventionsFile}. Original ask for reference: ${a.sourcePlan}. Target repos (fix repo assignments and cross-repo base rules against these):
@@ -522,7 +548,7 @@ State root for this run: ${cfg.dir}
 - Read the DAG + repos map: ${cfg.dir}/manifest.md
 - Read EVERY deliverable file under ${cfg.dir}/deliverables/ — each one's \`## Files to touch\` map tells you which files that deliverable owns, so you can route a comment's anchored file path to the deliverable that actually owns it (which may DIFFER from the PR the comment was left on).
 
-Fetched PR review comments (grouped by the deliverable whose PR they were left on; each carries the anchored \`path\`/\`line\` where present, plus the three categories: line-anchored review comments, review-SUBMISSION bodies with their \`state\` — a CHANGES_REQUESTED/COMMENTED/APPROVED summary — and global/issue comments):
+Fetched PR review comments (grouped by the deliverable whose PR they were left on; each line-anchored comment carries the anchored \`path\` and its full selected span \`start_line\`..\`line\` where present — use the WHOLE reviewer-selected block, not just the last line, when a comment spans multiple lines — plus the three categories: line-anchored review comments, review-SUBMISSION bodies with their \`state\` — a CHANGES_REQUESTED/COMMENTED/APPROVED summary — and global/issue comments):
 ${JSON.stringify(a.comments, null, 2)}
 
 Tasks:
@@ -544,6 +570,8 @@ Return, per affected deliverable: its id, the source PR the comments came from, 
     artifactNoun: 'deliverable set',
     refuteArtifactPhrase: 'the amended deliverable set',
     roundFilePrefix: 'feedback-round',
+    enumeratedItemsLabel: 'FA',
+    enumeratedItemsSection: '## Feedback addendum',
     maxRounds: cfg.planRounds,
     reviserPromptFn: (newConfirmed, roundFile) =>
       `You are the PR-feedback addenda reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing ONLY the \`## Feedback addendum\` sections of the affected deliverable files under ${cfg.dir}/deliverables/, keeping every file conformant to ${cfg.conventionsFile}. Original ask (the fetched PR review comments) for reference: ${cfg.slug} feedback batch. You MUST NOT edit ${cfg.dir}/manifest.md or ${cfg.dir}/research.md, and you MUST NOT create new deliverable files, branches, or worktrees — the feedback flow attaches fixes only to EXISTING deliverables' \`## Feedback addendum\` sections.
@@ -566,13 +594,13 @@ For each finding: apply the fix by editing the relevant deliverable's \`## Feedb
 // --- stage: implement ---------------------------------------------------------
 
 const CODE_LENSES = {
-  a: 'correctness: logic bugs, unhandled edge cases, race conditions, broken error paths, and acceptance-criteria compliance',
-  b: 'convention and test fidelity: adherence to the assigned guidelines, and test quality — integration-style tests of public interfaces, no mocking, aiohttp test servers for network, polyfactory for stubs',
+  a: 'correctness: logic bugs, unhandled edge cases, race conditions, broken error paths, acceptance-criteria compliance, and unreachable or orphaned code paths left behind after changes (functions/branches/exports no longer reached by any caller or acceptance criterion)',
+  b: 'convention and test fidelity: adherence to the assigned guidelines, test quality — integration-style tests of public interfaces, no mocking, aiohttp test servers for network, polyfactory for stubs — and dead or orphaned tests, including tests that assert against removed behavior or cover code that no longer exists',
 }
 
 // One adversarial code-review round for one deliverable: 2 rule-partitioned
 // reviewers, per-finding refute pass, dedup-vs-seen consolidation.
-async function runCodeReviewRound({ item, round, confirmation, seen, recordSuffix }) {
+async function runCodeReviewRound({ item, round, confirmation, seen, recordSuffix, addendumMode }) {
   const rules = cfg.rulesByRound[round - 1]
   const roundLabel = confirmation ? `${round}-confirm` : `${round}`
   const seedUsed = cfg.seed + round
@@ -590,17 +618,21 @@ Procedure:
 2. In the worktree, run: git diff ${item.base}...${item.branch}
 3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
 ${item.validations && item.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${item.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
-Your lens (your main hunting ground beyond the rules): ${CODE_LENSES[which]}.
+Your lens (your main hunting ground beyond the rules): ${CODE_LENSES[which]}. Also flag any code or tests no longer reached by any acceptance criterion — orphaned/unreachable code paths and dead tests left behind after changes.
 
 Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly:
 ${ruleBlock(rules[which])}
+
+Directory-local guideline discovery (diff-scoped, NOT partitioned — both reviewers do this): from \`git diff ${item.base}...${item.branch}\`, note the directories of the touched files, then look for guideline docs (\`CONTRIBUTING\`/\`STYLE\`/\`README\`/\`AGENTS\`) IN or ABOVE those directories and apply any normative rules they carry as you would a guideline rule. Bound this strictly to the diff's touched directories — never a whole-repo doc sweep.
+
+Acceptance-criteria / addendum checklist — the deliverable's OWN contract, checked by BOTH reviewers every round (NOT partitioned like the guideline rules above): read the deliverable's \`## Acceptance criteria\` section from ${item.planFile} and enumerate each item as \`AC1..ACn\`${addendumMode ? `, AND read its \`## Feedback addendum\` tasks and enumerate each as \`FA1..FAn\`` : ''}. Return an \`ac_checklist\` entry (id, verdict pass/violation/na, one line of evidence) for every enumerated item, asserting each is actually IMPLEMENTED in the diff (\`git diff ${item.base}...${item.branch}\`). Any item not implemented is a BLOCKING finding at the same weight as a guideline-rule violation. If the section is absent, return \`ac_checklist: []\`.
 
 Known findings from earlier rounds — do NOT re-report these unless the code has regressed:
 ${seenDigest || '(none — first round)'}
 
 Report only real, evidenced issues. Severity: "blocking" = bug or guideline violation that must be fixed; "concern" = likely problem needing a fix or justification; "suggestion" = optional polish (never drives rework). For each finding give a stable key "<rule-id-or-gap>:<file-or-location>". Set confidence honestly — findings under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), plus your findings.`
+You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}) AND an ac_checklist covering every enumerated acceptance-criteria${addendumMode ? '/addendum' : ''} item, plus your findings.`
   }
 
   function refutePrompt(f) {
@@ -625,6 +657,7 @@ Your stance: this is NOT a real issue unless the code proves otherwise. Read the
     x.r.findings.map(f => ({ ...f, id: `r${roundLabel}-${x.which}-${f.id}`, reviewer: x.which }))
   )
   const checklists = Object.fromEntries(tagged.map(x => [x.which, x.r.rule_checklist]))
+  const acChecklists = Object.fromEntries(tagged.map(x => [x.which, x.r.ac_checklist]))
 
   const gating = allFindings.filter(f => f.severity !== 'suggestion')
   const suggestions = allFindings.filter(f => f.severity === 'suggestion')
@@ -655,6 +688,8 @@ ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
 
+Acceptance-criteria / addendum checklists (the deliverable's own AC/FA items): ${JSON.stringify(acChecklists, null, 2)}
+
 Seen digest from prior rounds:
 ${seenDigest || '(none — first round)'}
 
@@ -662,7 +697,7 @@ Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-c
 
 Tasks:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
-2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists.
+2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists and the two acceptance-criteria/addendum checklists.
 3. Return the ids of truly-NEW confirmed findings and the ids of duplicates.`,
     { label: `consolidate:${item.id}:r${roundLabel}`, phase: 'Consolidate', effort: 'low', schema: CONSOLIDATE_SCHEMA }
   )
@@ -738,7 +773,7 @@ async function implementOne(item, addendumMode) {
   return { item, outcome: 'implemented', summary: result.summary, roundsUsed: 0 }
 }
 
-async function reviewFixLoop(state, recordSuffix) {
+async function reviewFixLoop(state, recordSuffix, addendumMode) {
   if (state.outcome === 'parked') return { ...state, suggestions: [] }
   const item = state.item
   const seen = []
@@ -751,7 +786,7 @@ async function reviewFixLoop(state, recordSuffix) {
   for (let round = 1; round <= cfg.codeRounds; round++) {
     roundsUsed = round
     lastRoundFixedAll = false
-    const review = await runCodeReviewRound({ item, round, confirmation: false, seen, recordSuffix })
+    const review = await runCodeReviewRound({ item, round, confirmation: false, seen, recordSuffix, addendumMode })
     suggestions.push(...review.suggestions)
     if (review.converged) {
       converged = true
@@ -773,7 +808,7 @@ async function reviewFixLoop(state, recordSuffix) {
   }
 
   if (!converged && !parkedReason && lastRoundFixedAll) {
-    const confirm = await runCodeReviewRound({ item, round: cfg.codeRounds, confirmation: true, seen, recordSuffix })
+    const confirm = await runCodeReviewRound({ item, round: cfg.codeRounds, confirmation: true, seen, recordSuffix, addendumMode })
     suggestions.push(...confirm.suggestions)
     if (confirm.converged) {
       converged = true
@@ -908,7 +943,7 @@ async function implementStage() {
     const results = await pipeline(
       wave.items,
       item => implementOne(item, addendumMode),
-      state => reviewFixLoop(state, recordSuffix)
+      state => reviewFixLoop(state, recordSuffix, addendumMode)
     )
     const waveResults = results.filter(Boolean)
 

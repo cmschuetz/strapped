@@ -160,6 +160,59 @@ test('every conventions section cited by name in SKILL.md prose still exists as 
   }
 })
 
+test('plugin version is bumped (AC5)', () => {
+  const manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'))
+  assert.equal(manifest.version, '0.3.1')
+})
+
+// The three rule-snapshot skills whose Step 2 prose must mirror conventions'
+// broadened Rule extraction (skill traversal + the guideline-source allowlist).
+const RULE_SNAPSHOT_SKILLS = ['plan', 'implement', 'feedback']
+
+test('rule-extraction prose mentions skill traversal (AC1)', () => {
+  const sources = {
+    'conventions.md': readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8'),
+    ...Object.fromEntries(
+      RULE_SNAPSHOT_SKILLS.map(s => [`${s}/SKILL.md`, readFileSync(join(PLUGIN_ROOT, 'skills', s, 'SKILL.md'), 'utf8')])
+    ),
+  }
+  for (const [name, src] of Object.entries(sources)) {
+    assert.match(src, /skill traversal/i, `${name} lacks the skill-traversal instruction`)
+    assert.match(src, /recurse/i, `${name} does not instruct recursing`)
+    assert.match(src, /skills[\s\S]{0,40}loads/i, `${name} does not instruct following the skills a CLAUDE.md loads`)
+    assert.match(
+      src,
+      /skill path|skill file it came from|skill file\*\* as the rule source|skill file as the source/i,
+      `${name} does not record the skill file as the rule source`
+    )
+  }
+})
+
+test('rule-extraction prose lists non-CLAUDE.md guideline sources as an allowlist (AC1b)', () => {
+  const sources = {
+    'conventions.md': readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8'),
+    ...Object.fromEntries(
+      RULE_SNAPSHOT_SKILLS.map(s => [`${s}/SKILL.md`, readFileSync(join(PLUGIN_ROOT, 'skills', s, 'SKILL.md'), 'utf8')])
+    ),
+  }
+  for (const [name, src] of Object.entries(sources)) {
+    assert.ok(src.includes('CONTRIBUTING.md'), `${name} does not name CONTRIBUTING.md`)
+    assert.ok(src.includes('AGENTS.md'), `${name} does not name AGENTS.md`)
+    assert.match(src, /STYLE\*|\*GUIDELINES\*|CONVENTIONS\*|ARCHITECTURE\*/, `${name} does not list the style/conventions file patterns`)
+    assert.match(src, /allowlist,?\s*(not|never)\s+a whole-repo/i, `${name} does not frame the sources as an allowlist, not a whole-repo sweep`)
+  }
+})
+
+test('feedback SKILL Step 3 captures start_line and conventions documents the range (AC2)', () => {
+  const feedback = readFileSync(join(PLUGIN_ROOT, 'skills', 'feedback', 'SKILL.md'), 'utf8')
+  assert.ok(feedback.includes('start_line'), 'feedback SKILL Step 3 does not capture start_line')
+  assert.ok(feedback.includes('original_start_line'), 'feedback SKILL Step 3 does not capture original_start_line')
+  assert.match(feedback, /start_line.*\.\..*line|\[start_line\.\.line\]/, 'feedback SKILL does not carry the anchored span into comments[]')
+  const conventions = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
+  assert.ok(conventions.includes('start_line'), 'conventions Feedback loop does not document start_line')
+  assert.match(conventions, /start_line.*\.\..*line/, 'conventions Feedback loop does not document the start_line..line range')
+})
+
 test('workflow meta.names are unique and every referenced workflow name resolves', () => {
   const workflowsDir = join(PLUGIN_ROOT, 'workflows')
   const files = readdirSync(workflowsDir).filter(f => f.endsWith('.js'))

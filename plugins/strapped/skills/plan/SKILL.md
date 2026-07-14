@@ -86,8 +86,10 @@ The manifest (written by the planner agent in step 3) must carry the `repos:` ma
 
 ## Step 2 — Rule snapshot and per-round assignments
 
-1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md, one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
+1. Extract the guideline rules per the conventions' **Rule extraction** (one numbered rule per normative imperative, verbatim text + source path, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`. This is an LLM judgement step (no script) and discovers rules from THREE bounded sources: (a) every applicable `CLAUDE.md`; (b) **skill traversal** — recurse from each `CLAUDE.md` into the skills it loads or points to (the `SKILL.md` files it names, progressive-disclosure references), read them, and extract those skills' rules too, with the **skill file** as the rule source; and (c) a **fixed allowlist** of non-CLAUDE.md guideline files — `CONTRIBUTING.md`, `AGENTS.md`, `.cursor/rules/*`, `.github/copilot-instructions.md`, and root/`docs` files named `STYLE*`/`*GUIDELINES*`/`CONVENTIONS*`/`ARCHITECTURE*`. This is an **allowlist, not a whole-repo doc sweep** (the large-repo guard); extract only imperatives, source = the file path.
 2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions, adapted to emit full rule objects — for each round `1..max_rounds`, a `{"a": [{"id", "source", "text"}...], "b": [...]}` pair, shuffled with `random.Random(seed + round)` and split in half. Save the JSON output; it goes into the workflow args verbatim. Never use ad-hoc randomness — the seed is the only entropy source.
+
+The reviewers additionally enumerate each deliverable's `## Acceptance criteria` into a mandatory `ac_checklist` (as assigned checklist items alongside the guideline rules, at the same weight) — this is driven by the workflow prompt off the deliverable files, not by the snapshot, but the ACs written here are what those reviewers verify.
 
 ## Step 3 — Run the plan stage of the mono-workflow
 

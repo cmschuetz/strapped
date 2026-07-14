@@ -50,8 +50,10 @@ Determine the **in-scope deliverable set**: every deliverable with a non-null `p
 
 As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.random()`, so the split is computed skill-side):
 
-1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing).
+1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing). A re-extraction uses the same THREE bounded sources /strapped:plan uses: (a) every applicable `CLAUDE.md`; (b) **skill traversal** — recurse from each `CLAUDE.md` into the skills it loads and extract those skills' rules, with the skill file as the source; and (c) the **fixed allowlist** of non-CLAUDE.md guideline files (`CONTRIBUTING.md`, `AGENTS.md`, `.cursor/rules/*`, `.github/copilot-instructions.md`, `STYLE*`/`*GUIDELINES*`/`CONVENTIONS*`/`ARCHITECTURE*`) — an **allowlist, not a whole-repo sweep**.
 2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, a `{"a": [{"id","source","text"}...], "b": [...]}` pair shuffled with `random.Random(seed + round)` (seed from the manifest). Save the JSON — it becomes `rulesByRound`.
+
+Beyond the assigned guideline rules, the addenda reviewers enumerate each deliverable's `## Feedback addendum` tasks into a mandatory `ac_checklist` as `FA1..FAn` and verify each per item at the same weight as a rule — this is the hardening that makes addenda "stick" (driven by the workflow prompt off the deliverable files, not the snapshot).
 
 This single `rulesByRound` (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) is threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes it at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes it the same way). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
 
@@ -63,7 +65,7 @@ For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:`
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
    ```
-   Capture `path`, `line`/`original_line`, `diff_hunk`, `body`, `user.login`, `in_reply_to_id`.
+   Capture `path`, `start_line`/`original_start_line` (the top of the reviewer's multi-line selection — null for a single-line comment), `line`/`original_line` (the bottom), `diff_hunk`, `body`, `user.login`, `in_reply_to_id`. Carry the full anchored span `[start_line..line]` (single-line when `start_line` is null) on each comment in the `comments[]` payload alongside `diff_hunk`, so synthesis sees the whole reviewer-selected block, not just the last line.
 2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate

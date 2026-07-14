@@ -45,7 +45,7 @@ Each deliverable's `repo:` field is **required** and names one of the `repos:` e
 
 ## Step 2 — Rule assignments
 
-As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed.
+As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed. If re-extracting, use the conventions' **Rule extraction** in full — the same THREE bounded sources /strapped:plan uses: (a) every applicable `CLAUDE.md`; (b) **skill traversal** — recurse from each `CLAUDE.md` into the skills it loads and extract those skills' rules, with the skill file as the source; and (c) the **fixed allowlist** of non-CLAUDE.md guideline files (`CONTRIBUTING.md`, `AGENTS.md`, `.cursor/rules/*`, `.github/copilot-instructions.md`, `STYLE*`/`*GUIDELINES*`/`CONVENTIONS*`/`ARCHITECTURE*`) — an **allowlist, not a whole-repo sweep** — so implement's code-review rule corpus matches plan's. (The code reviewer ALSO discovers directory-local guideline docs scoped to the diff's touched directories at review time — that part lives in the workflow prompt, not here.)
 
 ## Step 3 — Dispatch the implement stage of the mono-workflow
 

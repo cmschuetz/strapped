@@ -40,7 +40,7 @@ function baseCfg(overrides = {}) {
   }
 }
 
-const NO_FINDINGS = { findings: [], rule_checklist: [{ rule: 'A1', verdict: 'pass', evidence: 'ok' }] }
+const NO_FINDINGS = { findings: [], rule_checklist: [{ rule: 'A1', verdict: 'pass', evidence: 'ok' }], ac_checklist: [] }
 const EMPTY_CONSOLIDATION = { new_confirmed_ids: [], duplicate_ids: [] }
 const CONFIRMED = { verdict: 'confirmed', confidence: 95, evidence: 'real' }
 
@@ -193,7 +193,7 @@ test('plan non-convergence → stoppedAt plan, no approve, no later stages', asy
     }),
     agent: agentByLabel({
       planner: PLAN,
-      'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
+      'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
       'refute:r1-a-f1': CONFIRMED,
       'consolidate:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
@@ -215,7 +215,7 @@ test('null refuter result → finding handled as vote-not-cast, loop completes w
     args: baseCfg(),
     agent: agentByLabel({
       planner: PLAN,
-      'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
+      'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
       'refute:r1-a-f1': () => null,
       'consolidate:r1': EMPTY_CONSOLIDATION,
@@ -317,7 +317,7 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
     agent: agentByLabel({
       'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
       'implement:D1': IMPLEMENTED,
-      'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [] },
+      'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
       'refute:D1:r1-a-f1': CONFIRMED,
       'consolidate:D1:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
@@ -546,4 +546,164 @@ test('feedback-synth: synthesis agent then review loop with feedback-round prefi
   assert.ok(synthCall.prompt.includes('Feedback addendum'))
   const consolidate = callWithLabel(calls, 'consolidate:r1')
   assert.ok(consolidate.prompt.includes(`${cfg.dir}/reviews/feedback-round-1.md`))
+})
+
+// --- D1: ACs/addenda as first-class rules, dead-code lens, broadened mining ---
+
+test('FINDINGS_SCHEMA has a required ac_checklist field (AC3)', async () => {
+  // The schema is not exported, but every reviewer agent is dispatched with it
+  // as opts.schema — inspect the real object the workflow hands the harness.
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel(planConverges()),
+  })
+  const schema = callWithLabel(calls, 'plan-review:a:r1').opts.schema
+  assert.ok(schema.required.includes('ac_checklist'), 'ac_checklist must be a required property')
+  const ac = schema.properties.ac_checklist
+  assert.equal(ac.type, 'array')
+  assert.deepEqual(Object.keys(ac.items.properties).sort(), ['evidence', 'id', 'verdict'])
+  assert.deepEqual(ac.items.properties.verdict.enum, ['pass', 'violation', 'na'])
+  assert.deepEqual(ac.items.required.sort(), ['evidence', 'id', 'verdict'])
+})
+
+test('plan reviewer prompt demands an enumerated acceptance-criteria checklist (AC3)', async () => {
+  const cfg = baseCfg()
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel(planConverges()),
+  })
+  const p = callWithLabel(calls, 'plan-review:a:r1').prompt
+  assert.ok(p.includes('## Acceptance criteria'), 'names the AC section to read')
+  assert.ok(p.includes('AC1..ACn'), 'interpolates the AC label into the enumeration directive')
+  assert.ok(p.includes('ac_checklist'), 'demands an ac_checklist')
+  assert.ok(p.includes('BLOCKING finding'), 'gaps weigh as blocking findings')
+  // The plan flow enumerates ACs, not the feedback FA addendum section.
+  assert.ok(!p.includes('## Feedback addendum'))
+})
+
+test('feedback reviewer prompt demands an enumerated addendum checklist (AC3)', async () => {
+  const comments = [
+    { deliverableId: 'D1', pr: 'https://github.com/o/r/pull/1', lineComments: [], reviewBodies: [], issueComments: [] },
+  ]
+  const cfg = baseCfg({
+    stages: ['feedback-synth'],
+    stageArgs: { 'feedback-synth': { comments, repos: REPOS } },
+  })
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'feedback-synth': { addenda: [], summary: 'no-op' },
+      'plan-review:a:r1': NO_FINDINGS,
+      'plan-review:b:r1': NO_FINDINGS,
+      'consolidate:r1': EMPTY_CONSOLIDATION,
+    }),
+  })
+  const p = callWithLabel(calls, 'plan-review:a:r1').prompt
+  assert.ok(p.includes('## Feedback addendum'), 'names the addendum section to read')
+  assert.ok(p.includes('FA1..FAn'), 'interpolates the FA label into the enumeration directive')
+  assert.ok(p.includes('ac_checklist'))
+  assert.ok(!p.includes('## Acceptance criteria'))
+})
+
+function implementCalls(extraStubs = {}, stageArgs = {}) {
+  return runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs }),
+    agent: agentByLabel({
+      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      ...extraStubs,
+    }),
+  })
+}
+
+test('code-review reviewer prompt demands an enumerated AC checklist (AC3b)', async () => {
+  const { calls } = await implementCalls()
+  const p = callWithLabel(calls, 'review:D1:a:r1').prompt
+  assert.ok(p.includes('## Acceptance criteria'), 'reads the AC section from the plan file')
+  assert.ok(p.includes(item('D1').planFile))
+  assert.ok(p.includes('AC1..ACn'))
+  assert.ok(p.includes('ac_checklist'))
+  assert.ok(p.includes('IMPLEMENTED in the diff'), 'each AC must be implemented in the diff')
+  // Non-addendum code review never enumerates the feedback addendum section.
+  assert.ok(!p.includes('## Feedback addendum'))
+})
+
+test('code-review reviewer prompt enumerates addendum tasks in addendumMode (AC3b)', async () => {
+  const { calls } = await implementCalls({}, { implement: { addendumMode: true, recordSuffix: '-feedback' } })
+  const p = callWithLabel(calls, 'review:D1:a:r1').prompt
+  assert.ok(p.includes('## Acceptance criteria'), 'still reads the AC section')
+  assert.ok(p.includes('## Feedback addendum'), 'additionally reads the addendum section')
+  assert.ok(p.includes('FA1..FAn'), 'enumerates addendum tasks as FA items')
+  assert.ok(p.includes('IMPLEMENTED in the diff'))
+})
+
+test('code-review reviewer prompt includes the dead-code / orphaned-test lens (AC4)', async () => {
+  const { calls } = await implementCalls()
+  const pa = callWithLabel(calls, 'review:D1:a:r1').prompt
+  const pb = callWithLabel(calls, 'review:D1:b:r1').prompt
+  // Reviewer a's correctness lens calls out unreachable/orphaned code.
+  assert.ok(pa.includes('orphaned') && pa.includes('unreachable'))
+  // Reviewer b's convention/test lens calls out dead/orphaned tests.
+  assert.ok(pb.includes('dead or orphaned tests'))
+  // Both carry the shared directive to flag code/tests no acceptance criterion reaches.
+  assert.ok(pa.includes('no longer reached by any acceptance criterion'))
+  assert.ok(pb.includes('no longer reached by any acceptance criterion'))
+})
+
+test('code-review reviewer prompt discovers touched-dir guideline docs (AC1b)', async () => {
+  const { calls } = await implementCalls()
+  const p = callWithLabel(calls, 'review:D1:a:r1').prompt
+  assert.ok(p.includes('Directory-local guideline discovery'))
+  assert.ok(p.includes('CONTRIBUTING'))
+  assert.ok(p.includes('STYLE'))
+  assert.ok(p.includes('never a whole-repo doc sweep'), 'bounded to the diff, not a repo sweep')
+})
+
+test('stubbed reviewer responses carry ac_checklist and still validate (AC6)', async () => {
+  // NO_FINDINGS is the shared clean stub; the additive field is present and empty.
+  assert.deepEqual(NO_FINDINGS.ac_checklist, [])
+  // A full plan+implement+pr chain still converges with the extended schema —
+  // proving the additive field did not regress any control flow.
+  const cfg = baseCfg({
+    stages: ['plan', 'implement', 'pr'],
+    stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: REPOS }, pr: { dryRun: false } },
+  })
+  const { result } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      ...planConverges(),
+      approve: { changed: true },
+      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  assert.deepEqual(result.completed, ['plan', 'implement', 'pr'])
+  assert.equal(result.stoppedAt, null)
+})
+
+test('feedback-synth prompt tells the synthesizer to use the full multi-line span (AC2)', async () => {
+  const comments = [
+    { deliverableId: 'D1', pr: 'https://github.com/o/r/pull/1', lineComments: [{ path: 'x.js', start_line: 2, line: 5, body: 'block' }], reviewBodies: [], issueComments: [] },
+  ]
+  const cfg = baseCfg({
+    stages: ['feedback-synth'],
+    stageArgs: { 'feedback-synth': { comments, repos: REPOS } },
+  })
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'feedback-synth': { addenda: [], summary: 'no-op' },
+      'plan-review:a:r1': NO_FINDINGS,
+      'plan-review:b:r1': NO_FINDINGS,
+      'consolidate:r1': EMPTY_CONSOLIDATION,
+    }),
+  })
+  const p = callWithLabel(calls, 'feedback-synth').prompt
+  assert.ok(p.includes('start_line'), 'mentions the span top')
+  assert.ok(p.includes('WHOLE reviewer-selected block'))
 })
