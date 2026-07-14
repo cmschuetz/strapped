@@ -277,8 +277,9 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
   assert.equal(afterLines.length, beforeLines.length)
   const changed = beforeLines.filter((line, i) => line !== afterLines[i])
   assert.deepEqual(changed, ['pr: null'])
-  // js-yaml quotes the colon-bearing URL value; the grep-consumed shape is the
-  // single-space `pr: ` line, which survives (sync-prs.sh tolerates the quote).
+  // js-yaml leaves the pr: URL unquoted (its :// is colon-slash, a valid plain
+  // scalar); it quotes only colon-SPACE values like parked_reason. The
+  // grep-consumed shape is the single-space `pr: ` line, which survives.
   assert.ok(
     afterLines.some(l => l.startsWith('pr: ') && l.includes('https://github.com/o/r/pull/9')),
     afterLines.join('\n')
