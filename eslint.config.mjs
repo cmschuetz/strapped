@@ -21,7 +21,18 @@ export default [
     },
     rules: {
       '@typescript-eslint/no-explicit-any': 'error',
-      '@typescript-eslint/ban-ts-comment': 'error',
+      // Explicitly ban all three suppressions. A bare `'error'` uses the rule's
+      // defaults, which leave `@ts-expect-error` allowed-with-description — a hole
+      // AC3 (and the README) require closed, so pin every variant to `true`.
+      '@typescript-eslint/ban-ts-comment': [
+        'error',
+        {
+          'ts-expect-error': true,
+          'ts-ignore': true,
+          'ts-nocheck': true,
+          'ts-check': false,
+        },
+      ],
       'no-restricted-syntax': [
         'error',
         {
