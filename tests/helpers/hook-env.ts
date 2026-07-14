@@ -21,6 +21,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { NODE } from './node-bin.ts'
 
 export const SYNC_PRS_SCRIPT = fileURLToPath(
   new URL('../../plugins/strapped/scripts/sync-prs.sh', import.meta.url)
@@ -75,6 +76,10 @@ export function makeHookEnv({ gh = null }: { gh?: string | null } = {}): HookEnv
   mkdirSync(bin)
 
   for (const tool of TOOLS) symlinkSync(resolveTool(tool), join(bin, tool))
+  // sync-prs.sh now shells to node (state.mjs cleanup/commit). Symlink the REAL
+  // node binary (not a version-manager shim, which needs the real $HOME the hook
+  // env deliberately isolates) so `command -v node` and the state.mjs calls work.
+  symlinkSync(NODE, join(bin, 'node'))
   if (gh != null) {
     writeFileSync(join(bin, 'gh'), gh)
     chmodSync(join(bin, 'gh'), 0o755)

@@ -47,7 +47,7 @@ If `exists` is `false` → stop with a helpful message (`slug <slug> not found u
    - Unsynthesized critique count from `critiques/user-critiques.md`.
 ## No-slug mode
 
-List every run with one summary line each (slug, status, done/total deliverables), then stop: glob `<stateRoot>/runs/*/manifest.md` — a single tier that never touches `repos/` (its sibling dir). Show each run's target repos alongside its slug.
+List every run with one summary line each (slug, status, done/total deliverables), then stop: glob `<stateRoot>/runs/*/manifest.md` — a single tier that never touches `repos/` (its sibling dir). Show each run's target repos alongside its slug. To enumerate the outstanding (non-merged) work itself across every run — each deliverable with its repo root resolved — use the read-only batch primitive `node $PLUGIN_ROOT/scripts/state.mjs outstanding` (the same command the SessionStart sync job gathers from); scope it to one run with `outstanding <runDir>`.
 
 ## Next action
 

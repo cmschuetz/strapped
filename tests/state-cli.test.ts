@@ -3,12 +3,12 @@
 // state-root fixtures in the exact conventions.md file shapes.
 
 import assert from 'node:assert/strict'
-import { type SpawnSyncReturns } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import yaml from 'js-yaml'
-import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.ts'
+import { deliverableFrontmatter, GIT_ENV, makeGitRepo, makeStateEnv } from './helpers/state-env.ts'
 
 // Read a frontmatter data block the same way the CLI does (js-yaml), for the
 // semantic-equality assertions on written output below.
@@ -681,4 +681,204 @@ test('feedback-index: misuse and unknown subcommand exit 1 with one stderr line'
   const setOnMissingIndex = env.runState(['feedback-index', 'set', dir, '1', 'resolved'])
   assert.equal(setOnMissingIndex.status, 1)
   assert.match(setOnMissingIndex.stderr, /no feedback index/)
+})
+
+// --- commit ------------------------------------------------------------------
+
+/** Commit subjects under a git-backed state root (newest first), for cadence assertions. */
+function gitLogSubjects(root: string): string[] {
+  const res = spawnSync('git', ['-C', root, 'log', '--pretty=%s'], {
+    encoding: 'utf8',
+    env: { ...process.env, ...GIT_ENV },
+  })
+  return res.status === 0 ? res.stdout.trim().split('\n').filter(Boolean) : []
+}
+
+test('commit: init-if-absent creates .git + a commit; clean tree → committed:false; captures a later set', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  const dfile = join(dir, 'deliverables', 'D1-x.md')
+
+  const first = env.runState(['commit'], { env: GIT_ENV })
+  assert.equal(first.status, 0, first.stderr)
+  const j1 = parse<{ stateRoot: string; initialized: boolean; committed: boolean }>(first)
+  assert.equal(j1.stateRoot, env.stateRoot)
+  assert.equal(j1.initialized, true)
+  assert.equal(j1.committed, true)
+  assert.ok(existsSync(join(env.stateRoot, '.git')))
+
+  // A second commit on a now-clean tree is a no-op and does not re-init.
+  const second = env.runState(['commit'], { env: GIT_ENV })
+  const j2 = parse<{ initialized: boolean; committed: boolean }>(second)
+  assert.equal(j2.initialized, false)
+  assert.equal(j2.committed, false)
+
+  // A `set` write is swept into the next explicit commit.
+  env.runState(['set', dfile, 'pr', 'https://github.com/o/r/pull/1'])
+  const third = env.runState(['commit'], { env: GIT_ENV })
+  assert.equal(parse<{ committed: boolean }>(third).committed, true)
+  assert.equal(gitLogSubjects(env.stateRoot).length, 2)
+})
+
+// --- auto-commit cadence -----------------------------------------------------
+
+test('auto-commit: transition commits (message names from→to) when .git exists; set does not; no .git → no repo; git-absent still returns JSON', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'done' }])
+  const dfile = join(dir, 'deliverables', 'D1-x.md')
+  env.runState(['commit'], { env: GIT_ENV }) // bootstrap the git-backed state root
+  const before = gitLogSubjects(env.stateRoot).length
+
+  env.runState(['transition', dfile, 'pr-open'])
+  const afterTransition = gitLogSubjects(env.stateRoot)
+  assert.equal(afterTransition.length, before + 1)
+  assert.match(afterTransition[0] ?? '', /done→pr-open/)
+
+  // A `set` write produces NO new commit.
+  env.runState(['set', dfile, 'pr', 'https://github.com/o/r/pull/1'])
+  assert.equal(gitLogSubjects(env.stateRoot).length, afterTransition.length)
+
+  // With NO .git, a transition still succeeds (correct JSON, exit 0) and creates no repo.
+  const env2 = makeStateEnv()
+  const dir2 = env2.writeRun('r2', [{ id: 'D1', status: 'done' }])
+  const f2 = join(dir2, 'deliverables', 'D1-x.md')
+  const res2 = env2.runState(['transition', f2, 'pr-open'])
+  assert.equal(res2.status, 0, res2.stderr)
+  assert.deepEqual(parse(res2), { file: f2, from: 'done', to: 'pr-open', changed: true })
+  assert.ok(!existsSync(join(env2.stateRoot, '.git')), 'auto path must not bootstrap a repo')
+
+  // A git-absent path (empty PATH for the git lookup) still returns correct JSON.
+  const env3 = makeStateEnv()
+  const dir3 = env3.writeRun('r3', [{ id: 'D1', status: 'done' }])
+  env3.runState(['commit'], { env: GIT_ENV })
+  const f3 = join(dir3, 'deliverables', 'D1-x.md')
+  const res3 = env3.runState(['transition', f3, 'pr-open'], { env: { PATH: '' } })
+  assert.equal(res3.status, 0, res3.stderr)
+  assert.deepEqual(parse(res3), { file: f3, from: 'done', to: 'pr-open', changed: true })
+})
+
+test('auto-commit: manifest-status commits with a manifest: message when .git exists', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }], { status: 'approved' })
+  env.runState(['commit'], { env: GIT_ENV })
+  const before = gitLogSubjects(env.stateRoot).length
+  env.runState(['manifest-status', dir, 'implementing'])
+  const after = gitLogSubjects(env.stateRoot)
+  assert.equal(after.length, before + 1)
+  assert.match(after[0] ?? '', /manifest: my-run approved→implementing/)
+})
+
+// --- cleanup -----------------------------------------------------------------
+
+/** Build a run whose repo-a root is a real git repo with a live worktree for the deliverable. */
+function withWorktree(status = 'pr-open') {
+  const env = makeStateEnv()
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const worktree = join(env.base, 'wt', 'my-run', 'D1')
+  repo.git('worktree', 'add', worktree, '-b', branch, 'main')
+  env.writeManifest('my-run', {
+    repos: [{ name: 'repo-a', root: repo.dir }],
+    deliverables: [{ id: 'D1', file: 'deliverables/D1-x.md', deps: [] }],
+  })
+  const file = env.addDeliverable(
+    'my-run',
+    'D1-x.md',
+    deliverableFrontmatter('D1', { status, worktree, branch })
+  )
+  return { env, repo, branch, worktree, file }
+}
+
+test('cleanup: removes the worktree, nulls worktree, keeps the branch and the .md body; second run is a no-op', () => {
+  const { env, repo, branch, worktree, file } = withWorktree()
+  const res = env.runState(['cleanup', file])
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<{ worktreeRemoved: boolean; repoRoot: string; worktree: string | null }>(res)
+  assert.equal(json.worktreeRemoved, true)
+  assert.equal(json.repoRoot, repo.dir)
+  assert.equal(json.worktree, null)
+  assert.ok(!existsSync(worktree), 'worktree dir removed')
+  const src = env.readFile(file)
+  assert.match(src, /^worktree: null$/m)
+  assert.match(src, /Body\./) // the .md body survives
+  // Regression guard for /strapped:pr --update: the branch must be preserved.
+  assert.ok(repo.git('branch', '--list', branch).stdout.includes(branch), 'branch preserved')
+
+  const second = env.runState(['cleanup', file])
+  assert.equal(second.status, 0, second.stderr)
+  assert.equal(parse<{ worktreeRemoved: boolean }>(second).worktreeRemoved, false)
+})
+
+test('cleanup: a bogus/missing worktree path does not throw', () => {
+  const env = makeStateEnv()
+  const repo = makeGitRepo()
+  env.writeManifest('my-run', {
+    repos: [{ name: 'repo-a', root: repo.dir }],
+    deliverables: [{ id: 'D1', file: 'deliverables/D1-x.md', deps: [] }],
+  })
+  const file = env.addDeliverable(
+    'my-run',
+    'D1-x.md',
+    deliverableFrontmatter('D1', { status: 'pr-open', worktree: join(env.base, 'gone', 'nowhere') })
+  )
+  const res = env.runState(['cleanup', file])
+  assert.equal(res.status, 0, res.stderr)
+})
+
+test('transition → merged (the /strapped:pr path): worktree removed + nulled, branch kept, stdout is only the transition JSON', () => {
+  const { env, repo, branch, worktree, file } = withWorktree('pr-open')
+  const res = env.runState(['transition', file, 'merged'])
+  assert.equal(res.status, 0, res.stderr)
+  // Cleanup side effects never leak to stdout — it is exactly the transition object.
+  assert.deepEqual(parse(res), { file, from: 'pr-open', to: 'merged', changed: true })
+  assert.ok(!existsSync(worktree), 'worktree removed on the merged flip')
+  const src = env.readFile(file)
+  assert.match(src, /^status: merged$/m)
+  assert.match(src, /^worktree: null$/m)
+  assert.ok(repo.git('branch', '--list', branch).stdout.includes(branch), 'branch preserved')
+})
+
+test('transition → non-merged leaves the worktree untouched; a git-absent merged flip still returns transition JSON', () => {
+  const kept = withWorktree('pr-open')
+  const res = kept.env.runState(['transition', kept.file, 'fixing'])
+  assert.equal(res.status, 0, res.stderr)
+  assert.ok(existsSync(kept.worktree), 'non-merged transition must not remove the worktree')
+  assert.match(kept.env.readFile(kept.file), new RegExp(`^worktree: ${kept.worktree.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'm'))
+
+  const absent = withWorktree('pr-open')
+  const res2 = absent.env.runState(['transition', absent.file, 'merged'], { env: { PATH: '' } })
+  assert.equal(res2.status, 0, res2.stderr)
+  assert.deepEqual(parse(res2), { file: absent.file, from: 'pr-open', to: 'merged', changed: true })
+})
+
+// --- outstanding -------------------------------------------------------------
+
+interface OutstandingJson {
+  stateRoot: string
+  deliverables: { slug: string; id: string; status: string; repo: string; repoRoot: string | null; worktree: string | null }[]
+}
+
+test('outstanding: all non-merged across runs with repoRoot; merged excluded; scoped to one run', () => {
+  const env = makeStateEnv()
+  env.writeRun('run-1', [
+    { id: 'D1', status: 'pr-open' },
+    { id: 'D2', status: 'merged' },
+    { id: 'D3', status: 'pending' },
+  ])
+  const r2 = env.writeRun('run-2', [{ id: 'D1', status: 'in-progress' }])
+
+  const all = env.runState(['outstanding'])
+  assert.equal(all.status, 0, all.stderr)
+  const j = parse<OutstandingJson>(all)
+  assert.equal(j.stateRoot, env.stateRoot)
+  const ids = j.deliverables.map(d => `${d.slug}/${d.id}`).sort()
+  assert.deepEqual(ids, ['run-1/D1', 'run-1/D3', 'run-2/D1'])
+  const d1 = j.deliverables.find(d => d.slug === 'run-1' && d.id === 'D1')
+  assert.ok(d1)
+  assert.equal(d1.repoRoot, '/abs/repo-a')
+  assert.equal(d1.status, 'pr-open')
+
+  const scoped = env.runState(['outstanding', r2])
+  assert.equal(scoped.status, 0, scoped.stderr)
+  assert.deepEqual(parse<OutstandingJson>(scoped).deliverables.map(d => d.id), ['D1'])
 })
