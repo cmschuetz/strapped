@@ -44,3 +44,22 @@ test('pr: the /strapped:pr singleton config omits rulesByRound entirely and stil
   })
   assert.deepEqual(result.results.pr, { prs: PR_RESULT.prs, summary: PR_RESULT.summary, dryRun: false })
 })
+
+test('feedback-synth: a non-boolean lite flag is rejected at config parse', async () => {
+  const cfg = {
+    slug: 'test-run',
+    dir: '/state/runs/test-run',
+    conventionsFile: '/plugin/conventions.md',
+    scripts: { state: '/plugin/scripts/state.mjs', worktree: '/plugin/scripts/ensure-worktree.sh' },
+    seed: 42,
+    confidenceMin: 70,
+    planRounds: 3,
+    codeRounds: 3,
+    stages: ['feedback-synth'],
+    stageArgs: { 'feedback-synth': { comments: [], repos: [], lite: 'yes' } },
+  }
+  await assert.rejects(
+    runWorkflow(WORKFLOW, { args: cfg, agent: agentByLabel({}) }),
+    /config: stageArgs\["feedback-synth"\]\.lite must be a boolean/
+  )
+})
