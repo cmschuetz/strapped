@@ -114,6 +114,10 @@ function parseFeedbackSynthArgs(value: unknown): FeedbackSynthStageArgs {
   const parsed: FeedbackSynthStageArgs = {}
   if (value.comments !== undefined) parsed.comments = value.comments
   if (value.repos !== undefined) parsed.repos = parseRepos(value.repos, 'stageArgs["feedback-synth"].repos')
+  if (value.lite !== undefined) {
+    if (typeof value.lite !== 'boolean') throw new Error('config: stageArgs["feedback-synth"].lite must be a boolean')
+    parsed.lite = value.lite
+  }
   return parsed
 }
 

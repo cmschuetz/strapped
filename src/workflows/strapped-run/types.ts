@@ -38,6 +38,12 @@ export interface FeedbackSynthStageArgs {
   /** The fetched PR review comments — embedded verbatim via JSON.stringify. */
   comments?: unknown
   repos?: RepoRef[]
+  /**
+   * Feedback-lite mode: synthesize the routed digest only — write no
+   * `## Feedback addendum` files and skip the adversarial review loop. The main
+   * agent (the lite skill's plan-mode gate) produces the user-approved plan.
+   */
+  lite?: boolean
 }
 
 export interface ImplementStageArgs {

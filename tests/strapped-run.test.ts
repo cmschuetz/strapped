@@ -547,3 +547,49 @@ test('feedback-synth: synthesis agent then review loop with feedback-round prefi
   const consolidate = callWithLabel(calls, 'consolidate:r1')
   assert.ok(consolidate.prompt.includes(`${cfg.dir}/reviews/feedback-round-1.md`))
 })
+
+test('feedback-synth: lite mode synthesizes without the review loop', async () => {
+  const comments = [
+    {
+      deliverableId: 'D1',
+      pr: 'https://github.com/o/r/pull/1',
+      lineComments: [{ path: 'src/thing.js', line: 3, body: 'rename this' }],
+      reviewBodies: [{ state: 'CHANGES_REQUESTED', body: 'needs a test' }],
+      issueComments: [],
+    },
+  ]
+  const synth = {
+    addenda: [{ deliverableId: 'D1', sourcePr: 'https://github.com/o/r/pull/1', crossDeliverable: false, tasks: ['rename thing', 'add the missing test'] }],
+    summary: 'two fixes on D1',
+  }
+  const cfg = baseCfg({
+    stages: ['feedback-synth'],
+    stageArgs: { 'feedback-synth': { comments, repos: REPOS, lite: true } },
+  })
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({ 'feedback-synth': synth }),
+  })
+  const stageResult = result.results['feedback-synth']
+  assert.deepEqual(stageResult, {
+    converged: true,
+    rounds: 0,
+    outstanding: [],
+    addenda: synth.addenda,
+    summary: synth.summary,
+  })
+  assert.deepEqual(result.completed, ['feedback-synth'])
+  assert.equal(result.stoppedAt, null)
+
+  // Lite runs the synthesis agent but NO adversarial review-loop agents.
+  assert.equal(callsWithLabelPrefix(calls, 'feedback-synth').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'plan-review').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'consolidate').length, 0)
+
+  // The lite synth prompt returns the digest only — it does NOT instruct
+  // writing `## Feedback addendum` files.
+  const synthCall = callWithLabel(calls, 'feedback-synth')
+  assert.ok(synthCall.prompt.includes('rename this'))
+  assert.ok(synthCall.prompt.includes('Return the routed digest ONLY'))
+  assert.ok(!synthCall.prompt.includes('Append a `## Feedback addendum` section'))
+})
