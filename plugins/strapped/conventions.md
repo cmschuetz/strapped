@@ -412,9 +412,32 @@ A cross-repo dep expresses **scheduling order only**, not a code dependency. Bec
 
 This is a hard rule reviewers and the planner enforce.
 
+## PR titles and bodies (Conventional Commits)
+
+This is the **default** PR title/body format, used whenever no other PR-creation criteria is supplied by repo config or a repo's CLAUDE.md. It follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) (and the joshbuchea commit-message guide).
+
+**Title** — `<type>(<scope>): <description>`:
+
+- `<scope>` is the **run slug** in parens (e.g. `feat(better-prs): …`). Never the `Dx` id.
+- `<description>` is an imperative, lower-case, concise summary of **this deliverable** (its own change, not the whole run), no trailing period. Keep the whole title line ≤ ~72 chars (aim ~50). Derive it from the deliverable's `title`/ACs — do not just echo the `Dx: <title>` frontmatter title.
+- `<type>` is chosen by the PR agent from the deliverable's **primary nature** — no frontmatter field stores it. Vocabulary and rubric:
+  - `feat` — adds a user-facing capability or behavior.
+  - `fix` — corrects a bug or wrong behavior.
+  - `refactor` — restructures code without changing behavior.
+  - `perf` — improves performance without changing behavior.
+  - `docs` — documentation-only.
+  - `test` — tests only.
+  - `build` — build system, bundling, or dependencies.
+  - `ci` — CI/automation config.
+  - `chore` — housekeeping that fits no other type.
+  - Pick the single type matching the deliverable's dominant change; when a deliverable spans several, choose the one carrying its point.
+- **Breaking change**: append `!` after the scope — `<type>(<scope>)!: <description>` — and add a `BREAKING CHANGE: <what changed + migration>` footer in the body.
+
+**Body** — a blank line after the title, then imperative prose explaining **what** and **why** (not how), wrapped ~72 cols. The existing structured pieces remain, in order: a one-paragraph summary, the acceptance criteria as a checklist, a `Stack:` table of the whole DAG with PR links, and `Depends on #<parent-PR>` for same-repo non-roots. Footers last: `BREAKING CHANGE:` when applicable, and any issue-closing footers (e.g. `Closes #<n>`).
+
 ## Stacked PRs
 
-Topological order over `done` deliverables. Per node: push/create in the **deliverable's own repo** — `git -C <deliverableRepoRoot> push -u origin <branch>`, then `gh pr create --head <branch> --base <parent-branch|main>` in that repo. Parent→child branch stacking only applies **within a single repo**; a cross-repo child roots on `main`, so its PR bases on `main` (not the parent branch) — no cross-repo rebase. PR body: summary + ACs + a `Stack:` table of the whole DAG with PR links + `Depends on #<parent-PR>` for same-repo non-roots. The `Stack:` table may span repos; group or label rows by repo. Record the URL in frontmatter, set status `pr-open`. `--dry-run` prints every git/gh command and PR body without pushing anything.
+Topological order over `done` deliverables. Per node: push/create in the **deliverable's own repo** — `git -C <deliverableRepoRoot> push -u origin <branch>`, then `gh pr create --head <branch> --base <parent-branch|main>` in that repo. Parent→child branch stacking only applies **within a single repo**; a cross-repo child roots on `main`, so its PR bases on `main` (not the parent branch) — no cross-repo rebase. The PR title and body follow the [PR titles and bodies (Conventional Commits)](#pr-titles-and-bodies-conventional-commits) spec above: a `<type>(<slug>): <description>` title, then the body's summary + ACs + a `Stack:` table of the whole DAG with PR links + `Depends on #<parent-PR>` for same-repo non-roots. The `Stack:` table may span repos; group or label rows by repo. Record the URL in frontmatter, set status `pr-open`. `--dry-run` prints every git/gh command and PR body without pushing anything.
 
 The `pr-open → merged` transition is owned by `scripts/sync-prs.sh`, run automatically by the plugin's SessionStart hook (startup/resume only, never per subagent): it checks each `pr-open` deliverable's PR via `gh`, flips merged ones, warns on closed-unmerged or changes-requested PRs, and hints at newly unblocked children. `/strapped:pr` performs the same idempotent flip when invoked manually.
 

@@ -38,7 +38,7 @@ Apply ONLY the \`## Feedback addendum\` section to the EXISTING code on this bra
 Before finishing, ALL validations must pass inside the worktree:
 ${item.validations.map(v => `- ${v}`).join('\n')}
 
-Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id} and the feedback fix. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} and the feedback fix in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
   }
   return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
 
@@ -53,7 +53,7 @@ Implement exactly what the plan specifies — its acceptance criteria are the co
 Before finishing, ALL validations must pass inside the worktree:
 ${item.validations.map(v => `- ${v}`).join('\n')}
 
-Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id}. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
 }
 
 function fixPrompt(cfg: RunConfig, item: WaveItem, findings: ReadonlyArray<Refuted<CodeFinding>>, round: number, recordSuffix: string): string {

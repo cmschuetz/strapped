@@ -1002,7 +1002,7 @@ Before finishing, ALL validations must pass inside the worktree:
 ${item.validations.map((v) => `- ${v}`).join(`
 `)}
 
-Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id} and the feedback fix. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`;
+Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} and the feedback fix in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`;
   }
   return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
 
@@ -1021,7 +1021,7 @@ Before finishing, ALL validations must pass inside the worktree:
 ${item.validations.map((v) => `- ${v}`).join(`
 `)}
 
-Commit your work on ${item.branch} with a conventional-commit message referencing ${item.id}. If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`;
+Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`;
 }
 function fixPrompt(cfg, item, findings, round, recordSuffix) {
   return `You are the fix agent for deliverable ${item.id} of strapped run "${cfg.slug}", code-review round ${round}. Fresh context — everything you need is below.
@@ -1331,7 +1331,7 @@ Procedure — the "Stacked PRs" section of ${cfg.conventionsFile} is authoritati
 2. Candidates: \`status: done\` nodes whose parents are all done, pr-open, or merged, processed in \`topo\` order.
 3. Per candidate, in that deliverable's OWN repo (every git/gh operation pinned to it via \`git -C <repoRoot>\` / running gh inside <repoRoot>):
    - \`git -C <repoRoot> push -u origin <branch>\`
-   - \`gh pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>\` — base per the cross-repo base rule (the parent deliverable's branch only when the parent is in the same repo; a root or cross-repo child bases on that repo's main). Body: one-paragraph summary, the acceptance criteria as a checklist, a Stack table of the whole DAG grouped by repo, and \`Depends on #<parent PR>\` for same-repo non-roots.
+   - \`gh pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<conventional title>" --body-file <generated>\` — base per the cross-repo base rule (the parent deliverable's branch only when the parent is in the same repo; a root or cross-repo child bases on that repo's main). Title and body follow the conventions' "PR titles and bodies (Conventional Commits)" spec: title \`<type>(${cfg.slug}): <description>\` — scope is the run slug "${cfg.slug}", \`<type>\` chosen from the deliverable's primary nature (feat/fix/refactor/perf/docs/test/build/ci/chore per the rubric there; \`!\` before the colon for a breaking change), \`<description>\` an imperative, lower-case, ≤~72-char summary of THIS deliverable with no trailing period (NOT a \`<Did>:\`-prefixed title). Body: a blank line then imperative what/why prose, then the retained structured pieces — one-paragraph summary, the acceptance criteria as a checklist, a Stack table of the whole DAG grouped by repo, and \`Depends on #<parent PR>\` for same-repo non-roots — then footers (\`BREAKING CHANGE:\` when applicable).
    - Record via the state script: \`node ${stateScript} set <deliverableFile> pr <url>\` then \`node ${stateScript} transition <deliverableFile> pr-open\`.
 4. After all creations, refresh every stack table via \`gh pr edit <num> --body-file <regenerated>\` so earlier PRs link the later ones.
 

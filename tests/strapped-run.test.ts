@@ -469,6 +469,11 @@ test('pr: guardrails + report-and-skip in prompt; dryRun print-only; skipped/rea
   assert.ok(prompt.includes('unauthenticated'))
   assert.ok(prompt.includes('no commits beyond its base'))
   assert.ok(prompt.includes('skipped: true'))
+  // Conventional-Commits title/body: scope = run slug, type vocabulary, no `Dx: <title>` form.
+  assert.ok(prompt.includes(`<type>(${cfg.slug}): <description>`))
+  assert.ok(prompt.includes('feat/fix/refactor/perf/docs/test/build/ci/chore'))
+  assert.ok(prompt.includes('BREAKING CHANGE:'))
+  assert.ok(!prompt.includes('<Did>: <title>'))
   assert.ok(!prompt.includes('DRY RUN'))
   assert.deepEqual(result.results.pr, { prs: PR_RESULT.prs, summary: PR_RESULT.summary, dryRun: false })
 
