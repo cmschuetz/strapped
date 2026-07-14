@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
-import { agentByLabel, runWorkflow } from './helpers/workflow-harness.js'
+import { agentByLabel, runWorkflow } from './helpers/workflow-harness.ts'
 
 const WORKFLOW = fileURLToPath(new URL('../plugins/strapped/workflows/strapped-run.js', import.meta.url))
 

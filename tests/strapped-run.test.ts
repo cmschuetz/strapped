@@ -12,7 +12,7 @@ import {
   callWithLabel,
   callsWithLabelPrefix,
   runWorkflow,
-} from './helpers/workflow-harness.js'
+} from './helpers/workflow-harness.ts'
 
 const WORKFLOW = fileURLToPath(new URL('../plugins/strapped/workflows/strapped-run.js', import.meta.url))
 
@@ -23,7 +23,7 @@ const RULES = {
   b: [{ id: 'B1', source: 'CLAUDE.md', text: 'rule b' }],
 }
 
-function baseCfg(overrides = {}) {
+function baseCfg(overrides: Record<string, unknown> = {}) {
   return {
     slug: 'test-run',
     dir: '/state/runs/test-run',
@@ -49,7 +49,7 @@ const PLAN = {
   summary: 'one deliverable covering the thing',
 }
 
-function finding(id, severity = 'blocking') {
+function finding(id: string, severity = 'blocking') {
   return {
     id,
     key: `gap:${id}`,
@@ -74,7 +74,7 @@ function planConverges() {
   }
 }
 
-function item(id, pr = null) {
+function item(id: string, pr: string | null = null) {
   return {
     id,
     repo: 'alpha',
@@ -93,7 +93,7 @@ const IMPLEMENTED = { status: 'implemented', summary: 'built the thing', validat
 const BLOCKED = { status: 'blocked', summary: 'partial', validations_green: false, blocker: 'missing dependency X' }
 
 /** Agent stubs for one node implementing cleanly and converging in code-review round 1. */
-function nodeConverges(id) {
+function nodeConverges(id: string) {
   return {
     [`implement:${id}`]: IMPLEMENTED,
     [`review:${id}:a:r1`]: NO_FINDINGS,
@@ -204,7 +204,7 @@ test('plan non-convergence → stoppedAt plan, no approve, no later stages', asy
   assert.deepEqual(result.completed, [])
   assert.equal(result.results.plan.converged, false)
   assert.equal(result.results.plan.outstanding.length, 1)
-  assert.equal(result.results.plan.outstanding[0].id, 'r1-a-f1')
+  assert.equal(result.results.plan.outstanding[0]?.id, 'r1-a-f1')
   assert.equal(callsWithLabelPrefix(calls, 'approve').length, 0)
   assert.equal(callsWithLabelPrefix(calls, 'coordinate:').length, 0)
   assert.equal(callsWithLabelPrefix(calls, 'pr-').length, 0)
@@ -281,8 +281,8 @@ test('implement: parked node blocks children → stoppedAt implement, no pr stag
   assert.equal(result.stoppedAt, 'implement')
   assert.deepEqual(result.completed, [])
   assert.equal(result.results.implement.allDone, false)
-  assert.equal(result.results.implement.outcomes[0].outcome, 'parked')
-  assert.equal(result.results.implement.outcomes[0].parkedReason, 'missing dependency X')
+  assert.equal(result.results.implement.outcomes[0]?.outcome, 'parked')
+  assert.equal(result.results.implement.outcomes[0]?.parkedReason, 'missing dependency X')
   assert.deepEqual(result.results.implement.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
   assert.equal(callsWithLabelPrefix(calls, 'pr-gate').length, 0)
   assert.equal(callsWithLabelPrefix(calls, 'pr-create').length, 0)
@@ -330,8 +330,8 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
     }),
   })
   assert.equal(result.results.implement.allDone, true)
-  assert.equal(result.results.implement.outcomes[0].outcome, 'done')
-  assert.equal(result.results.implement.outcomes[0].roundsUsed, 2)
+  assert.equal(result.results.implement.outcomes[0]?.outcome, 'done')
+  assert.equal(result.results.implement.outcomes[0]?.roundsUsed, 2)
 
   // Addendum-mode implementer prompt, not the from-scratch preamble.
   const implement = callWithLabel(calls, 'implement:D1')

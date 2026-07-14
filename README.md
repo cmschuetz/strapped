@@ -41,7 +41,25 @@ Add the marketplace by local path instead of GitHub so edits are live without pu
 
 Edit, then `/reload-plugins`. Push when happy; other machines pick it up via marketplace update.
 
-**TypeScript sources vs committed deployables.** Development happens in TypeScript under `src/` (bundled) and runs on [bun](https://bun.sh), managed by [asdf](https://asdf-vm.com) (`asdf install` in the repo root materializes the pinned `.tool-versions` toolchain, then `bun install` for the dev dependencies). The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-chain.mjs` — are **generated, committed artifacts**: plain node-runnable ESM with zero runtime dependencies, at the exact paths skills and conventions reference (marketplace installs run node, never bun). The loop is: edit `src/`, run `bun run build`, commit the regenerated artifacts alongside the sources. Never hand-edit a file with a `// GENERATED` header — `tests/build-sync.test.ts` runs `bun tools/build.ts --check` and fails the suite whenever a committed artifact is stale or hand-edited.
+**TypeScript sources vs committed deployables.** Development happens in TypeScript under `src/` (bundled) and runs on [bun](https://bun.sh), managed by [asdf](https://asdf-vm.com). One-time toolchain setup in the repo root:
+
+```
+asdf install      # materializes the pinned .tool-versions (bun + node)
+bun install       # dev dependencies (typescript, @types/bun); runtime deps stay zero
+```
+
+The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-chain.mjs` and `plugins/strapped/workflows/strapped-run.js` — are **generated, committed artifacts**: plain node-runnable ESM with zero runtime dependencies, at the exact paths skills and conventions reference (marketplace installs run node, never bun). The full pipeline is:
+
+```
+# edit src/ …
+bun run typecheck   # tsc --noEmit, strict mode over src/, tools/, tests/
+bun run lint        # eslint: bans any / @ts-* suppressions / `as unknown as`
+bun run build       # regenerate the committed deployables from src/
+bun test            # behavioral suite (or `npm test` for every gate — see Testing)
+git commit          # commit the regenerated artifacts ALONGSIDE the sources
+```
+
+Never hand-edit a file with a `// GENERATED` header. `tests/build-sync.test.ts` keeps source and deployables honest: it runs `bun tools/build.ts --check` and fails whenever a committed artifact is stale or hand-edited. The only JavaScript the repo *ships* is the three generated, marker-carrying deployables — `plugins/strapped/scripts/state.mjs`, `plugins/strapped/scripts/resolve-chain.mjs`, and `plugins/strapped/workflows/strapped-run.js`; everything a marketplace install runs is one of those three or bash. The single non-shipping exception is the dev-only ESLint flat config (`eslint.config.mjs`), which the linter must load as plain ESM and which is never packaged into an install. ESLint keeps the TypeScript honest across `src/`, `tools/`, and `tests/`: `@typescript-eslint/no-explicit-any` bans explicit `any`, `@typescript-eslint/ban-ts-comment` bans `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck`, and a `no-restricted-syntax` rule bans `as unknown as` double-casts, so a green typecheck can never have been bought with a suppression (implicit `any` is already caught by the strict tsconfig's `noImplicitAny`).
 
 ## Testing
 
@@ -49,12 +67,13 @@ Edit, then `/reload-plugins`. Push when happy; other machines pick it up via mar
 npm test
 ```
 
-Requires the asdf-pinned toolchain (`asdf install`, then `bun install`); `bun run test` is equivalent. Runtime dependencies remain zero — `typescript` and `@types/bun` are dev-only. The suite chains four gates:
+Requires the asdf-pinned toolchain (`asdf install`, then `bun install`). `npm test` is the canonical entry point kept as a working alias for CI/validation compatibility — npm just runs the script, and bun is on `PATH` via asdf; `bun run test` is equivalent. Runtime dependencies remain zero — `typescript`, `@types/bun`, `eslint`, and `@typescript-eslint/*` are dev-only. `typescript` is pinned to `~5.9.3` (rather than the TS7 line) because `@typescript-eslint@8`'s parser peer range is `>=4.8.4 <6.1.0`; the ESLint gate is what forces the pin, and the strict-config type-checking semantics the suite relies on are unchanged on the 5.9 line. The suite chains five gates:
 
 1. `claude plugin validate . --strict` — marketplace manifest (warnings are errors),
 2. `claude plugin validate plugins/strapped --strict` — plugin manifest, skills, hooks,
-3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and the `.ts` tests,
-4. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.js`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, and `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
+3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and all of `tests/` (the entire suite is TypeScript),
+4. `bun run lint` (`eslint`) — bans explicit `any`, `@ts-*` suppression comments, and `as unknown as` double-casts across `src/`, `tools/`, and `tests/`,
+5. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.ts`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, and `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
 
 For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
 
@@ -86,8 +105,6 @@ When reviewers request changes on a run's stacked PRs, `/strapped:feedback <slug
 A chain is a non-empty ordered subset of `plan`, `implement`, `pr` in that order; a config chain named like a built-in overrides it. `feedback`, `learn`, and `status` are excluded — they exist to put a human in the loop, which is exactly what a chain removes.
 
 **Full-auto is risky.** A chain substitutes the interactive gates: a converged plan is auto-approved without your final review, and PRs open without a human look at the diffs. That can work when you aren't available — but be sure it's what you want. `/strapped:run` discloses the skipped gates and asks once up front (skip with `--yes`), and `--dry-run` previews the resolved chain, would-be paths, and dispatch args without writing anything. Non-convergence, parked deliverables, or a failed gate stop the chain with a precise report and the resume command — it never proceeds silently.
-
-**Autocomplete wrappers (best-effort).** `node plugins/strapped/scripts/sync-chain-skills.mjs` generates a thin personal skill per chain at `~/.claude/skills/strapped-run-<chain>/`, so e.g. `/strapped-run-automode` autocompletes; each wrapper only delegates to `/strapped:run <chain>`. Wrappers are marked `generated_by: strapped`, re-syncing is idempotent, wrappers for removed chains are pruned, and unmarked skills are never touched. `/strapped:run` offers the sync after a run when you have config-defined chains.
 
 ## Per-project setup
 

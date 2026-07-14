@@ -14,8 +14,26 @@ const PLUGIN_ROOT = join(REPO_ROOT, 'plugins', 'strapped')
 
 const EXPECTED_WORKFLOW_NAMES = ['strapped-run']
 
+interface HookCommand {
+  type: string
+  command: string
+}
+interface HookMatcher {
+  matcher: string
+  hooks: HookCommand[]
+}
+interface HooksFile {
+  hooks: { SessionStart: HookMatcher[] } & Record<string, HookMatcher[]>
+}
+interface Marketplace {
+  plugins: { name: string; source: string }[]
+}
+
+const readHooks = (): HooksFile =>
+  JSON.parse(readFileSync(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8')) as HooksFile
+
 test('hooks.json parses and every hook command resolves to an existing executable under the plugin root', () => {
-  const hooks = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
+  const hooks = readHooks()
   const commands = Object.values(hooks.hooks)
     .flat()
     .flatMap(matcher => matcher.hooks)
@@ -32,8 +50,8 @@ test('hooks.json parses and every hook command resolves to an existing executabl
 })
 
 test('preamble hook fires on startup/clear/compact and not resume; sync-prs wiring untouched', () => {
-  const hooks = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'hooks', 'hooks.json'), 'utf8'))
-  const matchersFor = script =>
+  const hooks = readHooks()
+  const matchersFor = (script: string) =>
     hooks.hooks.SessionStart.filter(entry =>
       entry.hooks.some(h => h.type === 'command' && h.command.endsWith(`/scripts/${script}`))
     )
@@ -71,7 +89,9 @@ test('no skill retains an unconditional conventions-read instruction; every skil
 })
 
 test('marketplace.json plugin source dirs exist and hold a plugin manifest', () => {
-  const marketplace = JSON.parse(readFileSync(join(REPO_ROOT, '.claude-plugin', 'marketplace.json'), 'utf8'))
+  const marketplace = JSON.parse(
+    readFileSync(join(REPO_ROOT, '.claude-plugin', 'marketplace.json'), 'utf8')
+  ) as Marketplace
   assert.ok(Array.isArray(marketplace.plugins) && marketplace.plugins.length > 0)
   for (const plugin of marketplace.plugins) {
     const sourceDir = join(REPO_ROOT, plugin.source)
@@ -89,8 +109,8 @@ test('every skills/*/SKILL.md has frontmatter with name and description', () => 
     const src = readFileSync(join(skillsDir, dir, 'SKILL.md'), 'utf8')
     const frontmatter = src.match(/^---\n([\s\S]*?)\n---/)
     assert.ok(frontmatter, `${dir}/SKILL.md has no frontmatter`)
-    assert.match(frontmatter[1], /^name:\s*\S+/m, `${dir}/SKILL.md frontmatter lacks name`)
-    assert.match(frontmatter[1], /^description:\s*\S+/m, `${dir}/SKILL.md frontmatter lacks description`)
+    assert.match(frontmatter[1] ?? '', /^name:\s*\S+/m, `${dir}/SKILL.md frontmatter lacks name`)
+    assert.match(frontmatter[1] ?? '', /^description:\s*\S+/m, `${dir}/SKILL.md frontmatter lacks description`)
   }
 })
 
@@ -99,10 +119,10 @@ test('every skills/*/SKILL.md has frontmatter with name and description', () => 
 function conventionHeadings() {
   const src = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
   const prose = src.replace(/^```[\s\S]*?^```\s*$/gm, '')
-  return [...prose.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map(m => m[1])
+  return [...prose.matchAll(/^#{1,6}\s+(.+?)\s*$/gm)].map(m => m[1] ?? '')
 }
 
-const slugify = heading =>
+const slugify = (heading: string) =>
   heading
     .toLowerCase()
     .replace(/[^\w\- ]/g, '')
@@ -113,7 +133,7 @@ test('every anchor link in conventions.md and every SKILL.md link into conventio
   assert.ok(slugs.size > 0, 'expected headings in conventions.md')
 
   const conventionsSrc = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
-  const anchors = [...conventionsSrc.matchAll(/\]\(#([^)]+)\)/g)].map(m => m[1])
+  const anchors = [...conventionsSrc.matchAll(/\]\(#([^)]+)\)/g)].map(m => m[1] ?? '')
   assert.ok(anchors.length > 0, 'expected at least one anchor link in conventions.md')
   for (const anchor of anchors) {
     assert.ok(slugs.has(anchor), `conventions.md links to missing heading #${anchor}`)
@@ -123,7 +143,7 @@ test('every anchor link in conventions.md and every SKILL.md link into conventio
   for (const dir of readdirSync(skillsDir)) {
     const src = readFileSync(join(skillsDir, dir, 'SKILL.md'), 'utf8')
     for (const [, fragment] of src.matchAll(/\]\([^)#]*conventions\.md#([^)]+)\)/g)) {
-      assert.ok(slugs.has(fragment), `${dir}/SKILL.md links to missing conventions.md heading #${fragment}`)
+      assert.ok(slugs.has(fragment ?? ''), `${dir}/SKILL.md links to missing conventions.md heading #${fragment}`)
     }
   }
 })
@@ -166,7 +186,7 @@ test('workflow meta.names are unique and every referenced workflow name resolves
     const src = readFileSync(join(workflowsDir, f), 'utf8')
     const meta = src.match(/^export const meta = \{[\s\S]*?name:\s*'([^']+)'/m)
     assert.ok(meta, `${f} has no meta.name`)
-    return meta[1]
+    return meta[1] ?? ''
   })
   assert.equal(new Set(names).size, names.length, `duplicate workflow meta.names: ${names}`)
   assert.deepEqual([...names].sort(), EXPECTED_WORKFLOW_NAMES)

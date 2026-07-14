@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
-import { PREAMBLE_SCRIPT, makeHookEnv } from './helpers/hook-env.js'
+import { PREAMBLE_SCRIPT, makeHookEnv, type HookEnv, type RunOptions } from './helpers/hook-env.ts'
 import { NODE } from './helpers/node-bin.ts'
 import { STATE_SCRIPT } from './helpers/state-env.ts'
 
@@ -18,11 +18,11 @@ const PLUGIN_ROOT = fileURLToPath(new URL('../plugins/strapped', import.meta.url
 
 const SENTINEL_LINE = '=== STRAPPED PREAMBLE (strapped-preamble-v1) ==='
 
-const runPreamble = (env, opts = {}) =>
+const runPreamble = (env: HookEnv, opts: RunOptions = {}) =>
   env.run({
     script: PREAMBLE_SCRIPT,
     ...opts,
-    env: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...(opts.env || {}) },
+    env: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...(opts.env ?? {}) },
   })
 
 test('full injection: sentinel + complete conventions + state summary', () => {
@@ -84,7 +84,7 @@ test('unresolvable stateRoot: static preamble still injected, cwd-independent', 
     assert.ok(res.stdout.includes('## Cleanup recipe'))
     assert.ok(res.stdout.includes('No strapped runs found.'))
   }
-  assert.equal(results[0].stdout, results[1].stdout, 'output must not depend on the cwd')
+  assert.equal(results[0]?.stdout, results[1]?.stdout, 'output must not depend on the cwd')
 })
 
 test('missing conventions.md: silent exit 0', () => {
