@@ -7,8 +7,15 @@ import { type SpawnSyncReturns } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
-import matter from 'gray-matter'
+import yaml from 'js-yaml'
 import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.ts'
+
+// Read a frontmatter data block the same way the CLI does (js-yaml), for the
+// semantic-equality assertions on written output below.
+function fmData(src: string): Record<string, unknown> {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(src)
+  return m ? ((yaml.load(m[1] ?? '') ?? {}) as Record<string, unknown>) : {}
+}
 
 interface RepoJson {
   name: string | null
@@ -293,7 +300,7 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
 
 test('set: untouched fields survive semantically and every grep-consumed shape holds after a write', () => {
   const env = makeStateEnv()
-  // The writer is gray-matter now, so the guarantee is semantic — untouched
+  // The writer re-serializes via js-yaml now, so the guarantee is semantic — untouched
   // fields parse to identical values — plus survival of the two grep-consumed
   // shapes (the `deps: [...]` flow array and single-space `key: value` lines),
   // NOT byte-for-byte preservation of irregular input spacing.
@@ -326,8 +333,8 @@ test('set: untouched fields survive semantically and every grep-consumed shape h
   assert.match(after, /^deps: \[D1,D2\]$/m)
 
   // (ii) every untouched field parses to an identical value.
-  const before = matter(original).data
-  const now = matter(after).data
+  const before = fmData(original)
+  const now = fmData(after)
   for (const key of ['id', 'title', 'deps', 'pr', 'parked_reason']) {
     assert.deepEqual(now[key], before[key], `${key} must survive the write`)
   }
@@ -357,7 +364,7 @@ test('set: colon-bearing free-text value round-trips as the exact string (not a 
   assert.equal(res.status, 0, res.stderr)
   assert.deepEqual(parse(res), { file, field: 'parked_reason', old: 'null', new: reason })
   // The field must re-parse to the literal string, NOT a YAML mapping.
-  const now = matter(env.readFile(file)).data
+  const now = fmData(env.readFile(file))
   assert.equal(now.parked_reason, reason)
   assert.equal(typeof now.parked_reason, 'string')
 })
