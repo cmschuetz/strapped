@@ -348,6 +348,19 @@ test('set: newline-bearing value → exit 1, file untouched (no frontmatter line
   assert.deepEqual(statusLines, ['status: done'])
 })
 
+test('set: colon-bearing free-text value round-trips as the exact string (not a nested map)', () => {
+  const env = makeStateEnv()
+  const file = env.addDeliverable('my-run', 'D1-x.md', deliverableFrontmatter('D1', { status: 'parked' }))
+  const reason = 'typecheck failed: TS2322'
+  const res = env.runState(['set', file, 'parked_reason', reason])
+  assert.equal(res.status, 0, res.stderr)
+  assert.deepEqual(parse(res), { file, field: 'parked_reason', old: 'null', new: reason })
+  // The field must re-parse to the literal string, NOT a YAML mapping.
+  const now = matter(env.readFile(file)).data
+  assert.equal(now.parked_reason, reason)
+  assert.equal(typeof now.parked_reason, 'string')
+})
+
 // --- transition ------------------------------------------------------------
 
 test('transition: skip-edges pending→in-progress, in-progress→done, in-progress→parked, parked→in-progress each accepted', () => {

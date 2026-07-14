@@ -75,6 +75,13 @@ export function writeFrontmatterFile(file: string, data: Frontmatter, content: s
  * stores YAML null → `pr: null`, `set x 100` stores 100 → `x: 100`), letting the
  * writer emit it faithfully. Falls back to the raw string when the input is not a
  * parseable scalar (or parses to nothing).
+ *
+ * A colon-space (`: `) free-text value parses to a YAML mapping, not a scalar —
+ * `parked_reason "typecheck failed: TS2322"` would otherwise be corrupted into a
+ * nested `{ "typecheck failed": "TS2322" }` object on disk. So any parse that
+ * yields a plain object (non-null, non-array) is rejected and the literal string
+ * is stored instead; only true scalars (null/number/bool) and the `[...]` deps
+ * array form are coerced.
  */
 export function coerceValue(value: string): unknown {
   let parsed: unknown
@@ -83,7 +90,11 @@ export function coerceValue(value: string): unknown {
   } catch {
     return value
   }
-  return parsed === undefined ? value : parsed
+  if (parsed === undefined) return value
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return value
+  }
+  return parsed
 }
 
 /** Render a parsed frontmatter value as the string the CLI reports (`null` → "null"). */

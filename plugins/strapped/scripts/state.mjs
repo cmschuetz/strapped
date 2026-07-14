@@ -3615,7 +3615,12 @@ function coerceValue(value) {
   } catch {
     return value;
   }
-  return parsed === undefined ? value : parsed;
+  if (parsed === undefined)
+    return value;
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    return value;
+  }
+  return parsed;
 }
 function valueToString(value) {
   return value === null ? "null" : String(value);
