@@ -10,6 +10,7 @@ allowed-tools:
   - Grep
   - Workflow
   - AskUserQuestion
+  - EnterPlanMode
   - ExitPlanMode
 ---
 
@@ -102,7 +103,9 @@ With `lite: true` the `feedback-synth` stage runs its synthesis subagent (OFF yo
 
 ## Step 4 — Plan mode (the user gate)
 
-Now the main agent plans, in Claude's **native plan mode**. Read the Step 3 digest + every in-scope deliverable plan under `<runDir>/deliverables/` + the existing code across the affected worktrees, and plan a cross-deliverable refactor that closes the review feedback. Resolve any ambiguity fast by asking the user with **AskUserQuestion** (routing decisions, scope calls, competing fixes). Make **NO code edits before approval**. Present the finished plan via **ExitPlanMode** — the native-plan-mode gate that replaces `/strapped:feedback`'s adversarial review + explicit-approval gate. Call out cross-deliverable reassignments explicitly (a comment left on PR X routed to deliverable Y) and state the topological (stack) implement order.
+**Enter plan mode programmatically FIRST — before reading anything or asking anything — by calling `EnterPlanMode`.** This is what actually *forces* the refinement pass into a plan: the harness then blocks every mutating tool (Edit/Write/etc.) until you call `ExitPlanMode`, so "no code edits before approval" is a harness-enforced guarantee, not a convention the model may drift from. `EnterPlanMode` surfaces its own entry consent, but invoking `/strapped:feedback-lite` IS that consent — the whole command is a plan-then-implement gate — so entry is expected here, not a separate decision to deliberate.
+
+With plan mode engaged, the main agent plans in Claude's **native plan mode**. Read the Step 3 digest + every in-scope deliverable plan under `<runDir>/deliverables/` + the existing code across the affected worktrees, and plan a cross-deliverable refactor that closes the review feedback. Resolve any ambiguity fast by asking the user with **AskUserQuestion** (routing decisions, scope calls, competing fixes). Make **NO code edits before approval** (plan mode enforces this — but never try to work around it). Present the finished plan via **ExitPlanMode** — the native-plan-mode approval gate that replaces `/strapped:feedback`'s adversarial review + explicit-approval gate. Call out cross-deliverable reassignments explicitly (a comment left on PR X routed to deliverable Y) and state the topological (stack) implement order.
 
 ## Step 5 — Approve
 
