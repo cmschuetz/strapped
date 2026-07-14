@@ -53,12 +53,13 @@ The files the plugin actually ships — e.g. `plugins/strapped/scripts/resolve-c
 ```
 # edit src/ …
 bun run typecheck   # tsc --noEmit, strict mode over src/, tools/, tests/
+bun run lint        # eslint: bans any / @ts-* suppressions / `as unknown as`
 bun run build       # regenerate the committed deployables from src/
 bun test            # behavioral suite (or `npm test` for every gate — see Testing)
 git commit          # commit the regenerated artifacts ALONGSIDE the sources
 ```
 
-Never hand-edit a file with a `// GENERATED` header. Two guard tests keep source and deployables honest: `tests/build-sync.test.ts` runs `bun tools/build.ts --check` and fails whenever a committed artifact is stale or hand-edited, and `tests/no-stray-js.test.ts` fails if any tracked `.js`/`.mjs`/`.cjs` is not one of those four marker-carrying deployables — so the only JavaScript in the repo is, and stays, the generated output (everything else is TypeScript or bash).
+Never hand-edit a file with a `// GENERATED` header. `tests/build-sync.test.ts` keeps source and deployables honest: it runs `bun tools/build.ts --check` and fails whenever a committed artifact is stale or hand-edited. The only JavaScript the repo ships is the three generated, marker-carrying deployables — `plugins/strapped/scripts/state.mjs`, `plugins/strapped/scripts/resolve-chain.mjs`, and `plugins/strapped/workflows/strapped-run.js` — everything else is TypeScript or bash. ESLint keeps the TypeScript honest across `src/`, `tools/`, and `tests/`: `@typescript-eslint/no-explicit-any` bans explicit `any`, `@typescript-eslint/ban-ts-comment` bans `@ts-ignore`/`@ts-expect-error`/`@ts-nocheck`, and a `no-restricted-syntax` rule bans `as unknown as` double-casts, so a green typecheck can never have been bought with a suppression (implicit `any` is already caught by the strict tsconfig's `noImplicitAny`).
 
 ## Testing
 
@@ -66,12 +67,13 @@ Never hand-edit a file with a `// GENERATED` header. Two guard tests keep source
 npm test
 ```
 
-Requires the asdf-pinned toolchain (`asdf install`, then `bun install`). `npm test` is the canonical entry point kept as a working alias for CI/validation compatibility — npm just runs the script, and bun is on `PATH` via asdf; `bun run test` is equivalent. Runtime dependencies remain zero — `typescript` and `@types/bun` are dev-only. The suite chains four gates:
+Requires the asdf-pinned toolchain (`asdf install`, then `bun install`). `npm test` is the canonical entry point kept as a working alias for CI/validation compatibility — npm just runs the script, and bun is on `PATH` via asdf; `bun run test` is equivalent. Runtime dependencies remain zero — `typescript`, `@types/bun`, `eslint`, and `@typescript-eslint/*` are dev-only. The suite chains five gates:
 
 1. `claude plugin validate . --strict` — marketplace manifest (warnings are errors),
 2. `claude plugin validate plugins/strapped --strict` — plugin manifest, skills, hooks,
 3. `bun run typecheck` (`tsc --noEmit`) — strict-mode TypeScript over `src/`, `tools/`, and all of `tests/` (the entire suite is TypeScript),
-4. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.ts`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`, and `tests/no-stray-js.test.ts` enforces both the deployables-only JS rule and a zero-`any`/no-suppression scan across every `.ts` source. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
+4. `bun run lint` (`eslint`) — bans explicit `any`, `@ts-*` suppression comments, and `as unknown as` double-casts across `src/`, `tools/`, and `tests/`,
+5. `bun test` — behavioral tests: each workflow in `plugins/strapped/workflows/` runs unmodified through a tiny eval harness (`tests/helpers/workflow-harness.ts`) with recording `agent`/`workflow` stubs, `scripts/sync-prs.sh` runs for real against a temp state root with a stub `gh` and an isolated `HOME`, and `tests/build-sync.test.ts` verifies the committed generated artifacts are byte-identical to a fresh `bun run build`. Tests spawn the deployables under `node` (deploy parity — under `bun test`, `process.execPath` is bun).
 
 For interactive testing, load the plugin straight from your checkout: `claude --plugin-dir ~/Projects/strapped/plugins/strapped` (then `/reload-plugins` after edits).
 
@@ -103,8 +105,6 @@ When reviewers request changes on a run's stacked PRs, `/strapped:feedback <slug
 A chain is a non-empty ordered subset of `plan`, `implement`, `pr` in that order; a config chain named like a built-in overrides it. `feedback`, `learn`, and `status` are excluded — they exist to put a human in the loop, which is exactly what a chain removes.
 
 **Full-auto is risky.** A chain substitutes the interactive gates: a converged plan is auto-approved without your final review, and PRs open without a human look at the diffs. That can work when you aren't available — but be sure it's what you want. `/strapped:run` discloses the skipped gates and asks once up front (skip with `--yes`), and `--dry-run` previews the resolved chain, would-be paths, and dispatch args without writing anything. Non-convergence, parked deliverables, or a failed gate stop the chain with a precise report and the resume command — it never proceeds silently.
-
-**Autocomplete wrappers (best-effort).** `node plugins/strapped/scripts/sync-chain-skills.mjs` generates a thin personal skill per chain at `~/.claude/skills/strapped-run-<chain>/`, so e.g. `/strapped-run-automode` autocompletes; each wrapper only delegates to `/strapped:run <chain>`. Wrappers are marked `generated_by: strapped`, re-syncing is idempotent, wrappers for removed chains are pruned, and unmarked skills are never touched. `/strapped:run` offers the sync after a run when you have config-defined chains.
 
 ## Per-project setup
 
