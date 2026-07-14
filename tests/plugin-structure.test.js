@@ -144,7 +144,6 @@ const PROSE_CITED_SECTIONS = [
   'Cleanup recipe',
   'Composable chains',
   'Chain configs',
-  'Wrapper skill sync',
   'Harness scripts',
   'Stacked PRs',
 ]

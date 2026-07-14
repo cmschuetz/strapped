@@ -18,7 +18,10 @@ gh auth status >/dev/null 2>&1 || exit 0
 
 flipped_any=0
 for f in $files; do
-  url=$(grep -m1 '^pr: http' "$f" | sed 's/^pr:[[:space:]]*//')
+  # state.mjs writes frontmatter via gray-matter/js-yaml, which quotes the
+  # colon-bearing URL value (pr: 'https://…'); tolerate optional surrounding
+  # quotes while still matching the historical unquoted shape.
+  url=$(grep -m1 -E "^pr: ['\"]?http" "$f" | sed -e 's/^pr:[[:space:]]*//' -e "s/^['\"]//" -e "s/['\"]\$//")
   [ -n "$url" ] || continue
   id=$(grep -m1 '^id:' "$f" | sed 's/^id:[[:space:]]*//')
   slug=$(basename "$(dirname "$(dirname "$f")")")

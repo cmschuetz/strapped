@@ -1,150 +1,92 @@
-// Frontmatter parsing + byte-preserving single-field writes, extracted from
-// the state CLI. The exact `key: value` single-space line shape from
-// conventions.md, plus the manifest's two nested forms: an indented
-// `key: value` map (budgets) and an indented `- { ... }` inline-flow list
-// (repos, deliverables). Writes must preserve every untouched line
-// byte-for-byte so grep-based consumers (sync-prs.sh) keep working.
+// Frontmatter parse + write through gray-matter (a bundled dependency). The
+// hand-rolled parser/single-field writer this file used to hold was dropped:
+// gray-matter owns BOTH parse and stringify now.
 //
-// Error handling is caller-owned: every function that can reject its input
-// takes the caller's `die` (each CLI keeps its own stderr prefix).
+// The one thing the CLI must guarantee is that the two shapes grep-based bash
+// consumers depend on survive a write:
+//   1. the deliverable `deps: [...]` FLOW array — `sync-prs.sh` parses deps with
+//      `sed 's/^deps:[[:space:]]*\[\(.*\)\]/\1/'`, which requires the `[...]` form;
+//   2. single-space `key: value` scalar block lines — `sync-prs.sh`/`preamble.sh`
+//      grep `^status:`/`^pr:`/`^id:`.
+// gray-matter serializes via js-yaml; the default dump reflows depth-1 arrays to
+// block sequences (`deps:\n  - D1`), which would break (1). So we hand gray-matter
+// a js-yaml engine pinned to `flowLevel: 1` (depth-1 nodes — the `deps` array — go
+// flow) + `condenseFlow` + `lineWidth: -1`; scalars stay single-space block lines,
+// satisfying both shapes at once. The manifest's `repos:`/`deliverables:`/`budgets:`
+// maps are NOT grep-consumed (only state.ts reads them, via gray-matter), so their
+// reflow to flow style under this engine is inconsequential.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import matter from 'gray-matter'
+import yaml from 'js-yaml'
 
 /** Never returns — writes one prefixed line to stderr and exits 1. */
 export type Die = (msg: string) => never
 
-/** A single frontmatter scalar as parsed by `parseScalar`. */
-export type Scalar = string | number | null
+/** A parsed frontmatter block: gray-matter yields arbitrary YAML values. */
+export type Frontmatter = Record<string, unknown>
 
-/** One `- { ... }` inline-flow list entry (values may be bracket lists). */
-export type InlineMap = Record<string, Scalar | string[]>
+/** Back-compat aliases for consumers that annotated frontmatter values/list items. */
+export type FrontmatterValue = unknown
+export type ListItem = unknown
 
-/** An item of a nested block list: inline map or plain scalar. */
-export type ListItem = Scalar | InlineMap
-
-/** Every value shape a top-level frontmatter key can hold. */
-export type FrontmatterValue = Scalar | string[] | ListItem[] | Record<string, Scalar>
-
-/** A parsed frontmatter block, keyed by top-level field name. */
-export type Frontmatter = Record<string, FrontmatterValue>
-
-export interface FrontmatterSpan {
-  lines: string[]
-  start: number
-  end: number
+// A js-yaml engine that keeps depth-1 arrays (the deliverable `deps` list) inline
+// while every scalar stays a single-space block line — the two grep-consumed shapes.
+const yamlEngine = {
+  parse: (input: string): object => (yaml.load(input) ?? {}) as object,
+  stringify: (data: object): string =>
+    yaml.dump(data, { flowLevel: 1, lineWidth: -1, condenseFlow: true }),
 }
 
-export function splitFrontmatter(src: string, file: string, die: Die): FrontmatterSpan {
-  const lines = src.split('\n')
-  if (lines[0] !== '---') die(`${file}: no frontmatter`)
-  const end = lines.indexOf('---', 1)
-  if (end === -1) die(`${file}: unterminated frontmatter`)
-  return { lines, start: 1, end }
-}
+const MATTER_OPTIONS = { engines: { yaml: yamlEngine } }
 
-export function parseScalar(raw: string): Scalar {
-  const v = raw.trim()
-  if (v === '' || v === 'null') return null
-  if (/^-?\d+$/.test(v)) return Number(v)
-  return v
-}
-
-export function parseBracketList(raw: string): string[] {
-  const inner = raw.trim().slice(1, -1).trim()
-  return inner === '' ? [] : inner.split(',').map(s => s.trim())
-}
-
-export function parseInlineMap(raw: string): InlineMap {
-  const inner = raw.trim().replace(/^\{/, '').replace(/\}$/, '')
-  const parts: string[] = []
-  let depth = 0
-  let cur = ''
-  for (const ch of inner) {
-    if (ch === '[') depth++
-    if (ch === ']') depth--
-    if (ch === ',' && depth === 0) {
-      parts.push(cur)
-      cur = ''
-    } else cur += ch
-  }
-  if (cur.trim() !== '') parts.push(cur)
-  const obj: InlineMap = {}
-  for (const part of parts) {
-    const idx = part.indexOf(':')
-    if (idx === -1) continue
-    const key = part.slice(0, idx).trim()
-    const value = part.slice(idx + 1).trim()
-    obj[key] = value.startsWith('[') ? parseBracketList(value) : parseScalar(value)
-  }
-  return obj
-}
-
+/** Parse a frontmatter document's data block; die on malformed YAML. */
 export function parseFrontmatter(src: string, file: string, die: Die): Frontmatter {
-  const { lines, start, end } = splitFrontmatter(src, file, die)
-  const fm: Frontmatter = {}
-  let i = start
-  while (i < end) {
-    const m = (lines[i] ?? '').match(/^([A-Za-z_][\w-]*):(.*)$/)
-    if (!m || m[1] === undefined) {
-      i++
-      continue
-    }
-    const key = m[1]
-    const rest = (m[2] ?? '').trim()
-    if (rest === '') {
-      const items: ListItem[] = []
-      const map: Record<string, Scalar> = {}
-      let isList = false
-      let isMap = false
-      i++
-      while (i < end && /^\s+\S/.test(lines[i] ?? '')) {
-        const line = (lines[i] ?? '').trim()
-        if (line.startsWith('- ')) {
-          isList = true
-          const body = line.slice(2).trim()
-          items.push(body.startsWith('{') ? parseInlineMap(body) : parseScalar(body))
-        } else {
-          const mm = line.match(/^([\w-]+):\s*(.*)$/)
-          if (mm && mm[1] !== undefined) {
-            isMap = true
-            map[mm[1]] = parseScalar(mm[2] ?? '')
-          }
-        }
-        i++
-      }
-      fm[key] = isList ? items : isMap ? map : null
-      continue
-    }
-    fm[key] = rest.startsWith('[') ? parseBracketList(rest) : parseScalar(rest)
-    i++
+  try {
+    return matter(src, MATTER_OPTIONS).data
+  } catch (err) {
+    return die(`invalid frontmatter in ${file}: ${err instanceof Error ? err.message : String(err)}`)
   }
-  return fm
 }
 
-export function findFieldLine(lines: string[], start: number, end: number, field: string): number {
-  for (let i = start; i < end; i++) {
-    const line = lines[i]
-    if (line === `${field}:` || (line !== undefined && line.startsWith(`${field}: `))) return i
-  }
-  return -1
+export interface FrontmatterFile {
+  data: Frontmatter
+  content: string
 }
 
-export interface FieldRead {
-  lines: string[]
-  idx: number
-  value: string | null
-}
-
-export function readField(file: string, field: string, die: Die): FieldRead {
+/** Read a file's frontmatter + body; die when the file is missing or malformed. */
+export function readFrontmatterFile(file: string, die: Die): FrontmatterFile {
   if (!existsSync(file)) die(`no such file: ${file}`)
-  const src = readFileSync(file, 'utf8')
-  const { lines, start, end } = splitFrontmatter(src, file, die)
-  const idx = findFieldLine(lines, start, end, field)
-  return { lines, idx, value: idx === -1 ? null : (lines[idx] ?? '').slice(field.length + 1).trim() }
+  try {
+    const parsed = matter(readFileSync(file, 'utf8'), MATTER_OPTIONS)
+    return { data: parsed.data, content: parsed.content }
+  } catch (err) {
+    return die(`invalid frontmatter in ${file}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
-/** Replace exactly one frontmatter line, preserving every other byte. */
-export function writeField(file: string, lines: string[], idx: number, field: string, value: string): void {
-  lines[idx] = `${field}: ${value}`
-  writeFileSync(file, lines.join('\n'))
+/** Re-serialize a frontmatter document through the pinned engine (whole-block write). */
+export function writeFrontmatterFile(file: string, data: Frontmatter, content: string): void {
+  writeFileSync(file, matter.stringify(content, data, MATTER_OPTIONS))
+}
+
+/**
+ * Coerce a CLI-supplied value string to the scalar it denotes (so `set pr null`
+ * stores YAML null → `pr: null`, `set x 100` stores 100 → `x: 100`), letting the
+ * writer emit it faithfully. Falls back to the raw string when the input is not a
+ * parseable scalar (or parses to nothing).
+ */
+export function coerceValue(value: string): unknown {
+  let parsed: unknown
+  try {
+    parsed = yaml.load(value)
+  } catch {
+    return value
+  }
+  return parsed === undefined ? value : parsed
+}
+
+/** Render a parsed frontmatter value as the string the CLI reports (`null` → "null"). */
+export function valueToString(value: unknown): string {
+  return value === null ? 'null' : String(value)
 }

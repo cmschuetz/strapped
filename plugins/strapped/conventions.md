@@ -266,7 +266,7 @@ Deterministic executables under `$PLUGIN_ROOT/scripts/`, invocable via Bash by s
 
 ### state.mjs — `node $PLUGIN_ROOT/scripts/state.mjs <command> ...`
 
-Zero-dependency Node CLI. Frontmatter writes preserve every untouched line byte-for-byte and keep the single-space `key: value` line shape, so grep-based consumers (`sync-prs.sh`) keep working.
+Node CLI that bundles `gray-matter` for frontmatter parsing and writing. A write re-serializes the whole frontmatter block through gray-matter's YAML engine, so it is not a byte-for-byte preservation of every line. The engine is pinned (`flowLevel: 1`, `condenseFlow`, `lineWidth: -1`) so the two shapes grep-based consumers depend on survive: the deliverable `deps: [...]` flow array (`sync-prs.sh` parses `[...]`) and the single-space `key: value` scalar block lines (`sync-prs.sh`/`preamble.sh` read `^status:`/`^pr:`/`^id:`). js-yaml quotes a colon-bearing scalar value (e.g. a `pr:` URL becomes `pr: 'https://…'`); the `key: value` line shape still holds, and `sync-prs.sh` tolerates the surrounding quote. The manifest's `repos:`/`deliverables:`/`budgets:` maps are read only by state.ts (never grepped by bash), so their reflow under this engine is inconsequential.
 
 - **`resolve <slug>`** — resolves `stateRoot` per [Config resolution](#config-resolution) (`$STRAPPED_STATE_ROOT` → `~/.claude/strapped.json` → default `~/.claude/strapped`; leading `~` expanded; a value still relative after expansion is invalid input → exit 1) and probes `<stateRoot>/runs/<slug>/manifest.md` — the cwd-independent direct path, no glob. Output: `{ slug, stateRoot, runRoot, runDir, manifest, exists, status, seed, budgets, repos: [{ name, root, config, configExists, validations, worktreeRoot, provisioning }] }`, where `repos` comes from the manifest `repos:` map joined with each repo's config at `<stateRoot>/repos/<name>/config.json`. A missing manifest is NOT an error: `exists: false`, exit 0 (the plan skill treats a miss as "no existing run"; slug-addressed downstream skills stop themselves).
 - **`dag <runDir> [--only <Did>]`** — reads the manifest `deliverables` list and every deliverable file's frontmatter. Output: `{ manifest: {status, seed, budgets}, nodes: [{id, file, title, status, deps, repo, branch, base, worktree, pr, review_rounds_used, feedback_rounds_used, parked_reason, estimated_diff_lines}], ready, topo, blocked: [{id, blockedOn}], remaining }`. `ready` = `status: pending` nodes whose deps are all `done`/`pr-open`/`merged`; with `--only`, a `parked`/`in-progress` node is additionally admitted (implement's `--only` resume semantics) and `ready` is intersected with the named node. `topo` = stable topological order, parents before children, ties broken by id. `remaining` = count of nodes NOT yet `done`/`pr-open`/`merged` — done-or-later counts as complete, so a partially-shipped run reports the true remaining work; consumers read this field verbatim and never recompute it. Unknown dep id or dependency cycle → exit 1 naming the offender.
@@ -312,10 +312,6 @@ Output is one JSON object `{"worktree", "branch", "created"}` on stdout; git fai
 ### resolve-chain.mjs — `node $PLUGIN_ROOT/scripts/resolve-chain.mjs <chain> | --list`
 
 Chain-name → validated stage list per [Chain configs](#chain-configs). `<chain>` prints `{ name, stages, source: "builtin" | "anchor" }`; an unknown name exits 1 listing the available chains; an invalid configured chain exits 1 naming the chain, the offending stage, and the violated rule. `--list` prints `{ chains: [{ name, stages, source }] }` — every resolvable chain, built-ins overlaid by the anchor.
-
-### sync-chain-skills.mjs — `node $PLUGIN_ROOT/scripts/sync-chain-skills.mjs [--home <dir>] [--dry-run]`
-
-Generates/prunes the personal autocomplete wrapper skills per [Wrapper skill sync](#wrapper-skill-sync). Prints `{ written, unchanged, pruned }` (chain names). `--home` overrides `$HOME` (both the anchor read and the skills directory); `--dry-run` reports the planned writes/prunes and mutates nothing.
 
 ## Composable chains
 
@@ -374,18 +370,6 @@ A **chain** is a named, non-empty ordered subset of `{plan, implement, pr}` in c
 - **Override rule**: an anchor chain bearing a built-in's name replaces that built-in.
 - **Validity** (enforced by `resolve-chain.mjs`; a violation exits 1 naming the chain, the offending stage, and the rule): every stage is one of `plan|implement|pr`, in strictly canonical order, with no duplicates, and the list is non-empty.
 - **Exclusions**: `feedback`, `learn`, and `status` can never appear in a chain — they are interactive by design (`feedback` gates on explicit user approval of synthesized addenda before touching branches, `learn` gates on approving CLAUDE.md diffs, `status` is a read-only dashboard for a human). A chain exists to run unattended, so a stage whose whole point is a human decision cannot be part of one. `feedback-synth` stays reachable via skill dispatch only, as recorded above.
-
-### Wrapper skill sync
-
-`scripts/sync-chain-skills.mjs` generates one thin personal wrapper skill per resolvable chain at `~/.claude/skills/strapped-run-<chain>/SKILL.md`, so each chain autocompletes as `/strapped-run-<chain>`. Best-effort sugar: `/strapped:run <chain>` is always the canonical entry — a wrapper's body only delegates to it (`/strapped:run <chain> $ARGUMENTS`).
-
-The sync contract:
-
-- **Marker** — every generated wrapper carries `generated_by: strapped` frontmatter. A file WITHOUT that marker is never overwritten or deleted: sync skips it (it is the user's), warning on stderr.
-- **Provenance** — `chain_source: builtin | anchor` frontmatter records where the chain resolved from.
-- **Idempotent** — a byte-identical wrapper is a no-op, reported `unchanged`.
-- **Global prune rule** — chain resolution is global (built-ins + anchor, cwd-independent), so a marked wrapper whose chain no longer resolves is pruned; unmarked directories are untouched.
-- `--dry-run` reports the planned writes/prunes and mutates nothing.
 
 ### Workflow nesting limit (verified; moot by design)
 

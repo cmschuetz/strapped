@@ -19,9 +19,11 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { getProp, resolveStateRoot } from '../lib/anchor.ts'
 import { die as cliDie, out } from '../lib/cli.ts'
 import {
+  coerceValue,
   parseFrontmatter,
-  readField,
-  writeField,
+  readFrontmatterFile,
+  valueToString,
+  writeFrontmatterFile,
   type FrontmatterValue,
   type ListItem,
 } from '../lib/frontmatter.ts'
@@ -33,8 +35,7 @@ const die: (msg: string) => never = msg => cliDie('state.mjs', msg)
 
 /** `entry[key]` when entry is an inline map; undefined for scalar entries. */
 function mapField(entry: ListItem, key: string): FrontmatterValue | undefined {
-  if (typeof entry === 'object' && entry !== null) return entry[key]
-  return undefined
+  return getProp(entry, key)
 }
 
 // --- resolve ---------------------------------------------------------------
@@ -197,9 +198,15 @@ function cmdSet(file: string, field: string, value: string): void {
   // A multi-line value would inject extra frontmatter lines (e.g. a forged
   // second `status:` line), silently breaking the single-field-write contract.
   if (/[\r\n]/.test(value)) die('value must be a single line')
-  const { lines, idx, value: old } = readField(file, field, die)
-  if (idx === -1) die(`unknown frontmatter field "${field}" in ${file}`)
-  if (lines[idx] !== `${field}: ${value}`) writeField(file, lines, idx, field, value)
+  const { data, content } = readFrontmatterFile(file, die)
+  if (!(field in data)) die(`unknown frontmatter field "${field}" in ${file}`)
+  const old = valueToString(data[field])
+  const next = coerceValue(value)
+  // Idempotent: only re-serialize when the parsed value actually changes.
+  if (JSON.stringify(data[field]) !== JSON.stringify(next)) {
+    data[field] = next
+    writeFrontmatterFile(file, data, content)
+  }
   out({ file, field, old, new: value })
 }
 
@@ -228,8 +235,9 @@ const DELIVERABLE_EDGES: ReadonlySet<string> = new Set([
 ])
 
 function cmdTransition(file: string, to: string, from: string | null): void {
-  const { lines, idx, value: current } = readField(file, 'status', die)
-  if (idx === -1) die(`no status field in ${file}`)
+  const { data, content } = readFrontmatterFile(file, die)
+  if (!('status' in data)) die(`no status field in ${file}`)
+  const current = valueToString(data.status)
   if (from !== null && current !== from) {
     die(`expected status "${from}" but found "${current}" in ${file}`)
   }
@@ -240,7 +248,8 @@ function cmdTransition(file: string, to: string, from: string | null): void {
   if (!DELIVERABLE_EDGES.has(`${current}>${to}`)) {
     die(`illegal transition ${current} → ${to} for ${file}`)
   }
-  writeField(file, lines, idx, 'status', to)
+  data.status = to
+  writeFrontmatterFile(file, data, content)
   out({ file, from: current, to, changed: true })
 }
 
@@ -251,18 +260,20 @@ const MANIFEST_LADDER: readonly string[] = ['draft', 'in-review', 'approved', 'i
 function cmdManifestStatus(runDir: string, to: string): void {
   const file = join(runDir, 'manifest.md')
   if (!existsSync(file)) die(`no manifest at ${file}`)
-  const { lines, idx, value: current } = readField(file, 'status', die)
-  if (idx === -1) die(`no status field in ${file}`)
+  const { data, content } = readFrontmatterFile(file, die)
+  if (!('status' in data)) die(`no status field in ${file}`)
+  const current = valueToString(data.status)
   const toIdx = MANIFEST_LADDER.indexOf(to)
   if (toIdx === -1) die(`unknown manifest status "${to}"`)
-  const currentIdx = current === null ? -1 : MANIFEST_LADDER.indexOf(current)
+  const currentIdx = MANIFEST_LADDER.indexOf(current)
   if (currentIdx === -1) die(`manifest has unknown status "${current}" in ${file}`)
   if (current === to) {
     out({ file, from: current, to, changed: false })
     return
   }
   if (toIdx < currentIdx) die(`manifest status is forward-only: ${current} → ${to} rejected`)
-  writeField(file, lines, idx, 'status', to)
+  data.status = to
+  writeFrontmatterFile(file, data, content)
   out({ file, from: current, to, changed: true })
 }
 

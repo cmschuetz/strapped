@@ -7,6 +7,7 @@ import { type SpawnSyncReturns } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
+import matter from 'gray-matter'
 import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.ts'
 
 interface RepoJson {
@@ -276,7 +277,12 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
   assert.equal(afterLines.length, beforeLines.length)
   const changed = beforeLines.filter((line, i) => line !== afterLines[i])
   assert.deepEqual(changed, ['pr: null'])
-  assert.ok(afterLines.includes('pr: https://github.com/o/r/pull/9'))
+  // js-yaml quotes the colon-bearing URL value; the grep-consumed shape is the
+  // single-space `pr: ` line, which survives (sync-prs.sh tolerates the quote).
+  assert.ok(
+    afterLines.some(l => l.startsWith('pr: ') && l.includes('https://github.com/o/r/pull/9')),
+    afterLines.join('\n')
+  )
 
   const unknown = env.runState(['set', file, 'no_such_field', 'x'])
   assert.equal(unknown.status, 1)
@@ -284,35 +290,47 @@ test('set: single line changed, rest byte-identical; unknown field → exit 1', 
   assert.equal(env.readFile(file), afterLines.join('\n'))
 })
 
-test('set: untouched lines with unusual spacing survive byte-for-byte (full-file equality except the one line)', () => {
+test('set: untouched fields survive semantically and every grep-consumed shape holds after a write', () => {
   const env = makeStateEnv()
-  // Hand-written fixture with irregular bytes the writer must NOT normalize:
-  // extra spaces after colons, trailing whitespace/tabs, indented body lines,
-  // and no trailing newline.
+  // The writer is gray-matter now, so the guarantee is semantic — untouched
+  // fields parse to identical values — plus survival of the two grep-consumed
+  // shapes (the `deps: [...]` flow array and single-space `key: value` lines),
+  // NOT byte-for-byte preservation of irregular input spacing.
   const dir = join(env.runDir('my-run'), 'deliverables')
   mkdirSync(dir, { recursive: true })
   const file = join(dir, 'D9-x.md')
-  const original = [
-    '---',
-    'id: D9',
-    'title:   Deliverable   D9  ',
-    'deps: []',
-    'status: pending',
-    'pr: null',
-    'parked_reason:    null\t',
-    '---',
-    '# Body',
-    '',
-    '  indented line with trailing spaces   ',
-    'last line, no trailing newline',
-  ].join('\n')
+  const original =
+    [
+      '---',
+      'id: D9',
+      'title: Deliverable D9',
+      'deps: [D1, D2]',
+      'status: pending',
+      'pr: null',
+      'parked_reason: null',
+      '---',
+      '# Body',
+    ].join('\n') + '\n'
   writeFileSync(file, original)
 
   const res = env.runState(['set', file, 'status', 'in-progress'])
   assert.equal(res.status, 0, res.stderr)
   const after = env.readFile(file)
-  const expected = original.replace('status: pending', 'status: in-progress')
-  assert.equal(after, expected, 'every byte outside the target line must be preserved')
+
+  // (i) grep-consumed shapes survive: the deps flow array (condenseFlow drops
+  // inner spaces) and single-space scalar lines sync-prs.sh/preamble.sh read.
+  assert.match(after, /^status: in-progress$/m)
+  assert.match(after, /^id: D9$/m)
+  assert.match(after, /^pr: null$/m)
+  assert.match(after, /^deps: \[D1,D2\]$/m)
+
+  // (ii) every untouched field parses to an identical value.
+  const before = matter(original).data
+  const now = matter(after).data
+  for (const key of ['id', 'title', 'deps', 'pr', 'parked_reason']) {
+    assert.deepEqual(now[key], before[key], `${key} must survive the write`)
+  }
+  assert.equal(now.status, 'in-progress')
 })
 
 test('set: newline-bearing value → exit 1, file untouched (no frontmatter line injection)', () => {
