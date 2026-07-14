@@ -59,7 +59,7 @@ For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:`
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
    ```
-   Capture `path`, `line`/`original_line`, `diff_hunk`, `body`, `user.login`, `in_reply_to_id`.
+   Capture the full anchored RANGE, not just one line: `path`, `start_line`/`original_start_line`, `line`/`original_line`, `start_side`, `side`, `diff_hunk` (the multi-line block/context — always keep it), `body`, `user.login`, `in_reply_to_id`. A single-line comment has a null `start_line`; a multi-line comment spans `start_line..line`.
 2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate
@@ -70,7 +70,7 @@ For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:`
    gh pr view <url> --json comments
    ```
 
-To keep the main agent's context lean, redirect the raw `gh` JSON to a scratch file under the run dir (e.g. `<runDir>/reviews/feedback-lite-comments-<ts>.json`) rather than dumping large output to stdout, and build the `comments` array from that file. Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [...], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow.
+To keep the main agent's context lean, redirect the raw `gh` JSON to a scratch file under the run dir (e.g. `<runDir>/reviews/feedback-lite-comments-<ts>.json`) rather than dumping large output to stdout, and build the `comments` array from that file. Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [{ path, start_line, original_start_line, line, original_line, start_side, side, diff_hunk, body }], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow — each `lineComments` entry carries the full `start_line..line` range + the `diff_hunk` block, never collapsed to a single line.
 
 If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-scope PR has any comment/review, report that there is no feedback to process and stop.
 

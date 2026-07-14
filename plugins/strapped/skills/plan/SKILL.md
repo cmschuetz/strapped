@@ -86,7 +86,7 @@ The manifest (written by the planner agent in step 3) must carry the `repos:` ma
 
 ## Step 2 — Rule snapshot and per-round assignments
 
-1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md, one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
+1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per **Rule extraction**; one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
 2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions, adapted to emit full rule objects — for each round `1..max_rounds`, a `{"a": [{"id", "source", "text"}...], "b": [...]}` pair, shuffled with `random.Random(seed + round)` and split in half. Save the JSON output; it goes into the workflow args verbatim. Never use ad-hoc randomness — the seed is the only entropy source.
 
 ## Step 3 — Run the plan stage of the mono-workflow

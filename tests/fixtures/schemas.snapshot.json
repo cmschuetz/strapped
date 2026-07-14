@@ -44,29 +44,11 @@
   },
   "FINDINGS_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "findings",
-      "rule_checklist"
-    ],
     "properties": {
       "findings": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "key",
-            "rule",
-            "severity",
-            "location",
-            "what",
-            "why",
-            "evidence",
-            "confidence",
-            "recommendation"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -109,19 +91,26 @@
             "recommendation": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "id",
+            "key",
+            "rule",
+            "severity",
+            "location",
+            "what",
+            "why",
+            "evidence",
+            "confidence",
+            "recommendation"
+          ],
+          "additionalProperties": false
         }
       },
       "rule_checklist": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "rule",
-            "verdict",
-            "evidence"
-          ],
           "properties": {
             "rule": {
               "type": "string"
@@ -137,10 +126,52 @@
             "evidence": {
               "type": "string"
             }
-          }
+          },
+          "required": [
+            "rule",
+            "verdict",
+            "evidence"
+          ],
+          "additionalProperties": false
         }
+      },
+      "ac_checklist": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "pass",
+                "violation",
+                "na"
+              ]
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "verdict",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "description": "One reviewer verdict on a single enumerated acceptance-criterion or feedback addendum item. Kept as its OWN required list (not folded into `rule_checklist`) so a reviewer can never silently omit the per-item AC/addendum verdicts: a required, separate field is enforced by the structured-output schema every round, giving ACs and addendums the same weight as guideline rules."
+        },
+        "description": "Per-item AC/addendum verdicts — required (may be empty when the artifact has no enumerated section)."
       }
-    }
+    },
+    "required": [
+      "findings",
+      "rule_checklist",
+      "ac_checklist"
+    ],
+    "additionalProperties": false
   },
   "REFUTE_SCHEMA": {
     "type": "object",

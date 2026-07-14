@@ -50,7 +50,7 @@ Determine the **in-scope deliverable set**: every deliverable with a non-null `p
 
 As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.random()`, so the split is computed skill-side):
 
-1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing).
+1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules).
 2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, a `{"a": [{"id","source","text"}...], "b": [...]}` pair shuffled with `random.Random(seed + round)` (seed from the manifest). Save the JSON — it becomes `rulesByRound`.
 
 This single `rulesByRound` (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) is threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes it at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes it the same way). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
@@ -63,7 +63,7 @@ For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:`
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
    ```
-   Capture `path`, `line`/`original_line`, `diff_hunk`, `body`, `user.login`, `in_reply_to_id`.
+   Capture the full anchored RANGE, not just one line: `path`, `start_line`/`original_start_line`, `line`/`original_line`, `start_side`, `side`, `diff_hunk` (the multi-line block/context — always keep it), `body`, `user.login`, `in_reply_to_id`. A single-line comment has a null `start_line`; a multi-line comment spans `start_line..line`.
 2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate
@@ -74,7 +74,7 @@ For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:`
    gh pr view <url> --json comments
    ```
 
-Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [...], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow.
+Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [{ path, start_line, original_start_line, line, original_line, start_side, side, diff_hunk, body }], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow — each `lineComments` entry carries the full `start_line..line` range + the `diff_hunk` block, never collapsed to a single line.
 
 If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-scope PR has any comment/review, report that there is no feedback to process and stop.
 

@@ -45,7 +45,7 @@ Each deliverable's `repo:` field is **required** and names one of the `repos:` e
 
 ## Step 2 — Rule assignments
 
-As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed.
+As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per the conventions' **Rule extraction**), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed.
 
 ## Step 3 — Dispatch the implement stage of the mono-workflow
 
