@@ -57,4 +57,4 @@ End with **Next action** — exactly one suggestion, the first that applies:
    - parked nodes only → `/strapped:implement <slug> --only <Did>` after addressing the parked reason.
    - all done, PRs missing → `/strapped:pr <slug> --dry-run`.
    - unsynthesized critiques pending → `/strapped:learn`.
-   - everything merged and synthesized → cleanup recipe from the conventions.
+   - everything merged and synthesized → nothing to run: worktrees + branches are already auto-removed on merge by the sync hook (conventions' **Cleanup recipe**), so only the optional whole-run doc teardown (`rm -rf <runRoot>/<slug>`, always manual) remains. If a node still shows a lingering `worktree` (e.g. a dirty worktree the hook warned-and-kept), point at the manual `worktree remove` / `branch -D` fallback for it.

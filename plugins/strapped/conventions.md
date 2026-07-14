@@ -49,7 +49,7 @@ The whole `stateRoot` is a **git repository** — an audit trail and recovery po
 - **each implement wave** — the outcome-applier agent, after applying that wave's outcomes (`-m "implement wave <ids>"`).
 - **PR creation** — the `pr` stage, after all PRs are created and recorded (`-m "pr create"`), **skipped under `dryRun`** (a snapshot is a state-repo mutation).
 
-A **safety-net commit** in the SessionStart sync hook (added by a follow-up deliverable) captures anything left uncommitted (etckeeper-style), so nothing is lost even if a boundary call is skipped. `snapshot` is a no-op on a clean tree and never requires a configured git identity, so a boundary call is always safe to run.
+A **safety-net commit** in the SessionStart sync hook (`scripts/sync-prs.sh`) captures anything left uncommitted (etckeeper-style): after the hook reconciles PR state (flipping merged deliverables + auto-removing their worktrees) and sweeps the already-merged worktree backlog, it `snapshot`s each touched run, committing the merged flips and the cleared `worktree` fields even if a boundary call was skipped. So nothing is lost. `snapshot` is a no-op on a clean tree and never requires a configured git identity, so a boundary call is always safe to run.
 
 ## manifest.md
 
@@ -286,6 +286,8 @@ Node CLI that bundles `js-yaml` directly for frontmatter parsing and writing (a 
 - **`transition <file> <to> [--from <expected>]`** — guarded deliverable status flip over the on-disk edge table below. `--from` adds an exact-current-status guard. Transitioning to the current status is an idempotent no-op: exit 0, `{changed: false}`. An illegal edge → exit 1 naming the current status and requested edge, no write. Output: `{file, from, to, changed}`.
 - **`manifest-status <runDir> <to>`** — guarded manifest-level flip along `draft → in-review → approved → implementing → complete`, **forward-only**. Same-status flip is an idempotent no-op (exit 0, `{changed: false}`) — a resumed chain re-running it must not error; backward flips exit 1. Output: `{file, from, to, changed}`.
 - **`snapshot <runDir> [-m <message>]`** — the ONLY side-effectful command: `git`-commits the WHOLE `stateRoot` as one commit at a logical boundary (see [State as a git repository](#state-as-a-git-repository) below). `git init -b main` on first use if `<stateRoot>/.git` is absent, then `git add -A` the whole `stateRoot`. A **clean tree is a no-op**: `{stateRoot, committed: false, sha: null, message}`, exit 0 (never an error). Otherwise commits and returns `{stateRoot, committed: true, sha: <short sha>, message}`. `<runDir>` supplies only the default message slug (`strapped snapshot <basename>`); `-m` overrides it with a boundary label. Commits with a **strapped fallback identity** (`strapped <strapped@localhost>`) ONLY when git resolves no `user.email` — a configured identity is never overridden. A genuine git failure (init/add/commit) → exit 1 with git's stderr; callers that must not fail (the sync hook) tolerate a non-zero exit. `node:child_process` only — no new deps.
+- **`sync-rows [--all | <slug>] [--lines]`** — pure read (no git/gh, no writes) powering the sync hook's PR reconcile gather. Enumerates deliverable **files** under `<stateRoot>/runs/*/deliverables/*.md` (not the manifest — a manifest is not required to find a deliverable) and emits every one whose `status` is `pr-open`, each **joined with its run's manifest `repos:` map** so the row carries the `repoRoot` the hook's cleanup needs. An absent manifest, unknown repo, or missing `repo:` field yields `repoRoot: null` (tolerated — the flip still happens, only cleanup is skipped). Default output `{ deliverables: [{ slug, id, status, repoRoot, worktree, branch, pr, file }] }`; `--lines` projects each row to one tab-separated line in that fixed 8-column order, with any `null`/absent field emitted as the literal `null`, so bash parses it with `while IFS=$'\t' read`.
+- **`stale-worktrees [--all | <slug>] [--lines]`** — the complement of `sync-rows` for the backlog sweep: same scope semantics, same repos join, and the same fixed 8-column row shape / `--lines` projection, but emits every deliverable whose `status` **is** `merged` **and** whose `worktree` is non-null (an already-merged deliverable whose worktree was never cleaned up). The `pr-open` gather cannot see these (they are past `merged`), so the sync hook sweeps them separately. Once a row's `worktree` field is cleared it drops out. Pure read — no git/gh, no writes.
 
 #### On-disk transition edge table
 
@@ -429,7 +431,7 @@ This is a hard rule reviewers and the planner enforce.
 
 Topological order over `done` deliverables. Per node: push/create in the **deliverable's own repo** — `git -C <deliverableRepoRoot> push -u origin <branch>`, then `gh pr create --head <branch> --base <parent-branch|main>` in that repo. Parent→child branch stacking only applies **within a single repo**; a cross-repo child roots on `main`, so its PR bases on `main` (not the parent branch) — no cross-repo rebase. PR body: summary + ACs + a `Stack:` table of the whole DAG with PR links + `Depends on #<parent-PR>` for same-repo non-roots. The `Stack:` table may span repos; group or label rows by repo. Record the URL in frontmatter, set status `pr-open`. `--dry-run` prints every git/gh command and PR body without pushing anything.
 
-The `pr-open → merged` transition is owned by `scripts/sync-prs.sh`, run automatically by the plugin's SessionStart hook (startup/resume only, never per subagent): it checks each `pr-open` deliverable's PR via `gh`, flips merged ones, warns on closed-unmerged or changes-requested PRs, and hints at newly unblocked children. `/strapped:pr` performs the same idempotent flip when invoked manually.
+The `pr-open → merged` transition is owned by `scripts/sync-prs.sh`, run automatically by the plugin's SessionStart hook (startup/resume only, never per subagent): it gathers each `pr-open` deliverable via `state.mjs sync-rows --all` (joined with its `repoRoot`), checks its PR via `gh`, flips merged ones, **removes the merged deliverable's worktree + local branch** (in that deliverable's repo, clearing the `worktree` field — never `--force`ing a dirty worktree, which it warns-and-keeps), **sweeps any already-merged deliverable whose worktree was never cleaned up** (`state.mjs stale-worktrees --all` — the pre-existing backlog, cleaned by the same guarded helper with no PR re-check), warns on closed-unmerged or changes-requested PRs, hints at newly unblocked children, and finally safety-net-`snapshot`s each touched run. `/strapped:pr` performs the same idempotent flip when invoked manually (and mirrors the worktree cleanup — see the [Cleanup recipe](#cleanup-recipe)).
 
 ## Feedback loop
 
@@ -452,11 +454,18 @@ Flow, **batched over the whole run** (stacked-PR comments are interdependent —
 
 ## Cleanup recipe
 
-Worktree/branch cleanup runs per deliverable, in that deliverable's repo (`-C <deliverableRepoRoot>`); the run root is removed once for the whole run.
+Worktree/branch cleanup runs per deliverable, in that deliverable's repo (`-C <deliverableRepoRoot>`).
+
+**Automatic on merge.** Worktree + local-branch removal runs **automatically** when a deliverable flips `pr-open → merged`: the SessionStart sync hook (`scripts/sync-prs.sh`) removes the merged deliverable's worktree and branch in its own repo and clears the `worktree` field (`/strapped:pr`'s manual merge-flip mirrors the same cleanup). The hook **also idempotently sweeps** any already-merged deliverable whose `worktree` field is still non-null — the pre-existing backlog merged in prior sessions — running the same guarded removal (no `--force`; a dirty worktree is warned-and-kept for manual removal, below). So in normal operation the manual `worktree remove` / `branch -D` steps below are a **fallback** for edge cases (e.g. a dirty worktree the hook deliberately left):
 
 ```bash
 git -C <deliverableRepoRoot> worktree list
 git -C <deliverableRepoRoot> worktree remove <worktreeRoot>/<slug>/<Did>
 git -C <deliverableRepoRoot> branch -D strapped/<slug>/<Did>-<kebab>
+```
+
+**Whole-run teardown stays manual.** Removing the run root is **never** automatic — the ask keeps every run-state file (manifest, deliverable docs, reviews); only the git worktree/branch are transient. Delete the run docs by hand once you no longer need them:
+
+```bash
 rm -rf <runRoot>/<slug>
 ```

@@ -566,6 +566,84 @@ test('snapshot: missing runDir arg → exit 1 one-line usage (AC5)', () => {
   assert.equal(res.stderr.trim().split('\n').length, 1)
 })
 
+// --- sync-rows / stale-worktrees ---------------------------------------------
+
+interface Row {
+  slug: string
+  id: string
+  status: string
+  repoRoot: string
+  worktree: string
+  branch: string
+  pr: string
+  file: string
+}
+
+test('sync-rows --all: only pr-open rows, with repoRoot resolved from the manifest repos map', () => {
+  const env = makeStateEnv()
+  env.writeRun('my-run', [
+    { id: 'D1', status: 'pr-open', pr: 'https://github.com/o/r/pull/1' },
+    { id: 'D2', status: 'merged' },
+    { id: 'D3', status: 'in-progress' },
+  ])
+  const res = env.runState(['sync-rows', '--all'])
+  assert.equal(res.status, 0, res.stderr)
+  const { deliverables } = parse<{ deliverables: Row[] }>(res)
+  assert.equal(deliverables.length, 1)
+  const row = deliverables[0]!
+  assert.equal(row.slug, 'my-run')
+  assert.equal(row.id, 'D1')
+  assert.equal(row.status, 'pr-open')
+  assert.equal(row.repoRoot, '/abs/repo-a') // from the manifest repos map (writeRun default)
+  assert.equal(row.pr, 'https://github.com/o/r/pull/1')
+  assert.match(row.file, /deliverables\/D1-x\.md$/)
+})
+
+test('sync-rows <slug> --lines: 8-column tab rows; pr-open in a manifest-less run → repoRoot null', () => {
+  const env = makeStateEnv()
+  // A run with NO manifest — sync-rows enumerates deliverable FILES, so the
+  // pr-open row is still emitted, with repoRoot as the literal null.
+  env.addDeliverable(
+    'no-manifest',
+    'D1-x.md',
+    deliverableFrontmatter('D1', { status: 'pr-open', worktree: '/abs/wt', pr: 'https://github.com/o/r/pull/9' })
+  )
+  const res = env.runState(['sync-rows', 'no-manifest', '--lines'])
+  assert.equal(res.status, 0, res.stderr)
+  const lines = res.stdout.split('\n').filter(l => l !== '')
+  assert.equal(lines.length, 1)
+  const cols = lines[0]!.split('\t')
+  assert.equal(cols.length, 8)
+  const [slug, id, status, repoRoot, worktree, branch, pr, file] = cols
+  assert.equal(slug, 'no-manifest')
+  assert.equal(id, 'D1')
+  assert.equal(status, 'pr-open')
+  assert.equal(repoRoot, 'null') // no manifest → unknown repo → literal null
+  assert.equal(worktree, '/abs/wt')
+  assert.equal(branch, 'strapped/my-run/D1-thing')
+  assert.equal(pr, 'https://github.com/o/r/pull/9')
+  assert.match(file!, /deliverables\/D1-x\.md$/)
+})
+
+test('stale-worktrees --all: yields only merged-with-non-null-worktree rows', () => {
+  const env = makeStateEnv()
+  env.writeRun('my-run', [
+    { id: 'D1', status: 'merged', worktree: '/abs/wt1' },
+    { id: 'D2', status: 'merged', worktree: 'null' },
+    { id: 'D3', status: 'pr-open', worktree: '/abs/wt3' },
+  ])
+  const res = env.runState(['stale-worktrees', '--all'])
+  assert.equal(res.status, 0, res.stderr)
+  const { deliverables } = parse<{ deliverables: Row[] }>(res)
+  assert.equal(deliverables.length, 1)
+  const row = deliverables[0]!
+  assert.equal(row.id, 'D1')
+  assert.equal(row.status, 'merged')
+  assert.equal(row.worktree, '/abs/wt1')
+  assert.equal(row.repoRoot, '/abs/repo-a')
+  assert.match(row.file, /deliverables\/D1-x\.md$/)
+})
+
 // --- sync-prs.sh grep compatibility -------------------------------------------
 
 test('transition + sync-prs grep compatibility: flipped file still matches ^status: <v>$', () => {

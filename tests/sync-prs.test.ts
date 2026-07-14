@@ -5,12 +5,12 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import { ghStub, makeHookEnv, type HookEnv } from './helpers/hook-env.ts'
 import { NODE } from './helpers/node-bin.ts'
-import { STATE_SCRIPT } from './helpers/state-env.ts'
+import { makeGitRepo, STATE_SCRIPT, type RawFrontmatter } from './helpers/state-env.ts'
 
 const MERGED = ghStub('{"state":"MERGED","reviewDecision":null}')
 const CHANGES_REQUESTED = ghStub('{"state":"OPEN","reviewDecision":"CHANGES_REQUESTED"}')
@@ -241,4 +241,183 @@ test('no gh on PATH → silent exit 0 even with pr-open state present', () => {
   assert.equal(res.stdout, '')
   assert.equal(res.stderr, '')
   assert.ok(env.readDeliverable('my-run', 'D1-thing.md').includes('status: pr-open'))
+})
+
+// --- worktree cleanup on merge + backlog sweep -------------------------------
+// The rewritten hook shells out to `node <state.mjs>`; `node` is symlinked into
+// the sandbox bin (see hook-env TOOLS). These fixtures add a real git repo +
+// worktree and a manifest whose repos map roots at it, so `repoRoot` resolves
+// and the guarded cleanup can run.
+
+// A conventions-shaped manifest carrying a real repos map (name → root).
+function writeReposManifest(stateRoot: string, slug: string, repos: Array<{ name: string; root: string }>): void {
+  const dir = join(stateRoot, 'runs', slug)
+  mkdirSync(dir, { recursive: true })
+  const lines = [
+    '---',
+    `slug: ${slug}`,
+    'status: implementing',
+    'repos:',
+    ...repos.map(r => `  - { name: ${r.name}, root: ${r.root} }`),
+    '---',
+    `# ${slug}`,
+  ]
+  writeFileSync(join(dir, 'manifest.md'), lines.join('\n') + '\n')
+}
+
+// Full canonical deliverable frontmatter for the hook's addDeliverable.
+function deliverable(overrides: Partial<RawFrontmatter> = {}): RawFrontmatter {
+  return {
+    id: 'D1',
+    title: 'Thing',
+    deps: '[]',
+    repo: 'repo-a',
+    status: 'pr-open',
+    branch: 'strapped/my-run/D1-thing',
+    base: 'main',
+    worktree: 'null',
+    pr: 'https://github.com/o/r/pull/1',
+    review_rounds_used: '0',
+    feedback_rounds_used: '0',
+    parked_reason: 'null',
+    estimated_diff_lines: '100',
+    ...overrides,
+  }
+}
+
+type GitRepo = ReturnType<typeof makeGitRepo>
+
+// Add a `<branch>` worktree at `<repo.dir>__wt-<id>` and return its path.
+function addWorktree(repo: GitRepo, branch: string, id = 'D1'): string {
+  const wt = `${repo.dir}__wt-${id}`
+  repo.git('worktree', 'add', wt, '-b', branch, 'main')
+  return wt
+}
+
+const branchExists = (repo: GitRepo, branch: string): boolean => repo.git('branch', '--list', branch).stdout.trim() !== ''
+const worktreeListed = (repo: GitRepo, wt: string): boolean => repo.git('worktree', 'list').stdout.includes(wt)
+const commitCount = (stateRoot: string): number =>
+  Number(
+    spawnSync('git', ['-C', stateRoot, 'rev-list', '--count', 'HEAD'], { encoding: 'utf8' }).stdout.trim() || '0'
+  )
+
+test('hook shells out to node — merged flip actually rewrites the frontmatter (node ran)', () => {
+  // With no `node` in the sandbox bin the transition would 127 and status
+  // would stay pr-open; asserting the flip proves the symlinked node worked.
+  const env = makeHookEnv({ gh: MERGED })
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ worktree: 'null' }))
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^status: merged$/m)
+})
+
+test('merged + clean worktree → flip + worktree removed + branch deleted + field cleared', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const wt = addWorktree(repo, branch)
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ worktree: wt, branch }))
+  writeReposManifest(env.stateRoot, 'my-run', [{ name: 'repo-a', root: repo.dir }])
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 PR merged → status merged/)
+  assert.match(res.stdout, /my-run\/D1 worktree removed/)
+  assert.equal(existsSync(wt), false, 'worktree dir removed from disk')
+  assert.equal(worktreeListed(repo, wt), false, 'worktree pruned from git')
+  assert.equal(branchExists(repo, branch), false, 'local branch deleted')
+  const f = env.readDeliverable('my-run', 'D1-thing.md')
+  assert.match(f, /^status: merged$/m)
+  assert.match(f, /^worktree: null$/m)
+})
+
+test('merged + dirty worktree → flip but worktree kept + warning + exit 0 (no --force)', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const wt = addWorktree(repo, branch)
+  writeFileSync(join(wt, 'uncommitted.txt'), 'work in progress\n') // dirty → remove refuses
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ worktree: wt, branch }))
+  writeReposManifest(env.stateRoot, 'my-run', [{ name: 'repo-a', root: repo.dir }])
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 PR merged → status merged/)
+  assert.match(res.stdout, /my-run\/D1 worktree not clean — left .* for manual removal/)
+  assert.equal(existsSync(wt), true, 'dirty worktree preserved')
+  assert.equal(branchExists(repo, branch), true, 'branch preserved with the worktree')
+  const f = env.readDeliverable('my-run', 'D1-thing.md')
+  assert.match(f, /^status: merged$/m, 'status still flipped')
+  assert.match(f, new RegExp(`^worktree: ${wt}$`, 'm'), 'worktree field kept, not cleared')
+})
+
+test('merged + worktree null (repoRoot null) → flip, no cleanup attempt, exit 0', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ worktree: 'null' }))
+  // no manifest → repoRoot null
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 PR merged → status merged/)
+  assert.doesNotMatch(res.stdout, /worktree removed/)
+  assert.doesNotMatch(res.stdout, /worktree not clean/)
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^status: merged$/m)
+})
+
+test('pre-existing merged deliverable with lingering worktree → swept without a PR re-check; second run is a no-op', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const wt = addWorktree(repo, branch)
+  // Already merged (flipped in a prior session), still carrying a worktree.
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ status: 'merged', worktree: wt, branch }))
+  writeReposManifest(env.stateRoot, 'my-run', [{ name: 'repo-a', root: repo.dir }])
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 worktree removed/)
+  assert.doesNotMatch(res.stdout, /PR merged/) // no PR re-check on an already-merged row
+  assert.equal(existsSync(wt), false)
+  assert.equal(worktreeListed(repo, wt), false)
+  assert.equal(branchExists(repo, branch), false)
+  const f = env.readDeliverable('my-run', 'D1-thing.md')
+  assert.match(f, /^status: merged$/m, 'status stays merged')
+  assert.match(f, /^worktree: null$/m, 'worktree field cleared')
+
+  // Idempotent: the field is null now → row drops out of the sweep.
+  const again = env.run()
+  assert.equal(again.status, 0)
+  assert.doesNotMatch(again.stdout, /worktree removed/)
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^worktree: null$/m)
+})
+
+test('pre-existing merged + dirty worktree → sweep warns and keeps it, exit 0', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const wt = addWorktree(repo, branch)
+  writeFileSync(join(wt, 'uncommitted.txt'), 'wip\n')
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ status: 'merged', worktree: wt, branch }))
+  writeReposManifest(env.stateRoot, 'my-run', [{ name: 'repo-a', root: repo.dir }])
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 worktree not clean — left .* for manual removal/)
+  assert.equal(existsSync(wt), true)
+  assert.equal(branchExists(repo, branch), true)
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), new RegExp(`^worktree: ${wt}$`, 'm'))
+})
+
+test('after a flip the stateRoot git repo gains a safety-net commit (AC8)', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const wt = addWorktree(repo, branch)
+  env.addDeliverable('my-run', 'D1-thing.md', deliverable({ worktree: wt, branch }))
+  writeReposManifest(env.stateRoot, 'my-run', [{ name: 'repo-a', root: repo.dir }])
+
+  assert.equal(existsSync(join(env.stateRoot, '.git')), false, 'stateRoot starts as a non-git dir')
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.equal(existsSync(join(env.stateRoot, '.git')), true, 'snapshot git-init-ed the stateRoot')
+  assert.ok(commitCount(env.stateRoot) >= 1, 'a safety-net commit was written')
 })

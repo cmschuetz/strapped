@@ -21,6 +21,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { NODE } from './node-bin.ts'
 
 export const SYNC_PRS_SCRIPT = fileURLToPath(
   new URL('../../plugins/strapped/scripts/sync-prs.sh', import.meta.url)
@@ -31,7 +32,7 @@ export const PREAMBLE_SCRIPT = fileURLToPath(
 )
 
 // Everything the hook scripts may exec besides gh. bash covers the stub gh's shebang.
-const TOOLS = ['bash', 'grep', 'sed', 'basename', 'dirname', 'ls', 'head', 'cut', 'tr', 'timeout', 'git', 'cat', 'sort', 'uniq']
+const TOOLS = ['bash', 'grep', 'sed', 'basename', 'dirname', 'ls', 'head', 'cut', 'tr', 'timeout', 'git', 'cat', 'sort', 'uniq', 'node']
 
 /** Frontmatter as raw `key: value` strings. */
 export type RawFrontmatter = Record<string, string>
@@ -74,7 +75,14 @@ export function makeHookEnv({ gh = null }: { gh?: string | null } = {}): HookEnv
   mkdirSync(stateRoot)
   mkdirSync(bin)
 
-  for (const tool of TOOLS) symlinkSync(resolveTool(tool), join(bin, tool))
+  // `node` is symlinked from the real resolved node binary (NODE, from
+  // node-bin.ts), NOT resolved off PATH: a version-manager `node` on PATH is
+  // often a shim script that re-execs its manager, which isn't reachable under
+  // the exclusive PATH=bin sandbox. (Under `bun test` process.execPath is the
+  // bun binary, so NODE — resolved once via `node -p process.execPath` under the
+  // inherited env — is what preserves deploy parity for the `node state.mjs`
+  // calls the hook makes.) The real binary needs nothing else on PATH.
+  for (const tool of TOOLS) symlinkSync(tool === 'node' ? NODE : resolveTool(tool), join(bin, tool))
   if (gh != null) {
     writeFileSync(join(bin, 'gh'), gh)
     chmodSync(join(bin, 'gh'), 0o755)

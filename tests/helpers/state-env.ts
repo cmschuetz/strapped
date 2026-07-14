@@ -45,12 +45,16 @@ export interface ManifestOptions {
   deliverables?: ManifestDeliverableSpec[]
 }
 
-/** A deliverable spec for writeRun: id + deps plus raw frontmatter overrides. */
+/** A deliverable spec for writeRun: id + deps plus raw frontmatter overrides (raw strings). */
 export interface RunSpec {
   id: string
   deps?: string[]
   status?: string
   parked_reason?: string
+  worktree?: string
+  branch?: string
+  repo?: string
+  pr?: string
 }
 
 /** Full canonical deliverable frontmatter (values as raw frontmatter strings). */

@@ -10,12 +10,14 @@
 //   transition <file> <to> [--from <s>]     guarded deliverable status flip
 //   manifest-status <runDir> <to>           guarded forward-only manifest status flip
 //   snapshot <runDir> [-m <message>]        commit the whole stateRoot (git) at a boundary
+//   sync-rows [--all | <slug>] [--lines]    pr-open deliverables joined with their repoRoot
+//   stale-worktrees [--all | <slug>] [--lines]  merged deliverables with a lingering worktree
 //
 // Zero dependencies. Contracts documented in plugins/strapped/conventions.md
 // ("Harness scripts").
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, isAbsolute, join, resolve } from 'node:path'
 
 import { getProp, resolveStateRoot } from '../lib/anchor.ts'
@@ -26,6 +28,7 @@ import {
   readFrontmatterFile,
   valueToString,
   writeFrontmatterFile,
+  type Frontmatter,
   type FrontmatterValue,
   type ListItem,
 } from '../lib/frontmatter.ts'
@@ -322,9 +325,149 @@ function cmdSnapshot(runDir: string, message: string | null): void {
   out({ stateRoot, committed: true, sha, message: msg })
 }
 
+// --- sync-rows / stale-worktrees --------------------------------------------
+// Two pure reads (no git/gh, no writes) sharing one run-scan + row-builder,
+// differing only by a status predicate. Both enumerate deliverable FILES
+// (`<runDir>/deliverables/*.md`) — NOT the manifest — so a deliverable is
+// gathered even when its run has no manifest, matching the SessionStart hook's
+// file-scan gather. Each emitted row is joined with its run's manifest `repos:`
+// map to carry the `repoRoot` the hook's worktree cleanup needs; an absent
+// manifest / unknown repo / missing `repo:` field yields `repoRoot: null`
+// (tolerate — the flip still happens, only cleanup is skipped). Fixed 8-column
+// row: slug id status repoRoot worktree branch pr file.
+
+/** Parse a frontmatter file, returning null (never dying) on a missing block or malformed YAML. */
+function tryParseFrontmatter(file: string): Frontmatter | null {
+  const src = readFileSync(file, 'utf8')
+  const lines = src.split('\n')
+  if (lines[0] !== '---' || lines.indexOf('---', 1) === -1) return null
+  try {
+    return parseFrontmatter(src, file, (m: string) => {
+      throw new Error(m)
+    })
+  } catch {
+    return null
+  }
+}
+
+function listRunDirs(stateRoot: string, slug: string | null): string[] {
+  const runsRoot = join(stateRoot, 'runs')
+  if (!existsSync(runsRoot)) return []
+  if (slug !== null) {
+    const dir = join(runsRoot, slug)
+    return existsSync(dir) ? [dir] : []
+  }
+  return readdirSync(runsRoot, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => join(runsRoot, d.name))
+    .sort()
+}
+
+function reposRootMap(runDir: string): Record<string, FrontmatterValue> {
+  const manifest = join(runDir, 'manifest.md')
+  if (!existsSync(manifest)) return {}
+  const fm = tryParseFrontmatter(manifest)
+  const map: Record<string, FrontmatterValue> = {}
+  const repos = fm && Array.isArray(fm.repos) ? fm.repos : []
+  for (const entry of repos) {
+    const name = getProp(entry, 'name')
+    if (entry != null && name != null) map[String(name)] = getProp(entry, 'root') ?? null
+  }
+  return map
+}
+
+interface SyncRow {
+  slug: string
+  id: FrontmatterValue
+  status: FrontmatterValue
+  repoRoot: FrontmatterValue
+  worktree: FrontmatterValue
+  branch: FrontmatterValue
+  pr: FrontmatterValue
+  file: string
+}
+
+function gatherRows(slug: string | null, predicate: (fm: Frontmatter) => boolean): SyncRow[] {
+  const stateRoot = resolveStateRoot(die)
+  const rows: SyncRow[] = []
+  for (const runDir of listRunDirs(stateRoot, slug)) {
+    const delivDir = join(runDir, 'deliverables')
+    if (!existsSync(delivDir)) continue
+    const runSlug = basename(runDir)
+    let repos: Record<string, FrontmatterValue> | null = null // lazily read the manifest only for a run that has a match
+    const files = readdirSync(delivDir)
+      .filter(f => f.endsWith('.md'))
+      .sort()
+    for (const name of files) {
+      const file = join(delivDir, name)
+      let fm: Frontmatter | null
+      try {
+        fm = tryParseFrontmatter(file)
+      } catch {
+        continue
+      }
+      if (!fm || !predicate(fm)) continue
+      if (repos === null) repos = reposRootMap(runDir)
+      const repo = fm.repo ?? null
+      const repoRoot = typeof repo === 'string' && repo in repos ? repos[repo] : null
+      rows.push({
+        slug: runSlug,
+        id: fm.id ?? null,
+        status: fm.status ?? null,
+        repoRoot,
+        worktree: fm.worktree ?? null,
+        branch: fm.branch ?? null,
+        pr: fm.pr ?? null,
+        file,
+      })
+    }
+  }
+  return rows
+}
+
+const COLUMNS: readonly (keyof SyncRow)[] = ['slug', 'id', 'status', 'repoRoot', 'worktree', 'branch', 'pr', 'file']
+
+function emitRows(rows: SyncRow[], lines: boolean): void {
+  if (!lines) {
+    out({ deliverables: rows })
+    return
+  }
+  let buf = ''
+  for (const r of rows) {
+    buf += COLUMNS.map(k => (r[k] == null ? 'null' : String(r[k]))).join('\t') + '\n'
+  }
+  process.stdout.write(buf)
+}
+
+/** Shared arg parse for `[--all | <slug>] [--lines]`; default (neither) → --all. */
+function parseGatherArgs(args: string[]): { slug: string | null; lines: boolean } {
+  const lines = args.includes('--lines')
+  const all = args.includes('--all')
+  const positional = args.filter(a => a !== '--lines' && a !== '--all')
+  const slug = !all && positional[0] ? positional[0] : null
+  return { slug, lines }
+}
+
+function cmdSyncRows(args: string[]): void {
+  const { slug, lines } = parseGatherArgs(args)
+  emitRows(
+    gatherRows(slug, fm => fm.status === 'pr-open'),
+    lines
+  )
+}
+
+function cmdStaleWorktrees(args: string[]): void {
+  const { slug, lines } = parseGatherArgs(args)
+  emitRows(
+    gatherRows(slug, fm => fm.status === 'merged' && fm.worktree != null),
+    lines
+  )
+}
+
 // --- dispatch ---------------------------------------------------------------
 
-const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status|snapshot> ...'
+const USAGE =
+  'usage: state.mjs <resolve|dag|set|transition|manifest-status|snapshot|sync-rows|stale-worktrees> ...'
 const [cmd, ...rest] = process.argv.slice(2)
 
 function takeFlag(args: string[], flag: string): string | null {
@@ -379,6 +522,14 @@ switch (cmd) {
     const runDirArg = rest[0]
     if (!runDirArg) die('usage: state.mjs snapshot <runDir> [-m <message>]')
     cmdSnapshot(resolve(runDirArg), message)
+    break
+  }
+  case 'sync-rows': {
+    cmdSyncRows(rest)
+    break
+  }
+  case 'stale-worktrees': {
+    cmdStaleWorktrees(rest)
     break
   }
   default:
