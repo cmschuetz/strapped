@@ -1170,6 +1170,8 @@ Per outcome:${addendumMode ? `
 - outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
 - always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\`.`}
 
+After ALL outcomes are applied, snapshot the state repo once for this wave (contract: the "Harness scripts" section of ${cfg.conventionsFile}): run \`node ${stateScript} snapshot ${cfg.dir} -m "implement wave ${outcomes.map((o) => o.id).join(", ")}"\`. It is idempotent (a clean tree is a no-op) — run it even if a git identity is unconfigured.
+
 Return applied: one entry per outcome { id, status } with the final on-disk status. Do not run anything else.`;
 }
 async function implementStage(cfg) {
@@ -1272,11 +1274,12 @@ ${JSON.stringify(newConfirmed.map((f) => ({ id: f.id, key: f.key, location: f.lo
 For each finding: apply the fix (this may mean splitting a deliverable that mixes unrelated themes or exceeds the ~1,000-line meaningful-diff threshold, adding a missing deliverable, fixing deps in BOTH the manifest and the deliverable frontmatter, adding acceptance criteria or tests, or correcting a wrong assumption after re-checking the code). Then update ${roundFile}: flip each addressed finding's status from open to fixed. Return one line per finding: id — what you changed.`
   });
   if (review.converged && ctx.hasLaterStage) {
-    const approve = await agent(`You are a mechanical executor for strapped run "${cfg.slug}". Run exactly this command via Bash and return its JSON output (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
+    const approve = await agent(`You are a mechanical executor for strapped run "${cfg.slug}". Run exactly these commands in order via Bash and return the JSON output described (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
 
 node ${stateScript} manifest-status ${cfg.dir} approved
+node ${stateScript} snapshot ${cfg.dir} -m "plan converged"
 
-Return { "changed": <the command's changed field> }. Do not run anything else.`, { label: "approve", effort: "low", schema: APPROVE_SCHEMA });
+The snapshot commits the whole state repo at this boundary; it is idempotent (a clean tree is a no-op) — run it even if a git identity is unconfigured. Return { "changed": <the manifest-status command's changed field> }. Do not run anything else.`, { label: "approve", effort: "low", schema: APPROVE_SCHEMA });
     if (!approve)
       throw new Error("plan stage: approve executor agent failed");
     log("plan converged — manifest approved for the chained stages");
@@ -1324,11 +1327,12 @@ Procedure — the "Stacked PRs" section of ${cfg.conventionsFile} is authoritati
    - \`gh pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>\` — base per the cross-repo base rule (the parent deliverable's branch only when the parent is in the same repo; a root or cross-repo child bases on that repo's main). Body: one-paragraph summary, the acceptance criteria as a checklist, a Stack table of the whole DAG grouped by repo, and \`Depends on #<parent PR>\` for same-repo non-roots.
    - Record via the state script: \`node ${stateScript} set <deliverableFile> pr <url>\` then \`node ${stateScript} transition <deliverableFile> pr-open\`.
 4. After all creations, refresh every stack table via \`gh pr edit <num> --body-file <regenerated>\` so earlier PRs link the later ones.
+5. After all PRs are created and recorded, snapshot the state repo once (contract: the "Harness scripts" section of ${cfg.conventionsFile}): run \`node ${stateScript} snapshot ${cfg.dir} -m "pr create"\`. This is a state-repo mutation, so it is part of the dryRun exclusion below — never run it on a dry run.
 
 Guardrails (binding):
 - Never push \`main\`, never merge PRs, never \`--force\` (only \`--force-with-lease\`) — enforced per repo (every git op runs \`-C <deliverableRepoRoot>\`).
 - If \`gh\` is unauthenticated or a branch has no commits beyond its base, report and skip that node rather than failing the stage: return it with \`skipped: true\` and a human-readable \`reason\`, and continue with the remaining nodes.
-${dryRun ? "\nDRY RUN — print-only: execute NOTHING that mutates (no push, no pr create/edit, no state-script set/transition). Print every would-be git/gh/state command, return them in `summary`, and return every candidate with `url: null` and `skipped: true`.\n" : ""}
+${dryRun ? "\nDRY RUN — print-only: execute NOTHING that mutates (no push, no pr create/edit, no state-script set/transition, no state-script snapshot). Print every would-be git/gh/state command, return them in `summary`, and return every candidate with `url: null` and `skipped: true`.\n" : ""}
 Return \`prs\` — one entry per candidate node \`{ id, url, skipped, reason }\` (\`url\` null when skipped, \`reason\` null when created) — and a one-paragraph \`summary\` of what was created and what was skipped.`, { label: "pr-create", phase: "PR", schema: PR_SCHEMA });
   if (!result)
     throw new Error("pr stage: pr agent failed");

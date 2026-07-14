@@ -9,12 +9,14 @@
 //   set <file> <field> <value>              single-field frontmatter write
 //   transition <file> <to> [--from <s>]     guarded deliverable status flip
 //   manifest-status <runDir> <to>           guarded forward-only manifest status flip
+//   snapshot <runDir> [-m <message>]        commit the whole stateRoot (git) at a boundary
 //
 // Zero dependencies. Contracts documented in plugins/strapped/conventions.md
 // ("Harness scripts").
 
+import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 
 import { getProp, resolveStateRoot } from '../lib/anchor.ts'
 import { die as cliDie, out } from '../lib/cli.ts'
@@ -277,9 +279,52 @@ function cmdManifestStatus(runDir: string, to: string): void {
   out({ file, from: current, to, changed: true })
 }
 
+// --- snapshot --------------------------------------------------------------
+// The ONLY side-effectful command: commit the WHOLE stateRoot as one git commit
+// at a logical boundary (plan converged/approved, each implement wave, PR
+// create). Auto-`git init` on first use; a clean tree is a no-op (exit 0,
+// committed:false). Uses a strapped fallback identity only when git resolves
+// none, so real users keep their own. node:child_process only — no new deps.
+
+interface GitResult {
+  status: number | null
+  stdout: string
+  stderr: string
+}
+
+function git(stateRoot: string, args: string[], { allowFail = false }: { allowFail?: boolean } = {}): GitResult {
+  const res = spawnSync('git', ['-C', stateRoot, ...args], { encoding: 'utf8' })
+  if (res.error) die(`git ${args.join(' ')} failed to spawn: ${res.error.message}`)
+  if (!allowFail && res.status !== 0) {
+    die(`git ${args.join(' ')} failed: ${(res.stderr || '').trim()}`)
+  }
+  return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
+}
+
+function cmdSnapshot(runDir: string, message: string | null): void {
+  const stateRoot = resolveStateRoot(die)
+  const msg = message || `strapped snapshot ${basename(runDir)}`
+  if (!existsSync(join(stateRoot, '.git'))) git(stateRoot, ['init', '-b', 'main', '--quiet'])
+  git(stateRoot, ['add', '-A'])
+  // `git diff --cached --quiet` exits 0 when nothing is staged → clean-tree no-op.
+  if (git(stateRoot, ['diff', '--cached', '--quiet'], { allowFail: true }).status === 0) {
+    out({ stateRoot, committed: false, sha: null, message: msg })
+    return
+  }
+  // Fallback identity ONLY when none is configured (never override a real one).
+  const email = git(stateRoot, ['config', 'user.email'], { allowFail: true })
+  const idArgs =
+    email.status === 0 && email.stdout.trim() !== ''
+      ? []
+      : ['-c', 'user.name=strapped', '-c', 'user.email=strapped@localhost']
+  git(stateRoot, [...idArgs, 'commit', '--quiet', '-m', msg])
+  const sha = git(stateRoot, ['rev-parse', '--short', 'HEAD']).stdout.trim()
+  out({ stateRoot, committed: true, sha, message: msg })
+}
+
 // --- dispatch ---------------------------------------------------------------
 
-const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status> ...'
+const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status|snapshot> ...'
 const [cmd, ...rest] = process.argv.slice(2)
 
 function takeFlag(args: string[], flag: string): string | null {
@@ -327,6 +372,13 @@ switch (cmd) {
     const toArg = rest[1]
     if (!runDirArg || !toArg) die('usage: state.mjs manifest-status <runDir> <to>')
     cmdManifestStatus(resolve(runDirArg), toArg)
+    break
+  }
+  case 'snapshot': {
+    const message = takeFlag(rest, '-m')
+    const runDirArg = rest[0]
+    if (!runDirArg) die('usage: state.mjs snapshot <runDir> [-m <message>]')
+    cmdSnapshot(resolve(runDirArg), message)
     break
   }
   default:

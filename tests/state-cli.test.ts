@@ -3,12 +3,19 @@
 // state-root fixtures in the exact conventions.md file shapes.
 
 import assert from 'node:assert/strict'
-import { type SpawnSyncReturns } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import yaml from 'js-yaml'
 import { deliverableFrontmatter, makeStateEnv } from './helpers/state-env.ts'
+
+// git identity is pinned OFF (no global/system config) so the snapshot fallback
+// path is exercised deterministically regardless of the host's git config.
+const NO_IDENTITY = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }
+const git = (cwd: string, ...args: string[]): SpawnSyncReturns<string> =>
+  spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: { ...process.env, ...NO_IDENTITY } })
+const commitCount = (root: string): string => git(root, 'rev-list', '--count', 'HEAD').stdout.trim()
 
 // Read a frontmatter data block the same way the CLI does (js-yaml), for the
 // semantic-equality assertions on written output below.
@@ -475,6 +482,88 @@ test('manifest-status: forward flip approved→implementing; same-status no-op r
   assert.equal(backward.status, 1)
   assert.match(backward.stderr, /forward-only/)
   assert.equal(env.readFile(file), before)
+})
+
+// --- snapshot ----------------------------------------------------------------
+
+test('snapshot: first call in a non-git stateRoot inits repo and commits (AC1)', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  assert.equal(existsSync(join(env.stateRoot, '.git')), false)
+  const res = env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<{ committed: boolean; stateRoot: string; sha: string; message: string }>(res)
+  assert.equal(json.committed, true)
+  assert.equal(json.stateRoot, env.stateRoot)
+  assert.match(json.sha, /^[0-9a-f]{7,}$/)
+  assert.equal(json.message, 'strapped snapshot my-run')
+  assert.equal(existsSync(join(env.stateRoot, '.git')), true)
+  assert.equal(commitCount(env.stateRoot), '1')
+})
+
+test('snapshot: clean tree → committed:false no-op, no new commit (AC2)', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  const before = commitCount(env.stateRoot)
+  const res = env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  assert.equal(res.status, 0, res.stderr)
+  assert.deepEqual(parse(res), {
+    stateRoot: env.stateRoot,
+    committed: false,
+    sha: null,
+    message: 'strapped snapshot my-run',
+  })
+  assert.equal(commitCount(env.stateRoot), before)
+})
+
+test('snapshot: after a set writes exactly one new commit touching the changed file (AC3)', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  const before = Number(commitCount(env.stateRoot))
+  const file = join(dir, 'deliverables', 'D1-x.md')
+  assert.equal(env.runState(['transition', file, 'in-progress']).status, 0)
+  const res = env.runState(['snapshot', dir, '-m', 'implement wave D1'], { env: NO_IDENTITY })
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<{ committed: boolean; message: string }>(res)
+  assert.equal(json.committed, true)
+  assert.equal(json.message, 'implement wave D1')
+  assert.equal(Number(commitCount(env.stateRoot)), before + 1)
+  const names = git(env.stateRoot, 'show', '--name-only', '--format=', 'HEAD').stdout
+  assert.match(names, /D1-x\.md/)
+})
+
+test('snapshot: no git identity → strapped fallback author (AC4)', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  const res = env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  assert.equal(res.status, 0, res.stderr)
+  const author = git(env.stateRoot, 'log', '-1', '--format=%an <%ae>').stdout.trim()
+  assert.equal(author, 'strapped <strapped@localhost>')
+})
+
+test('snapshot: a configured identity is preserved, not overridden (AC4)', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [{ id: 'D1', status: 'pending' }])
+  // Pre-init the repo and set a LOCAL identity; snapshot must keep it.
+  git(env.stateRoot, 'init', '-b', 'main', '--quiet')
+  git(env.stateRoot, 'config', 'user.name', 'Real Dev')
+  git(env.stateRoot, 'config', 'user.email', 'real@example.invalid')
+  const res = env.runState(['snapshot', dir], { env: NO_IDENTITY })
+  assert.equal(res.status, 0, res.stderr)
+  assert.equal(parse<{ committed: boolean }>(res).committed, true)
+  const author = git(env.stateRoot, 'log', '-1', '--format=%an <%ae>').stdout.trim()
+  assert.equal(author, 'Real Dev <real@example.invalid>')
+})
+
+test('snapshot: missing runDir arg → exit 1 one-line usage (AC5)', () => {
+  const env = makeStateEnv()
+  const res = env.runState(['snapshot'])
+  assert.equal(res.status, 1)
+  assert.equal(res.stdout, '')
+  assert.match(res.stderr, /usage: state\.mjs snapshot/)
+  assert.equal(res.stderr.trim().split('\n').length, 1)
 })
 
 // --- sync-prs.sh grep compatibility -------------------------------------------

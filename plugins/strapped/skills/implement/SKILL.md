@@ -49,7 +49,7 @@ As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing), 
 
 ## Step 3 — Dispatch the implement stage of the mono-workflow
 
-The ENTIRE wave loop lives in the workflow: its coordinator executor agents own the ready-set computation (`state.mjs dag`), worktree creation (`ensure-worktree.sh` + provisioning), the `worktree`/`in-progress` frontmatter flips, resumeNote composition for re-dispatched nodes, and the `manifest-status implementing` flip; its outcome-applier agents own the `done`/`parked`/`parked_reason`/`review_rounds_used` writes; a wave with zero newly-done progress terminates the loop (park-don't-spin). Do not hand-roll any of it.
+The ENTIRE wave loop lives in the workflow: its coordinator executor agents own the ready-set computation (`state.mjs dag`), worktree creation (`ensure-worktree.sh` + provisioning), the `worktree`/`in-progress` frontmatter flips, resumeNote composition for re-dispatched nodes, and the `manifest-status implementing` flip; its outcome-applier agents own the `done`/`parked`/`parked_reason`/`review_rounds_used` writes and, after each wave, `state.mjs snapshot` the `stateRoot` git repo at that boundary (see the conventions' **State as a git repository** section); a wave with zero newly-done progress terminates the loop (park-don't-spin). Do not hand-roll any of it.
 
 Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (absolute paths; full contract in the conventions' **Composable chains** section):
 

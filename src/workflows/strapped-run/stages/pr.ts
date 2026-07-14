@@ -47,11 +47,12 @@ Procedure — the "Stacked PRs" section of ${cfg.conventionsFile} is authoritati
    - \`gh pr create --head <branch> --base <parent-branch-if-same-repo-else-main> --title "<Did>: <title>" --body-file <generated>\` — base per the cross-repo base rule (the parent deliverable's branch only when the parent is in the same repo; a root or cross-repo child bases on that repo's main). Body: one-paragraph summary, the acceptance criteria as a checklist, a Stack table of the whole DAG grouped by repo, and \`Depends on #<parent PR>\` for same-repo non-roots.
    - Record via the state script: \`node ${stateScript} set <deliverableFile> pr <url>\` then \`node ${stateScript} transition <deliverableFile> pr-open\`.
 4. After all creations, refresh every stack table via \`gh pr edit <num> --body-file <regenerated>\` so earlier PRs link the later ones.
+5. After all PRs are created and recorded, snapshot the state repo once (contract: the "Harness scripts" section of ${cfg.conventionsFile}): run \`node ${stateScript} snapshot ${cfg.dir} -m "pr create"\`. This is a state-repo mutation, so it is part of the dryRun exclusion below — never run it on a dry run.
 
 Guardrails (binding):
 - Never push \`main\`, never merge PRs, never \`--force\` (only \`--force-with-lease\`) — enforced per repo (every git op runs \`-C <deliverableRepoRoot>\`).
 - If \`gh\` is unauthenticated or a branch has no commits beyond its base, report and skip that node rather than failing the stage: return it with \`skipped: true\` and a human-readable \`reason\`, and continue with the remaining nodes.
-${dryRun ? '\nDRY RUN — print-only: execute NOTHING that mutates (no push, no pr create/edit, no state-script set/transition). Print every would-be git/gh/state command, return them in `summary`, and return every candidate with `url: null` and `skipped: true`.\n' : ''}
+${dryRun ? '\nDRY RUN — print-only: execute NOTHING that mutates (no push, no pr create/edit, no state-script set/transition, no state-script snapshot). Print every would-be git/gh/state command, return them in `summary`, and return every candidate with `url: null` and `skipped: true`.\n' : ''}
 Return \`prs\` — one entry per candidate node \`{ id, url, skipped, reason }\` (\`url\` null when skipped, \`reason\` null when created) — and a one-paragraph \`summary\` of what was created and what was skipped.`,
     { label: 'pr-create', phase: 'PR', schema: PR_SCHEMA }
   )

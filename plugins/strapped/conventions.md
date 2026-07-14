@@ -39,6 +39,18 @@ All state for one strapped run lives under a single **run root** `<runRoot>/<slu
 
 `<slug>` is derived from the source plan filename: `plans/foo_bar.md` → `foo-bar` (lowercase kebab-case). The slug is globally unique under one `stateRoot`.
 
+## State as a git repository
+
+The whole `stateRoot` is a **git repository** — an audit trail and recovery point across every state transition. It is `git init -b main`ed lazily on the first [`snapshot`](#statemjs--node-plugin_rootscriptsstatemjs-command-) (the repo may not exist yet), and every `snapshot` does `git add -A` at the `stateRoot`, so the commit captures **all** state: the guarded `state.mjs` frontmatter writes AND the agent-written file bodies (research.md, deliverable docs, review records) that are not `state.mjs` writes at all. `stateRoot` often doubles as the user's plans dir, so unrelated `.md` files beside `runs/` are committed too — that is intended (a durable snapshot of everything under `stateRoot`), not scoped to one run.
+
+**Cadence — one commit per logical transaction, NOT per field write.** A single wave outcome is `transition` + `set parked_reason` + `set review_rounds_used` (three writes = one event); committing each would triple-log the event and still miss the agent-written bodies. Modern git-as-state tooling (etckeeper commits per package transaction plus a cron safety-net; Obsidian-Git / git-auto-commit-mode debounce) confirms boundary commits over per-write. So a dedicated `state.mjs snapshot` commits the whole `stateRoot` as one commit, invoked at these **boundaries**:
+
+- **plan converged / approved** — the workflow's chained approve executor (`-m "plan converged"`) and the `/strapped:plan` interactive approve gate (`-m "plan approved"`).
+- **each implement wave** — the outcome-applier agent, after applying that wave's outcomes (`-m "implement wave <ids>"`).
+- **PR creation** — the `pr` stage, after all PRs are created and recorded (`-m "pr create"`), **skipped under `dryRun`** (a snapshot is a state-repo mutation).
+
+A **safety-net commit** in the SessionStart sync hook (added by a follow-up deliverable) captures anything left uncommitted (etckeeper-style), so nothing is lost even if a boundary call is skipped. `snapshot` is a no-op on a clean tree and never requires a configured git identity, so a boundary call is always safe to run.
+
 ## manifest.md
 
 DAG *structure*, the target-repo map, and plan-level status only. Per-deliverable status lives solely in the deliverable file — never duplicate it here.
@@ -273,6 +285,7 @@ Node CLI that bundles `js-yaml` directly for frontmatter parsing and writing (a 
 - **`set <file> <field> <value>`** — idempotent single-field frontmatter write; `value` is written verbatim after `<field>: ` (`null` writes literal `null`). `value` must be a single line: a value containing `\n` or `\r` → exit 1, no write (a multi-line value would inject extra frontmatter lines). A field not already present in the file's frontmatter → exit 1 (no silent field invention). Output: `{file, field, old, new}`.
 - **`transition <file> <to> [--from <expected>]`** — guarded deliverable status flip over the on-disk edge table below. `--from` adds an exact-current-status guard. Transitioning to the current status is an idempotent no-op: exit 0, `{changed: false}`. An illegal edge → exit 1 naming the current status and requested edge, no write. Output: `{file, from, to, changed}`.
 - **`manifest-status <runDir> <to>`** — guarded manifest-level flip along `draft → in-review → approved → implementing → complete`, **forward-only**. Same-status flip is an idempotent no-op (exit 0, `{changed: false}`) — a resumed chain re-running it must not error; backward flips exit 1. Output: `{file, from, to, changed}`.
+- **`snapshot <runDir> [-m <message>]`** — the ONLY side-effectful command: `git`-commits the WHOLE `stateRoot` as one commit at a logical boundary (see [State as a git repository](#state-as-a-git-repository) below). `git init -b main` on first use if `<stateRoot>/.git` is absent, then `git add -A` the whole `stateRoot`. A **clean tree is a no-op**: `{stateRoot, committed: false, sha: null, message}`, exit 0 (never an error). Otherwise commits and returns `{stateRoot, committed: true, sha: <short sha>, message}`. `<runDir>` supplies only the default message slug (`strapped snapshot <basename>`); `-m` overrides it with a boundary label. Commits with a **strapped fallback identity** (`strapped <strapped@localhost>`) ONLY when git resolves no `user.email` — a configured identity is never overridden. A genuine git failure (init/add/commit) → exit 1 with git's stderr; callers that must not fail (the sync hook) tolerate a non-zero exit. `node:child_process` only — no new deps.
 
 #### On-disk transition edge table
 

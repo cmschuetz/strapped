@@ -38,7 +38,7 @@ It performs the conventions' *Cwd-independent slug → run-root resolution* (dir
 
 ## Create mode (default)
 
-The entire create pass lives in the `pr` stage of the `strapped-run` mono-workflow: one PR agent runs the conventions' **Stacked PRs** procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + the authoritative `topo` order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), builds each body (summary, acceptance-criteria checklist, cross-repo `## Stack` table, `Depends on #<parent PR>` for same-repo non-roots), refreshes every stack table after all creations, and carries the Guardrails below verbatim. Do not hand-roll any of it.
+The entire create pass lives in the `pr` stage of the `strapped-run` mono-workflow: one PR agent runs the conventions' **Stacked PRs** procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + the authoritative `topo` order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), builds each body (summary, acceptance-criteria checklist, cross-repo `## Stack` table, `Depends on #<parent PR>` for same-repo non-roots), refreshes every stack table after all creations, then `state.mjs snapshot`s the `stateRoot` git repo at the PR-create boundary (see the conventions' **State as a git repository** section; skipped under `--dry-run`), and carries the Guardrails below verbatim. Do not hand-roll any of it.
 
 Dispatch the mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (full contract in the conventions' **Composable chains** section):
 

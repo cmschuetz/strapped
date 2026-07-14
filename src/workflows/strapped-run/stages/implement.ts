@@ -218,6 +218,8 @@ Per outcome:${addendumMode ? `
 - outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
 - always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\`.`}
 
+After ALL outcomes are applied, snapshot the state repo once for this wave (contract: the "Harness scripts" section of ${cfg.conventionsFile}): run \`node ${stateScript} snapshot ${cfg.dir} -m "implement wave ${outcomes.map(o => o.id).join(', ')}"\`. It is idempotent (a clean tree is a no-op) — run it even if a git identity is unconfigured.
+
 Return applied: one entry per outcome { id, status } with the final on-disk status. Do not run anything else.`
 }
 

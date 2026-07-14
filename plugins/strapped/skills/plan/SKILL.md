@@ -138,6 +138,9 @@ Flip the manifest via the harness script (never hand-edit):
 
 ```bash
 node $PLUGIN_ROOT/scripts/state.mjs manifest-status <runRoot>/<slug> approved
+node $PLUGIN_ROOT/scripts/state.mjs snapshot <runRoot>/<slug> -m "plan approved"
 ```
+
+The `snapshot` commits the whole `stateRoot` git repo at this boundary (auto-`git init` on first use, no-op on a clean tree) — see the **State as a git repository** section of the conventions.
 
 Tell the user the next command: `/strapped:implement <slug>`, and that `/strapped:status <slug>` shows state at any time.

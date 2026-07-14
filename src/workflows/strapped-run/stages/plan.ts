@@ -57,11 +57,12 @@ For each finding: apply the fix (this may mean splitting a deliverable that mixe
   // run leaves approval to the skill's interactive gate.
   if (review.converged && ctx.hasLaterStage) {
     const approve = await agent<ApproveResult>(
-      `You are a mechanical executor for strapped run "${cfg.slug}". Run exactly this command via Bash and return its JSON output (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
+      `You are a mechanical executor for strapped run "${cfg.slug}". Run exactly these commands in order via Bash and return the JSON output described (contract: the "Harness scripts" section of ${cfg.conventionsFile}):
 
 node ${stateScript} manifest-status ${cfg.dir} approved
+node ${stateScript} snapshot ${cfg.dir} -m "plan converged"
 
-Return { "changed": <the command's changed field> }. Do not run anything else.`,
+The snapshot commits the whole state repo at this boundary; it is idempotent (a clean tree is a no-op) — run it even if a git identity is unconfigured. Return { "changed": <the manifest-status command's changed field> }. Do not run anything else.`,
       { label: 'approve', effort: 'low', schema: APPROVE_SCHEMA }
     )
     if (!approve) throw new Error('plan stage: approve executor agent failed')
