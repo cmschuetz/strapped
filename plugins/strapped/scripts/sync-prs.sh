@@ -18,7 +18,11 @@ gh auth status >/dev/null 2>&1 || exit 0
 
 flipped_any=0
 for f in $files; do
-  url=$(grep -m1 '^pr: http' "$f" | sed 's/^pr:[[:space:]]*//')
+  # state.mjs writes frontmatter via gray-matter/js-yaml, which leaves a pr:
+  # URL unquoted (its :// is colon-slash, a valid plain scalar) and only quotes
+  # colon-SPACE values like parked_reason. Tolerate an optional surrounding
+  # quote anyway so this stays robust to either shape.
+  url=$(grep -m1 -E "^pr: ['\"]?http" "$f" | sed -e 's/^pr:[[:space:]]*//' -e "s/^['\"]//" -e "s/['\"]\$//")
   [ -n "$url" ] || continue
   id=$(grep -m1 '^id:' "$f" | sed 's/^id:[[:space:]]*//')
   slug=$(basename "$(dirname "$(dirname "$f")")")

@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'bun:test'
-import { makeGitRepo, runEnsureWorktree } from './helpers/state-env.js'
+import { makeGitRepo, runEnsureWorktree } from './helpers/state-env.ts'
 
 const BRANCH = 'strapped/my-run/D1-thing'
 

@@ -3,7 +3,7 @@
 // src/lib/anchor.ts
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 function anchorPath() {
   const home = process.env.HOME || homedir();
   return join(home, ".claude", "strapped.json");

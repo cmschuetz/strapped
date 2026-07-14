@@ -4,12 +4,15 @@
 // plugin. The script is a SessionStart hook: every path must exit 0.
 
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
 import { PREAMBLE_SCRIPT, makeHookEnv } from './helpers/hook-env.js'
+import { NODE } from './helpers/node-bin.ts'
+import { STATE_SCRIPT } from './helpers/state-env.ts'
 
 const PLUGIN_ROOT = fileURLToPath(new URL('../plugins/strapped', import.meta.url))
 
@@ -39,6 +42,22 @@ test('full injection: sentinel + complete conventions + state summary', () => {
   // uniq output is sorted alphabetically by status.
   assert.ok(res.stdout.includes('- my-run [implementing]: 1 done, 1 pending, 1 pr-open'))
   assert.ok(res.stdout.trimEnd().endsWith('=== END STRAPPED PREAMBLE ==='))
+})
+
+test('real-file round-trip: preamble.sh reads the manifest status state.mjs (gray-matter) writes', () => {
+  const env = makeHookEnv()
+  env.addManifest('my-run', { slug: 'my-run', status: 'approved' })
+  env.addDeliverable('my-run', 'D1-a.md', { id: 'D1', deps: '[]', status: 'done' })
+  const runDir = join(env.stateRoot, 'runs', 'my-run')
+  const flip = spawnSync(NODE, [STATE_SCRIPT, 'manifest-status', runDir, 'implementing'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: env.home, STRAPPED_STATE_ROOT: env.stateRoot },
+  })
+  assert.equal(flip.status, 0, flip.stderr)
+  const res = runPreamble(env)
+  assert.equal(res.status, 0)
+  assert.equal(res.stderr, '')
+  assert.ok(res.stdout.includes('- my-run [implementing]: 1 done'), res.stdout)
 })
 
 test('no state: static preamble still injected with "No strapped runs found."', () => {

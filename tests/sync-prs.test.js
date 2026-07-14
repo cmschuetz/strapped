@@ -9,9 +9,22 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import { ghStub, makeHookEnv } from './helpers/hook-env.js'
+import { NODE } from './helpers/node-bin.ts'
+import { STATE_SCRIPT } from './helpers/state-env.ts'
 
 const MERGED = ghStub('{"state":"MERGED","reviewDecision":null}')
 const CHANGES_REQUESTED = ghStub('{"state":"OPEN","reviewDecision":"CHANGES_REQUESTED"}')
+
+// Spawn the REAL state.mjs (under node) to write into the hook env's state root —
+// so downstream assertions run against gray-matter-produced files, not fixtures.
+function runState(env, args) {
+  const res = spawnSync(NODE, [STATE_SCRIPT, ...args], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: env.home, STRAPPED_STATE_ROOT: env.stateRoot },
+  })
+  assert.equal(res.status, 0, res.stderr)
+  return res
+}
 
 // Write a pr-open deliverable fixture under an arbitrary state root (the
 // helper's addDeliverable is pinned to its own stateRoot).
@@ -89,6 +102,36 @@ test('unblocked child: pending D2 with deps [D1] gets an unblocked hint when D1 
   assert.match(res.stdout, /my-run\/D2 is now unblocked → \/strapped:implement my-run --only D2/)
   assert.ok(env.readDeliverable('my-run', 'D1-thing.md').includes('status: merged'))
   assert.ok(env.readDeliverable('my-run', 'D2-follow-up.md').includes('status: pending'))
+})
+
+test('real-file round-trip: sync-prs.sh parses the grep shapes state.mjs (gray-matter) actually writes', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  // Seed two deliverables, then let the gray-matter writer produce every
+  // grep-consumed shape: a pr-open status, a single-space `pr:` URL line, and a
+  // deps flow array — never hand-authored fixtures.
+  const d1 = env.addDeliverable('my-run', 'D1-thing.md', {
+    id: 'D1', title: 'Thing', deps: '[]', status: 'done', pr: 'null',
+  })
+  const d2 = env.addDeliverable('my-run', 'D2-follow.md', {
+    id: 'D2', title: 'Follow', deps: '[]', status: 'pending', pr: 'null',
+  })
+  runState(env, ['transition', d1, 'pr-open'])
+  runState(env, ['set', d1, 'pr', 'https://github.com/o/r/pull/1'])
+  runState(env, ['set', d2, 'deps', '[D1]'])
+
+  // The writer emits the URL as a single-space `pr:` scalar line (the shape
+  // sync-prs.sh greps — js-yaml's core schema leaves this colon-bearing value
+  // unquoted) and keeps the deps flow array.
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^pr: https:\/\/github\.com\/o\/r\/pull\/1$/m)
+  assert.match(env.readDeliverable('my-run', 'D1-thing.md'), /^status: pr-open$/m)
+  assert.match(env.readDeliverable('my-run', 'D2-follow.md'), /^deps: \[D1\]$/m)
+
+  const res = env.run()
+  assert.equal(res.status, 0, res.stderr)
+  assert.match(res.stdout, /my-run\/D1 PR merged → status merged/)
+  assert.ok(res.stdout.includes('https://github.com/o/r/pull/1'), res.stdout)
+  assert.match(res.stdout, /my-run\/D2 is now unblocked → \/strapped:implement my-run --only D2/)
+  assert.ok(env.readDeliverable('my-run', 'D1-thing.md').includes('status: merged'))
 })
 
 // --- stateRoot resolution: env > ~/.claude/strapped.json > default ~/.claude/strapped ---

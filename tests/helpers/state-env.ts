@@ -7,7 +7,7 @@
 // scripts with an isolated HOME and a controlled STRAPPED_STATE_ROOT, so the
 // user's real ~/.claude/strapped.json can never leak in.
 
-import { spawnSync } from 'node:child_process'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,9 +21,41 @@ export const ENSURE_WORKTREE_SCRIPT = fileURLToPath(
   new URL('../../plugins/strapped/scripts/ensure-worktree.sh', import.meta.url)
 )
 
+/** Frontmatter as raw `key: value` strings. */
+export type RawFrontmatter = Record<string, string>
+
+export interface ManifestRepoSpec {
+  name: string
+  root: string
+  config?: string
+}
+
+export interface ManifestDeliverableSpec {
+  id: string
+  file: string
+  deps?: string[]
+}
+
+export interface ManifestOptions {
+  stateRoot?: string
+  status?: string
+  seed?: number
+  budgets?: Record<string, number>
+  repos?: ManifestRepoSpec[]
+  deliverables?: ManifestDeliverableSpec[]
+}
+
+/** A deliverable spec for writeRun: id + deps plus raw frontmatter overrides. */
+export interface RunSpec {
+  id: string
+  deps?: string[]
+  status?: string
+  parked_reason?: string
+}
+
 /** Full canonical deliverable frontmatter (values as raw frontmatter strings). */
-export function deliverableFrontmatter(id, overrides = {}) {
-  return {
+export function deliverableFrontmatter(id: string, overrides: Partial<RawFrontmatter> = {}): RawFrontmatter {
+  const base: RawFrontmatter = {
     id,
     title: `Deliverable ${id}`,
     deps: '[]',
@@ -37,8 +69,11 @@ export function deliverableFrontmatter(id, overrides = {}) {
     feedback_rounds_used: '0',
     parked_reason: 'null',
     estimated_diff_lines: '100',
-    ...overrides,
   }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v !== undefined) base[k] = v
+  }
+  return base
 }
 
 export function makeStateEnv() {
@@ -48,11 +83,11 @@ export function makeStateEnv() {
   mkdirSync(home)
   mkdirSync(stateRoot)
 
-  const runDir = slug => join(stateRoot, 'runs', slug)
+  const runDir = (slug: string): string => join(stateRoot, 'runs', slug)
 
   /** Write a conventions-shaped manifest.md (nested budgets map, inline-flow repos/deliverables lists). */
   const writeManifest = (
-    slug,
+    slug: string,
     {
       stateRoot: rootOverride,
       status = 'approved',
@@ -60,8 +95,8 @@ export function makeStateEnv() {
       budgets = { plan_rounds: 3, code_rounds: 3, confidence_min: 70 },
       repos = [],
       deliverables = [],
-    } = {}
-  ) => {
+    }: ManifestOptions = {}
+  ): string => {
     const root = rootOverride ?? stateRoot
     const dir = join(root, 'runs', slug)
     mkdirSync(dir, { recursive: true })
@@ -91,7 +126,7 @@ export function makeStateEnv() {
     return file
   }
 
-  const addDeliverable = (slug, filename, frontmatter, body = 'Body.') => {
+  const addDeliverable = (slug: string, filename: string, frontmatter: RawFrontmatter, body = 'Body.'): string => {
     const dir = join(runDir(slug), 'deliverables')
     mkdirSync(dir, { recursive: true })
     const lines = Object.entries(frontmatter).map(([k, v]) => `${k}: ${v}`)
@@ -100,7 +135,7 @@ export function makeStateEnv() {
     return file
   }
 
-  const addRepoConfig = (name, config) => {
+  const addRepoConfig = (name: string, config: unknown): string => {
     const dir = join(stateRoot, 'repos', name)
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'config.json')
@@ -109,7 +144,7 @@ export function makeStateEnv() {
   }
 
   /** Build a whole run from [{id, deps, status, ...frontmatter overrides}] specs; returns the run dir. */
-  const writeRun = (slug, specs, manifestOpts = {}) => {
+  const writeRun = (slug: string, specs: RunSpec[], manifestOpts: ManifestOptions = {}): string => {
     writeManifest(slug, {
       repos: [{ name: 'repo-a', root: '/abs/repo-a' }],
       deliverables: specs.map(s => ({ id: s.id, file: `deliverables/${s.id}-x.md`, deps: s.deps ?? [] })),
@@ -122,7 +157,10 @@ export function makeStateEnv() {
   }
 
   /** Spawn the real state.mjs (under node — deploy parity) with isolated HOME + STRAPPED_STATE_ROOT. */
-  const runState = (args, { env = {} } = {}) =>
+  const runState = (
+    args: string[],
+    { env = {} }: { env?: Record<string, string | undefined> } = {}
+  ): SpawnSyncReturns<string> =>
     spawnSync(NODE, [STATE_SCRIPT, ...args], {
       encoding: 'utf8',
       env: {
@@ -133,7 +171,7 @@ export function makeStateEnv() {
       },
     })
 
-  const readFile = file => readFileSync(file, 'utf8')
+  const readFile = (file: string): string => readFileSync(file, 'utf8')
 
   return { base, home, stateRoot, runDir, writeManifest, addDeliverable, addRepoConfig, writeRun, runState, readFile }
 }
@@ -148,9 +186,9 @@ const GIT_ENV = {
 }
 
 /** A real temp git repo with one commit on main, plus a bound git() helper. */
-export function makeGitRepo() {
+export function makeGitRepo(): { dir: string; git: (...args: string[]) => SpawnSyncReturns<string> } {
   const dir = mkdtempSync(join(tmpdir(), 'strapped-repo-'))
-  const git = (...args) => {
+  const git = (...args: string[]): SpawnSyncReturns<string> => {
     const res = spawnSync('git', args, { encoding: 'utf8', env: { ...process.env, ...GIT_ENV } })
     if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`)
     return res
@@ -159,12 +197,12 @@ export function makeGitRepo() {
   writeFileSync(join(dir, 'README.md'), 'seed\n')
   git('-C', dir, 'add', '.')
   git('-C', dir, 'commit', '--quiet', '-m', 'init')
-  return { dir, git: (...args) => git('-C', dir, ...args) }
+  return { dir, git: (...args: string[]) => git('-C', dir, ...args) }
 }
 
 /** Spawn the real ensure-worktree.sh (missing trailing args are simply not passed). */
-export function runEnsureWorktree(...args) {
-  return spawnSync('bash', [ENSURE_WORKTREE_SCRIPT, ...args.filter(a => a !== undefined)], {
+export function runEnsureWorktree(...args: (string | undefined)[]): SpawnSyncReturns<string> {
+  return spawnSync('bash', [ENSURE_WORKTREE_SCRIPT, ...args.filter((a): a is string => a !== undefined)], {
     encoding: 'utf8',
     env: { ...process.env, ...GIT_ENV },
   })

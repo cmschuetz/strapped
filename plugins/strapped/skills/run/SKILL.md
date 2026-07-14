@@ -122,13 +122,3 @@ The workflow returns `{ slug, stages, completed, stoppedAt, results }`. The effe
 - the next command for wherever the chain stopped, or `/strapped:status <slug>` when it ran to completion.
 
 Append every generalizable user correction given here to `critiques/user-critiques.md` per the conventions format (`synthesized: false`).
-
-## Step 5 — Wrapper sync offer
-
-If the user has config-defined chains (`node $PLUGIN_ROOT/scripts/resolve-chain.mjs --list` shows any `source: "anchor"` entry), offer ONCE to run:
-
-```bash
-node $PLUGIN_ROOT/scripts/sync-chain-skills.mjs
-```
-
-so each chain autocompletes as its own personal wrapper skill `/strapped-run-<chain>` under `~/.claude/skills/`. Describe it as best-effort sugar per the conventions' **Wrapper skill sync** contract — `/strapped:run <chain>` stays the canonical entry, and re-running the sync later is idempotent (it also prunes wrappers for removed chains).
