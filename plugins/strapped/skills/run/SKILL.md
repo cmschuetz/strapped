@@ -14,7 +14,7 @@ allowed-tools:
 
 Run a whole chain of strapped stages — e.g. plan → implement → pr — as ONE autonomous dispatch that runs until complete (or stops loudly at the first failed gate).
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md`, which the plugin's SessionStart hook auto-injects as the **strapped preamble** — assume it is in context. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. The **Composable chains** section (stage table, args shape, gate semantics, chain configs, wrapper sync) is this skill's contract.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, budgets, and procedures are defined in `$PLUGIN_ROOT/conventions.md`. Your always-injected operating model is the slim `context.md` preamble (sentinel `strapped-preamble-v1`); do not front-load research or re-read the whole conventions on invocation — the procedure below is self-sufficient; pull the specific `conventions.md` section only at the step that needs the exact format. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/context.md` to re-establish the operating model. The **Composable chains** section (stage table, args shape, gate semantics, chain configs, wrapper sync) is this skill's contract.
 
 ## Arguments
 

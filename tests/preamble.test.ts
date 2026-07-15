@@ -25,7 +25,7 @@ const runPreamble = (env: HookEnv, opts: RunOptions = {}) =>
     env: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...(opts.env ?? {}) },
   })
 
-test('full injection: sentinel + complete conventions + state summary', () => {
+test('slim injection: sentinel + context.md + state summary, deep conventions section absent', () => {
   const env = makeHookEnv()
   env.addManifest('my-run', { slug: 'my-run', status: 'implementing' })
   env.addDeliverable('my-run', 'D1-a.md', { id: 'D1', deps: '[]', status: 'done' })
@@ -35,9 +35,11 @@ test('full injection: sentinel + complete conventions + state summary', () => {
   assert.equal(res.status, 0)
   assert.equal(res.stderr, '')
   assert.ok(res.stdout.startsWith(SENTINEL_LINE), 'stdout must start with the sentinel line')
-  // Top-of-file heading AND a deep-in-file marker prove the WHOLE conventions file was injected.
-  assert.ok(res.stdout.includes('# Harness conventions'))
-  assert.ok(res.stdout.includes('## Cleanup recipe'))
+  // The slim context.md is injected: its heading plus the skills list marker.
+  assert.ok(res.stdout.includes('# Strapped operating context'))
+  assert.ok(res.stdout.includes('## The skills — run one when'))
+  // Regression guard: a deep conventions-only section is NOT injected (the debloat).
+  assert.ok(!res.stdout.includes('## Cleanup recipe'), 'deep conventions section must be absent')
   assert.ok(res.stdout.includes('=== STRAPPED STATE SUMMARY ==='))
   // uniq output is sorted alphabetically by status.
   assert.ok(res.stdout.includes('- my-run [implementing]: 1 done, 1 pending, 1 pr-open'))
@@ -66,7 +68,7 @@ test('no state: static preamble still injected with "No strapped runs found."', 
   assert.equal(res.status, 0)
   assert.equal(res.stderr, '')
   assert.ok(res.stdout.startsWith(SENTINEL_LINE))
-  assert.ok(res.stdout.includes('# Harness conventions'))
+  assert.ok(res.stdout.includes('# Strapped operating context'))
   assert.ok(res.stdout.includes('No strapped runs found.'))
 })
 
@@ -80,14 +82,14 @@ test('unresolvable stateRoot: static preamble still injected, cwd-independent', 
     assert.equal(res.status, 0)
     assert.equal(res.stderr, '')
     assert.ok(res.stdout.startsWith(SENTINEL_LINE))
-    assert.ok(res.stdout.includes('# Harness conventions'))
-    assert.ok(res.stdout.includes('## Cleanup recipe'))
+    assert.ok(res.stdout.includes('# Strapped operating context'))
+    assert.ok(!res.stdout.includes('## Cleanup recipe'), 'deep conventions section must be absent')
     assert.ok(res.stdout.includes('No strapped runs found.'))
   }
   assert.equal(results[0]?.stdout, results[1]?.stdout, 'output must not depend on the cwd')
 })
 
-test('missing conventions.md: silent exit 0', () => {
+test('missing context.md: silent exit 0', () => {
   const env = makeHookEnv()
   const emptyPluginRoot = mkdtempSync(join(tmpdir(), 'strapped-preamble-empty-'))
   const res = runPreamble(env, { env: { CLAUDE_PLUGIN_ROOT: emptyPluginRoot } })

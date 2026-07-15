@@ -2,19 +2,20 @@
 set -u
 
 # SessionStart hook (startup/clear/compact — never resume): inject the strapped
-# operating context into Claude's context via stdout — the full conventions.md
-# plus a live summary of every run under <stateRoot>/runs/. Never breaks
-# session start: exit 0 on every path, degraded output over errors.
+# operating context into Claude's context via stdout — the slim context.md
+# operating model (deep formats stay in conventions.md, read on demand) plus a
+# live summary of every run under <stateRoot>/runs/. Never breaks session start:
+# exit 0 on every path, degraded output over errors.
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$script_dir/.." && pwd)}"
-conventions="$plugin_root/conventions.md"
-[ -f "$conventions" ] || exit 0
+context="$plugin_root/context.md"
+[ -f "$context" ] || exit 0
 
 echo "=== STRAPPED PREAMBLE (strapped-preamble-v1) ==="
 echo "Operating context for the strapped plugin, auto-injected at session start. Skills assume this is present."
 echo ""
-cat "$conventions"
+cat "$context"
 echo ""
 echo "=== STRAPPED STATE SUMMARY ==="
 
