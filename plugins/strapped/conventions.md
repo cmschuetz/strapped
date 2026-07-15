@@ -416,7 +416,7 @@ This is a hard rule reviewers and the planner enforce.
 
 ## PR titles and bodies (Conventional Commits)
 
-This is the **default** PR title/body format, used whenever no other PR-creation criteria is supplied by repo config or a repo's CLAUDE.md. It follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) (and the joshbuchea commit-message guide).
+This is the **default** PR title/body format — a fallback, not an override. If a PR-title or commit convention is already established in the surrounding context — repo config, the repo's CLAUDE.md, or the user's Claude settings/guidelines — **honor that convention**; those sources take precedence and this format never overwrites them. Apply the Conventional-Commits format below only when no such convention is supplied. It follows [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) (and the joshbuchea commit-message guide).
 
 **Title** — `<type>(<scope>): <description>`:
 
