@@ -16,7 +16,7 @@ Drive PR review comments back into the plan→implement lifecycle for one strapp
 
 **GitHub via `gh`.** All PR data comes from `gh`; there is no GitLab/`glab` path.
 
-**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md`, which the plugin's SessionStart hook auto-injects as the **strapped preamble** — assume it is in context (in particular the **Feedback loop** section). If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/conventions.md` before proceeding. This skill cold-starts entirely from the run root `<runRoot>/<slug>/` plus the per-repo config.
+**Plugin root**: resolve `realpath(<base directory for this skill>/../..)` once at the start — call it `$PLUGIN_ROOT`. All formats, naming, budgets, and recipes are in `$PLUGIN_ROOT/conventions.md` (in particular the **Feedback loop** section). Your always-injected operating model is the slim `context.md` preamble (sentinel `strapped-preamble-v1`); do not front-load research or re-read the whole conventions on invocation — the procedure below is self-sufficient; pull the specific `conventions.md` section only at the step that needs the exact format. If the sentinel `strapped-preamble-v1` is NOT in your context, read `$PLUGIN_ROOT/context.md` to re-establish the operating model. This skill cold-starts entirely from the run root `<runRoot>/<slug>/` plus the per-repo config.
 
 ## Arguments
 

@@ -66,6 +66,7 @@ test('sentinel literal strapped-preamble-v1 is consistent everywhere', () => {
   const skillsDir = join(PLUGIN_ROOT, 'skills')
   const files = [
     join(PLUGIN_ROOT, 'scripts', 'preamble.sh'),
+    join(PLUGIN_ROOT, 'context.md'),
     join(PLUGIN_ROOT, 'conventions.md'),
     ...readdirSync(skillsDir).map(d => join(skillsDir, d, 'SKILL.md')),
   ]
@@ -85,6 +86,15 @@ test('no skill retains an unconditional conventions-read instruction; every skil
       src.includes('$PLUGIN_ROOT/conventions.md'),
       `${dir}/SKILL.md fallback nudge lacks the conventions path`
     )
+    // Progressive-disclosure reframe (AC4): the old whole-conventions-in-context
+    // claim is gone, the slim context.md operating model is referenced, and the
+    // explicit do-not-front-load instruction is present.
+    assert.ok(
+      !src.includes('assume it is in context') && !src.includes('assume they are in context'),
+      `${dir}/SKILL.md still claims the whole conventions is in context`
+    )
+    assert.ok(src.includes('context.md'), `${dir}/SKILL.md does not reference the slim context.md operating model`)
+    assert.ok(src.includes('do not front-load'), `${dir}/SKILL.md lacks the explicit do-not-front-load instruction`)
   }
 })
 
