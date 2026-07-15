@@ -55,26 +55,46 @@ As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.ran
 
 This single `rulesByRound` (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) is threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes it at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes it the same way). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
 
-## Step 3 — Fetch PR review comments (GitHub via `gh`)
+## Step 3 — Fetch PR review comments, index them, cross-check (GitHub via `gh`)
 
 For each in-scope deliverable, derive `{owner}/{repo}/{n}` from its stored `pr:` URL and fetch ALL THREE categories:
 
-1. **Line-anchored review comments**:
+1. **Line-anchored review comments** via the GraphQL **`reviewThreads`** query — NOT the REST `/pulls/{n}/comments` endpoint, which carries no thread-resolution field. Fetch **ALL** threads, resolved and unresolved alike:
    ```bash
-   gh api repos/{owner}/{repo}/pulls/{n}/comments --paginate
+   gh api graphql -f query='
+   query($owner:String!,$repo:String!,$pr:Int!){
+     repository(owner:$owner,name:$repo){
+       pullRequest(number:$pr){
+         reviewThreads(first:100){
+           nodes{ id isResolved isOutdated
+             comments(first:100){ nodes{ databaseId body path startLine originalStartLine line originalLine diffSide diffHunk author{login} } } }
+         }
+       }
+     }
+   }' -F owner={owner} -F repo={repo} -F pr={n}
    ```
-   Capture the full anchored RANGE, not just one line: `path`, `start_line`/`original_start_line`, `line`/`original_line`, `start_side`, `side`, `diff_hunk` (the multi-line block/context — always keep it), `body`, `user.login`, `in_reply_to_id`. A single-line comment has a null `start_line`; a multi-line comment spans `start_line..line`.
-2. **Review-SUBMISSION bodies** (a DISTINCT third category — the summary a reviewer types on submit):
+   For each thread, carry its `isResolved` onto its comments as `githubResolved`, its node `id` as `threadId`, and the first comment's `databaseId` (stringified) as `externalId`. **Do NOT drop resolved threads** — a thread a reviewer self-resolved must still reach upsert (else its entry stays `unaddressed` forever and is re-fed every round). `isOutdated` is deliberately **ignored** (outdated ≠ addressed). Capture the full anchored RANGE, not just one line: `path`, `startLine`/`originalStartLine`, `line`/`originalLine`, `diffSide`, and the `diffHunk` block (the multi-line context — always keep it), plus `body` and `author.login`. A single-line comment has a null `startLine`; a multi-line comment spans `startLine..line`.
+2. **Review-SUBMISSION bodies** (a DISTINCT category — the summary a reviewer types on submit):
    ```bash
    gh api repos/{owner}/{repo}/pulls/{n}/reviews --paginate
    ```
-   Capture `state` (APPROVED / CHANGES_REQUESTED / COMMENTED) and `body`. Feed each **non-empty** submission `body` — especially a CHANGES_REQUESTED one — into synthesis as GLOBAL feedback for that deliverable.
+   Capture `state` (APPROVED / CHANGES_REQUESTED / COMMENTED) and `body`. Feed each **non-empty** submission `body` — especially a CHANGES_REQUESTED one — into synthesis as GLOBAL feedback for that deliverable, and index it under `externalId = "review:<id>"`, `threadId: null`, `githubResolved: false`.
 3. **Global/issue comments**:
    ```bash
    gh pr view <url> --json comments
    ```
+   Index each under `externalId = "issue:<id>"`, `threadId: null`, `githubResolved: false`.
 
-Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Build a `comments` array of `{ deliverableId, pr, lineComments: [{ path, start_line, original_start_line, line, original_line, start_side, side, diff_hunk, body }], reviewBodies: [{state, body}], issueComments: [...] }` to pass to the workflow — each `lineComments` entry carries the full `start_line..line` range + the `diff_hunk` block, never collapsed to a single line.
+Group the fetched comments by the deliverable whose PR they were left on, but CARRY the anchored `path` on each so synthesis can reassign a comment cross-deliverable. Each line-comment record keeps its full `startLine..line` range + the `diffHunk` block, never collapsed to a single line.
+
+**Upsert then cross-check** (the dedup that keeps already-addressed comments out of synthesis — see the conventions' [Feedback index](conventions.md#feedback-index)). Write every fetched record — each carrying `externalId`/`threadId`/`deliverableId`/`pr`/`path`/`startLine`/`originalStartLine`/`line`/`originalLine`/`diffSide`/`diffHunk`/`author`/`body`/`githubResolved` — as a JSON array to a scratch file under `<runDir>/reviews/` (e.g. `feedback-comments-<ts>.json`), then:
+
+```bash
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index upsert <runDir> --from <scratch>
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index read <runDir>
+```
+
+The upsert reconciles upstream-resolved threads to `resolved`; the read returns the whole index. The index read is the **status filter** only — the index stores the identity fields (`externalId`/`threadId`/`status`/`path`/`line`/…), not the full `diffHunk` block — so build the Step 4 `comments` array from the **scratch records whose `externalId` is `status: unaddressed` in the index**, as `{ deliverableId, pr, lineComments: [{ path, startLine, originalStartLine, line, originalLine, diffSide, diffHunk, body }], reviewBodies: [{state, body}], issueComments: [...] }` — every `lineComments` entry carrying the full `startLine..line` range + `diffHunk` block from the scratch record. If no comment is `unaddressed`, report "no outstanding feedback" and stop — the index already covers everything.
 
 If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-scope PR has any comment/review, report that there is no feedback to process and stop.
 
@@ -108,6 +128,8 @@ The `feedback-synth` stage (a) synthesizes ONE consolidated cross-deliverable pl
 **With `--dry-run`:** the synthesis/review still runs to produce the plan, but you must NOT let it mutate the run — pass `--dry-run` intent by NOT writing addenda: instead, run only the fetch + a synthesis DRAFT in-conversation, print the routed addenda plan and the commands that WOULD run, then stop. (Do not dispatch the mutating workflow under `--dry-run`.)
 
 If the review did **not** converge (budget exhausted), present `outstanding` with the `feedback-round-*.md` files and work through them with the user before proceeding.
+
+**Record the routing map.** The `feedback-synth` stage/schema are frozen — they return per-deliverable prose addenda only, no `externalId`-keyed structure — so the comment→deliverable map used for post-implement marking (Step 6) must be produced skill-side. Dispatch a **fresh subagent** (Task/agent, OFF the main context) that reads the synthesized `## Feedback addendum` sections on every affected deliverable plus the `unaddressed` records from Step 3 (each carrying `externalId`, its anchored `path`/`line` or `review:`/`issue:` id, and `body`) and writes an explicit `[{ "externalId": "...", "routedDeliverableId": "..." }]` array to `<runDir>/reviews/feedback-routing.json`. It routes each comment to the addendum task that addresses it — falling back to the same anchored-`path`→`Files to touch` rule synthesis uses, so the recorded map agrees with synthesis's placement by construction; the `threadId:null` `review:`/`issue:` entries route to the deliverable(s) their CHANGES_REQUESTED body / global point was folded into. **Every** `unaddressed` comment fed to synthesis gets exactly one `routedDeliverableId`. (With `--dry-run` you already stopped; no routing file is written.)
 
 ## Step 5 — Explicit user approval gate
 
@@ -145,6 +167,15 @@ Dispatch the `strapped-run` mono-workflow again — Workflow tool, `scriptPath: 
 - `rulesByRound`/`seed`/`confidenceMin`/`codeRounds` are threaded exactly as `/strapped:implement` does, because the code-review/fix loop reads `rulesByRound[round-1]` per round.
 
 Read `results.implement` from the return — `{outcomes, allDone, blocked}` — for the per-node report in Step 7.
+
+**Mark the index (post-fix).** After `implement` returns, read `<runDir>/reviews/feedback-routing.json` and, for every `{externalId, routedDeliverableId}` pair whose `routedDeliverableId` reached `done`/converged (skip a **parked** deliverable — its `outcomes` entry shows it), read that deliverable's fix commit and flip the entry:
+
+```bash
+sha=$(git -C <routedDeliverableWorktree> rev-parse HEAD)
+node $PLUGIN_ROOT/scripts/state.mjs feedback-index set <runDir> <externalId> addressed --commit "$sha"
+```
+
+This covers the `review:`/`issue:` entries too (they route like any other comment). Comments routed to a parked deliverable stay `unaddressed` and are re-fed next round. The `--update` cascade (Step 7) later writes these `addressed` comments back to GitHub and flips them to `resolved`.
 
 ## Step 7 — Offer the cascade ONCE
 
