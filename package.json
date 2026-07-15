@@ -8,6 +8,7 @@
     "lint": "oxlint src tools tests",
     "version:bump": "bun tools/version.ts bump",
     "version:check": "bun tools/version.ts check",
+    "eval": "bun src/eval/cli.ts",
     "test": "claude plugin validate . --strict && claude plugin validate plugins/strapped --strict && bun run typecheck && bun run lint && bun test"
   },
   "devDependencies": {
