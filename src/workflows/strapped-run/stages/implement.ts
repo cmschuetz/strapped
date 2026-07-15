@@ -40,20 +40,20 @@ ${item.validations.map(v => `- ${v}`).join('\n')}
 
 Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} and the feedback fix in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
   }
-  return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
+  return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}" — fresh context; everything you need is below.
 
-Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
+Work EXCLUSIVELY inside the worktree ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
 
 1. Read your deliverable plan in full: ${item.planFile}
 2. Read the shared research digest: ${cfg.dir}/research.md
-3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
+3. Read every applicable CLAUDE.md (repo root at minimum).
 ${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.resumeNote}\n` : ''}
 Implement exactly what the plan specifies — its acceptance criteria are the contract. Write the tests the plan names (integration-style, public interfaces). Stay in scope: anything under "Out of scope" is off limits; note side-discoveries in your summary instead of fixing them.
 
 Before finishing, ALL validations must pass inside the worktree:
 ${item.validations.map(v => `- ${v}`).join('\n')}
 
-Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
+Commit on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, an unfixable validation failure), commit what is safe and return status "blocked" with the blocker described — do NOT loop indefinitely.`
 }
 
 function fixPrompt(cfg: RunConfig, item: WaveItem, findings: ReadonlyArray<Refuted<CodeFinding>>, round: number, recordSuffix: string): string {

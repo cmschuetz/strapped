@@ -32,7 +32,9 @@ interface PlanOutput {
 
 const nonEmptyString = (v: unknown): boolean => typeof v === 'string' && v.trim().length > 0
 
-const PLANNER_PROMPT = `You are the planning agent for strapped run "${FIXTURE_SLUG}". Produce a complete, reviewable implementation plan from a large source plan document.
+/** Shared planner prompt scaffold — steps 3-5 are the compaction hot-spot. */
+function plannerPrompt(steps345: string): string {
+  return `You are the planning agent for strapped run "${FIXTURE_SLUG}". Produce a complete, reviewable implementation plan from a large source plan document.
 
 Source plan (the original ask): ${FIXTURE_SOURCE_PLAN}
 Target repos (the run state is keyed by the run slug, not by any repo; the work spans these repos — an unordered set):
@@ -43,19 +45,41 @@ Conventions you MUST follow for every file format: ${FIXTURE_CONVENTIONS}
 Procedure:
 1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
 2. Write ${FIXTURE_DIR}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
-3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
-4. Write one self-contained file per deliverable at ${FIXTURE_DIR}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${FIXTURE_SLUG}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
-5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
+${steps345}
 6. Write ${FIXTURE_DIR}/manifest.md per the conventions (status: in-review, seed: ${FIXTURE_SEED}, budgets — record the EFFECTIVE budgets of this run: plan_rounds: ${FIXTURE_PLAN_ROUNDS}, code_rounds: ${FIXTURE_CODE_ROUNDS}, confidence_min: ${FIXTURE_CONFIDENCE_MIN} — the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
 7. After all plan artifacts are written, run \`node ${FIXTURE_STATE_SCRIPT} commit ${FIXTURE_DIR}\` via Bash so the run's state root is git-backed from birth (it git-inits the state root if absent and commits the artifacts). Best-effort: proceed even if it reports an error.
 
 Return the deliverable list and a one-paragraph summary.`
+}
+
+// Baseline steps 3-5, verbatim from the pre-D4 planner prompt: the
+// meaningful-diff exclusion list is spelled out in step 3 and the cross-repo
+// base rule is stated in BOTH step 4's tail and step 5.
+const BASELINE_STEPS = `3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
+4. Write one self-contained file per deliverable at ${FIXTURE_DIR}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${FIXTURE_SLUG}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
+5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.`
+
+// Candidate steps 3-5: "meaningful diff" defined ONCE in step 3, and the
+// cross-repo base rule + ordering-only consequence stated ONCE in step 5 (step
+// 4's redundant restatement dropped). Mirrors the compacted live stage source.
+const CANDIDATE_STEPS = `3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Meaningful diff = changed lines excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR; split a theme only when its estimated meaningful diff exceeds ~1,000 lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
+4. Write one self-contained file per deliverable at ${FIXTURE_DIR}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${FIXTURE_SLUG}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
+5. Cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main — roots and every cross-repo child base on their own repo's main; you can never branch across repos. Cross-repo deps are therefore ordering-only, never a code dependency: a cross-repo child does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child truly needs its parent's code — merge the shared change to the parent repo's main first, or keep both sides in the same repo/chain.`
+
+const PLANNER_BASELINE = plannerPrompt(BASELINE_STEPS)
+const PLANNER_CANDIDATE = plannerPrompt(CANDIDATE_STEPS)
 
 export const plannerCase = defineCase({
   id: 'planner',
   tags: ['planner'],
   appendSystemPrompt: STRAPPED_CONTEXT,
-  prompt: PLANNER_PROMPT,
+  // `prompt` tracks the LIVE (compacted) stage source; `variants` records the
+  // baseline→candidate A/B this deliverable verified (`bun run eval --ab`).
+  prompt: PLANNER_CANDIDATE,
+  variants: {
+    baseline: { label: 'baseline', prompt: PLANNER_BASELINE },
+    candidate: { label: 'compacted', prompt: PLANNER_CANDIDATE },
+  },
   schema: asSchema(PLAN_SCHEMA),
   graders: [
     schemaConforms(),
