@@ -5,12 +5,12 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'bun:test'
 import { ghStub, makeHookEnv, type HookEnv } from './helpers/hook-env.ts'
 import { NODE } from './helpers/node-bin.ts'
-import { STATE_SCRIPT } from './helpers/state-env.ts'
+import { makeGitRepo, STATE_SCRIPT } from './helpers/state-env.ts'
 
 const MERGED = ghStub('{"state":"MERGED","reviewDecision":null}')
 const CHANGES_REQUESTED = ghStub('{"state":"OPEN","reviewDecision":"CHANGES_REQUESTED"}')
@@ -241,4 +241,136 @@ test('no gh on PATH → silent exit 0 even with pr-open state present', () => {
   assert.equal(res.stdout, '')
   assert.equal(res.stderr, '')
   assert.ok(env.readDeliverable('my-run', 'D1-thing.md').includes('status: pr-open'))
+})
+
+// --- merged worktree cleanup + git-backed state root -------------------------
+
+/** Write a conventions-shaped manifest (flow-list repos/deliverables) under the hook env's state root. */
+function writeManifest(env: HookEnv, slug: string, repoRoot: string, deliverableFile: string): void {
+  const runDir = join(env.stateRoot, 'runs', slug)
+  mkdirSync(runDir, { recursive: true })
+  writeFileSync(
+    join(runDir, 'manifest.md'),
+    [
+      '---',
+      `slug: ${slug}`,
+      'status: implementing',
+      'repos:',
+      `  - { name: repo-a, root: ${repoRoot} }`,
+      'deliverables:',
+      `  - { id: D1, file: ${deliverableFile}, deps: [] }`,
+      '---',
+      `# ${slug}`,
+      '',
+    ].join('\n')
+  )
+}
+
+test('merged cleanup: a pr-open deliverable with a real worktree → status merged, worktree removed and nulled, branch kept', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  const repo = makeGitRepo()
+  const branch = 'strapped/my-run/D1-thing'
+  const worktree = join(env.home, 'wt', 'my-run', 'D1')
+  repo.git('worktree', 'add', worktree, '-b', branch, 'main')
+  writeManifest(env, 'my-run', repo.dir, 'deliverables/D1-thing.md')
+  env.addDeliverable('my-run', 'D1-thing.md', {
+    id: 'D1',
+    title: 'Thing',
+    deps: '[]',
+    repo: 'repo-a',
+    status: 'pr-open',
+    branch,
+    worktree,
+    pr: 'https://github.com/o/r/pull/1',
+  })
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D1 PR merged → status merged/)
+  assert.match(res.stdout, /my-run\/D1 worktree cleaned up/)
+  const file = env.readDeliverable('my-run', 'D1-thing.md')
+  assert.ok(file.includes('status: merged'))
+  assert.match(file, /^worktree: null$/m)
+  assert.ok(!existsSync(worktree), 'worktree dir removed')
+  assert.ok(repo.git('branch', '--list', branch).stdout.includes(branch), 'branch preserved')
+})
+
+for (const status of ['fixing', 'parked']) {
+  test(`merged on a ${status} node is a no-op: no flip, worktree kept, no cleanup/flip messages, exit 0`, () => {
+    const env = makeHookEnv({ gh: MERGED })
+    const repo = makeGitRepo()
+    const branch = 'strapped/my-run/D1-thing'
+    const worktree = join(env.home, 'wt', 'my-run', 'D1')
+    repo.git('worktree', 'add', worktree, '-b', branch, 'main')
+    writeManifest(env, 'my-run', repo.dir, 'deliverables/D1-thing.md')
+    env.addDeliverable('my-run', 'D1-thing.md', {
+      id: 'D1',
+      title: 'Thing',
+      deps: '[]',
+      repo: 'repo-a',
+      status,
+      branch,
+      worktree,
+      pr: 'https://github.com/o/r/pull/1',
+    })
+
+    const res = env.run()
+    assert.equal(res.status, 0)
+    assert.doesNotMatch(res.stdout, /PR merged/)
+    assert.doesNotMatch(res.stdout, /worktree cleaned up/)
+    assert.doesNotMatch(res.stdout, /is now unblocked/)
+    const file = env.readDeliverable('my-run', 'D1-thing.md')
+    assert.ok(file.includes(`status: ${status}`), `status stays ${status}`)
+    assert.ok(file.includes(`worktree: ${worktree}`), 'worktree not nulled')
+    assert.ok(existsSync(worktree), 'worktree dir kept')
+  })
+}
+
+test('sync-prs commit: a .git with a commit exists under the state root after a run', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  env.addDeliverable('my-run', 'D1-thing.md', {
+    id: 'D1',
+    title: 'Thing',
+    deps: '[]',
+    status: 'pr-open',
+    pr: 'https://github.com/o/r/pull/1',
+  })
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.ok(existsSync(join(env.stateRoot, '.git')), 'state root is git-backed after a sync run')
+  const log = spawnSync('git', ['-C', env.stateRoot, 'log', '--oneline'], {
+    encoding: 'utf8',
+    env: { ...process.env, HOME: env.home },
+  })
+  assert.ok(log.stdout.trim().length > 0, 'at least one checkpoint commit exists')
+})
+
+test('drift advisory: a merged parent yields a --update hint for a non-pending child and an unblocked-implement hint for a pending child', () => {
+  const env = makeHookEnv({ gh: MERGED })
+  env.addDeliverable('my-run', 'D1-parent.md', {
+    id: 'D1',
+    title: 'Parent',
+    deps: '[]',
+    status: 'pr-open',
+    pr: 'https://github.com/o/r/pull/1',
+  })
+  env.addDeliverable('my-run', 'D2-child.md', {
+    id: 'D2',
+    title: 'Child',
+    deps: '[D1]',
+    status: 'in-progress',
+    pr: 'null',
+  })
+  env.addDeliverable('my-run', 'D3-child.md', {
+    id: 'D3',
+    title: 'Pending child',
+    deps: '[D1]',
+    status: 'pending',
+    pr: 'null',
+  })
+
+  const res = env.run()
+  assert.equal(res.status, 0)
+  assert.match(res.stdout, /my-run\/D2 base advanced → \/strapped:pr my-run --update/)
+  assert.match(res.stdout, /my-run\/D3 is now unblocked → \/strapped:implement my-run --only D3/)
 })

@@ -10,12 +10,16 @@
 //   transition <file> <to> [--from <s>]     guarded deliverable status flip
 //   manifest-status <runDir> <to>           guarded forward-only manifest status flip
 //   feedback-index read|upsert|set ...      per-run PR-comment dedup index (JSON)
+//   commit [<runDirOrFile>] [--message <m>] git-init-if-absent + commit the state root
+//   cleanup <deliverableFile>               remove a merged deliverable's worktree (keep the branch)
+//   outstanding [<runDir>]                  every non-merged deliverable across all runs (or one)
 //
 // Zero dependencies. Contracts documented in plugins/strapped/conventions.md
 // ("Harness scripts").
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import { getProp, resolveStateRoot } from '../lib/anchor.ts'
 import { die as cliDie, out } from '../lib/cli.ts'
@@ -37,6 +41,201 @@ const die: (msg: string) => never = msg => cliDie('state.mjs', msg)
 /** `entry[key]` when entry is an inline map; undefined for scalar entries. */
 function mapField(entry: ListItem, key: string): FrontmatterValue | undefined {
   return getProp(entry, key)
+}
+
+// --- git-backed state root -------------------------------------------------
+// The state root is a git repository committed at semantic boundaries. `commit`
+// bootstraps it (git init if absent); `transition`/`manifest-status` auto-commit
+// best-effort ONLY when `.git` already exists. `set` never self-commits — its
+// field pokes are swept into the next transition's `git add -A`.
+
+/** A git identity self-contained enough to work with no global git config. */
+const GIT_IDENTITY: readonly string[] = ['-c', 'user.name=strapped', '-c', 'user.email=strapped@localhost']
+
+/** Run `git -C <cwd> <args>`; never throws — returns the raw spawn result. */
+function git(cwd: string, ...args: string[]): SpawnSyncReturns<string> {
+  return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8' })
+}
+
+/**
+ * Derive the state root from a path under it: the ancestor directory whose
+ * immediate child is `runs/` (a deliverable file or a run dir both live below
+ * `<stateRoot>/runs/`). Returns null when no `runs` segment is present, so a
+ * caller can fall back to `resolveStateRoot()` or skip silently.
+ */
+function stateRootFromPath(target: string): string | null {
+  const parts = resolve(target).split(sep)
+  const idx = parts.lastIndexOf('runs')
+  if (idx <= 0) return null
+  return parts.slice(0, idx).join(sep) || sep
+}
+
+/**
+ * Best-effort auto-commit of the state root after a semantic transition. Runs
+ * ONLY when `<stateRoot>/.git` already exists (no bootstrap on the auto path),
+ * swallows every error (spawn failure, git missing, nothing to commit), and
+ * NEVER writes stdout, throws, or affects the exit code.
+ */
+function autoCommitStateRoot(target: string, message: string): void {
+  try {
+    const stateRoot = stateRootFromPath(target)
+    if (stateRoot === null || !existsSync(join(stateRoot, '.git'))) return
+    git(stateRoot, 'add', '-A')
+    git(stateRoot, ...GIT_IDENTITY, 'commit', '-q', '-m', message)
+  } catch {
+    // best-effort: a git-backed state root is a convenience, never a contract.
+  }
+}
+
+// --- commit ----------------------------------------------------------------
+
+function cmdCommit(arg: string | null, message: string): void {
+  let stateRoot: string
+  if (arg !== null) {
+    const derived = stateRootFromPath(arg)
+    if (derived === null) die(`cannot derive stateRoot from "${arg}" (no runs/ ancestor)`)
+    stateRoot = derived
+  } else {
+    stateRoot = resolveStateRoot(die)
+  }
+  let initialized = false
+  if (!existsSync(join(stateRoot, '.git'))) {
+    const init = git(stateRoot, 'init', '-q', '-b', 'main')
+    if (init.error) die(`git is not available: ${init.error.message}`)
+    if (init.status !== 0) die(`git init failed in ${stateRoot}: ${init.stderr.trim()}`)
+    initialized = true
+  }
+  const add = git(stateRoot, 'add', '-A')
+  if (add.error) die(`git is not available: ${add.error.message}`)
+  // `git diff --cached --quiet` exits 0 when nothing is staged, 1 when there is.
+  const staged = git(stateRoot, 'diff', '--cached', '--quiet')
+  if (staged.status === 0) {
+    out({ stateRoot, initialized, committed: false, message })
+    return
+  }
+  const done = git(stateRoot, ...GIT_IDENTITY, 'commit', '-q', '-m', message)
+  out({ stateRoot, initialized, committed: !done.error && done.status === 0, message })
+}
+
+// --- cleanup ---------------------------------------------------------------
+
+interface CleanupResult {
+  file: string
+  repo?: FrontmatterValue
+  repoRoot?: string
+  worktreeRemoved: boolean
+  worktree?: FrontmatterValue
+  reason?: string
+}
+
+/**
+ * Best-effort `git worktree remove`: try a plain remove; on failure, if the
+ * worktree path is already gone, prune the stale admin record; if it still
+ * exists and is CLEAN (locked/administrative failure), retry with `--force`.
+ * A DIRTY worktree is never force-removed — its removal reports false and the
+ * frontmatter `worktree` is left intact. Returns whether the worktree is gone.
+ */
+function removeWorktree(repoRoot: string, worktreePath: string): boolean {
+  const plain = git(repoRoot, 'worktree', 'remove', worktreePath)
+  if (!plain.error && plain.status === 0) return true
+  if (!existsSync(worktreePath)) {
+    git(repoRoot, 'worktree', 'prune')
+    return true
+  }
+  const status = git(worktreePath, 'status', '--porcelain')
+  const clean = !status.error && status.status === 0 && status.stdout.trim() === ''
+  if (!clean) return false
+  const forced = git(repoRoot, 'worktree', 'remove', '--force', worktreePath)
+  return !forced.error && forced.status === 0
+}
+
+/**
+ * Remove a deliverable's worktree in its own repo and null the frontmatter
+ * `worktree` (only when the worktree is actually gone). The branch is
+ * deliberately KEPT — a merged parent's branch is still needed by
+ * `/strapped:pr --update` to rebase its same-repo children (it resolves the
+ * parent by name). The `.md` body and every other run-state file survive.
+ * Errors go through `onError` (die for the explicit command; a throw for the
+ * best-effort transition-path caller, which swallows it).
+ */
+function cleanupWorktree(file: string, onError: (msg: string) => never): CleanupResult {
+  const { data, content } = readFrontmatterFile(file, onError)
+  const worktree = data.worktree
+  if (worktree === null || worktree === undefined || worktree === '') {
+    return { file, worktreeRemoved: false, reason: 'no worktree' }
+  }
+  const worktreePath = String(worktree)
+  const runDir = dirname(dirname(file))
+  const manifestFile = join(runDir, 'manifest.md')
+  if (!existsSync(manifestFile)) onError(`no manifest at ${manifestFile} (cannot resolve repo root)`)
+  const mfm = parseFrontmatter(readFileSync(manifestFile, 'utf8'), manifestFile, onError)
+  const repo = data.repo ?? null
+  const repos: ListItem[] = Array.isArray(mfm.repos) ? mfm.repos : []
+  const entry = repos.find(r => mapField(r, 'name') === repo)
+  const repoRootVal = entry === undefined ? undefined : mapField(entry, 'root')
+  if (repoRootVal === undefined || repoRootVal === null) {
+    onError(`cannot resolve repo root for repo "${valueToString(repo)}" in ${manifestFile}`)
+  }
+  const repoRoot = String(repoRootVal)
+  const removed = removeWorktree(repoRoot, worktreePath)
+  if (removed) {
+    data.worktree = null
+    writeFrontmatterFile(file, data, content)
+  }
+  return { file, repo, repoRoot, worktreeRemoved: removed, worktree: removed ? null : worktree }
+}
+
+function cmdCleanup(file: string): void {
+  out(cleanupWorktree(file, die))
+}
+
+// --- outstanding -----------------------------------------------------------
+
+function cmdOutstanding(runDirArg: string | null): void {
+  const stateRoot = resolveStateRoot(die)
+  let runDirs: string[]
+  if (runDirArg !== null) {
+    runDirs = [runDirArg]
+  } else {
+    const runsRoot = join(stateRoot, 'runs')
+    runDirs = existsSync(runsRoot)
+      ? readdirSync(runsRoot)
+          .map(name => join(runsRoot, name))
+          .filter(dir => statSync(dir).isDirectory())
+          .sort()
+      : []
+  }
+  const deliverables: Record<string, FrontmatterValue>[] = []
+  for (const runDir of runDirs) {
+    const manifestFile = join(runDir, 'manifest.md')
+    if (!existsSync(manifestFile)) continue
+    const mfm = parseFrontmatter(readFileSync(manifestFile, 'utf8'), manifestFile, die)
+    const slug = basename(runDir)
+    const repos: ListItem[] = Array.isArray(mfm.repos) ? mfm.repos : []
+    const rootByName = new Map(repos.map(r => [mapField(r, 'name'), mapField(r, 'root') ?? null]))
+    const list: ListItem[] = Array.isArray(mfm.deliverables) ? mfm.deliverables : []
+    for (const listEntry of list) {
+      const fileField = String(mapField(listEntry, 'file'))
+      const dfile = isAbsolute(fileField) ? fileField : join(runDir, fileField)
+      if (!existsSync(dfile)) continue
+      const fm = parseFrontmatter(readFileSync(dfile, 'utf8'), dfile, die)
+      if (fm.status === 'merged') continue
+      const repo = fm.repo ?? null
+      deliverables.push({
+        slug,
+        id: fm.id ?? mapField(listEntry, 'id') ?? null,
+        file: dfile,
+        status: fm.status ?? null,
+        repo,
+        repoRoot: rootByName.get(repo) ?? null,
+        branch: fm.branch ?? null,
+        base: fm.base ?? null,
+        worktree: fm.worktree ?? null,
+        pr: fm.pr ?? null,
+      })
+    }
+  }
+  out({ stateRoot, deliverables })
 }
 
 // --- resolve ---------------------------------------------------------------
@@ -251,6 +450,21 @@ function cmdTransition(file: string, to: string, from: string | null): void {
   }
   data.status = to
   writeFrontmatterFile(file, data, content)
+  // The `pr-open → merged` edge cleans up the deliverable's worktree regardless
+  // of which owner drove the flip. Best-effort: it re-reads/rewrites the file to
+  // null `worktree`, but ALL errors are swallowed and it never touches the
+  // one-JSON-object stdout or the exit code. Run before the auto-commit so the
+  // `worktree: null` write is swept into the same commit.
+  if (to === 'merged') {
+    try {
+      cleanupWorktree(file, msg => {
+        throw new Error(msg)
+      })
+    } catch {
+      // best-effort: cleanup is a convenience, the transition is the contract.
+    }
+  }
+  autoCommitStateRoot(file, `state: ${basename(file)} ${current}→${to}`)
   out({ file, from: current, to, changed: true })
 }
 
@@ -275,6 +489,7 @@ function cmdManifestStatus(runDir: string, to: string): void {
   if (toIdx < currentIdx) die(`manifest status is forward-only: ${current} → ${to} rejected`)
   data.status = to
   writeFrontmatterFile(file, data, content)
+  autoCommitStateRoot(file, `manifest: ${basename(runDir)} ${current}→${to}`)
   out({ file, from: current, to, changed: true })
 }
 
@@ -459,7 +674,8 @@ function cmdFeedbackIndexSet(runDir: string, externalId: string, status: string,
 
 // --- dispatch ---------------------------------------------------------------
 
-const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status|feedback-index> ...'
+const USAGE =
+  'usage: state.mjs <resolve|dag|set|transition|manifest-status|feedback-index|commit|cleanup|outstanding> ...'
 const [cmd, ...rest] = process.argv.slice(2)
 
 function takeFlag(args: string[], flag: string): string | null {
@@ -539,6 +755,23 @@ switch (cmd) {
       default:
         die('usage: state.mjs feedback-index <read|upsert|set> ...')
     }
+    break
+  }
+  case 'commit': {
+    const message = takeFlag(rest, '--message')
+    const arg = rest[0]
+    cmdCommit(arg ? resolve(arg) : null, message ?? 'state: checkpoint')
+    break
+  }
+  case 'cleanup': {
+    const fileArg = rest[0]
+    if (!fileArg) die('usage: state.mjs cleanup <deliverableFile>')
+    cmdCleanup(resolve(fileArg))
+    break
+  }
+  case 'outstanding': {
+    const runDirArg = rest[0]
+    cmdOutstanding(runDirArg ? resolve(runDirArg) : null)
     break
   }
   default:

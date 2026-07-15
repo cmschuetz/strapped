@@ -84,7 +84,7 @@ The strapped operating context loads itself: a SessionStart hook runs `plugins/s
 
 ## PR tracking
 
-Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which checks every `pr-open` deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, and notes newly unblocked children. It exits silently in milliseconds when a project has no strapped state or nothing is `pr-open`, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.
+Deliverable statuses refresh automatically at session start: a SessionStart hook runs `plugins/strapped/scripts/sync-prs.sh`, which tracks every non-merged PR-bearing deliverable via `gh`, flips merged ones to `merged`, warns on closed or changes-requested PRs, notes newly unblocked children, and advises `/strapped:pr <slug> --update` when a merged parent has advanced a child's base. A merge **auto-removes that deliverable's worktree** (the branch is kept — a still-open same-repo child needs it for `--update`), and the state root is a **git repository** the hook checkpoints each pass (also committed on every status transition), so a run's history stays recoverable. It exits silently in milliseconds when a project has no strapped state or nothing is outstanding, and it never fires for subagents. Manual refresh: run the script directly or re-invoke `/strapped:pr <slug>`.
 
 ## Feedback loop
 

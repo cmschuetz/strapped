@@ -176,7 +176,7 @@ export function makeStateEnv() {
   return { base, home, stateRoot, runDir, writeManifest, addDeliverable, addRepoConfig, writeRun, runState, readFile }
 }
 
-const GIT_ENV = {
+export const GIT_ENV = {
   GIT_CONFIG_GLOBAL: '/dev/null',
   GIT_CONFIG_SYSTEM: '/dev/null',
   GIT_AUTHOR_NAME: 'test',
