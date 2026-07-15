@@ -38,7 +38,7 @@ It performs the conventions' *Cwd-independent slug → run-root resolution* (dir
 
 ## Create mode (default)
 
-The entire create pass lives in the `pr` stage of the `strapped-run` mono-workflow: one PR agent runs the conventions' **Stacked PRs** procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + the authoritative `topo` order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), titles each PR per the conventions' **PR titles and bodies (Conventional Commits)** spec (`<type>(<slug>): <description>` — run slug as scope, no `Dx:` prefix), builds each body (imperative what/why prose, summary, acceptance-criteria checklist, cross-repo `## Stack` table, `Depends on #<parent PR>` for same-repo non-roots, breaking-change footer when applicable), refreshes every stack table after all creations, and carries the Guardrails below verbatim. Do not hand-roll any of it.
+The entire create pass lives in the `pr` stage of the `strapped-run` mono-workflow: one PR agent runs the conventions' **Stacked PRs** procedure mechanically through `state.mjs` (`resolve` for the repos map, `dag` for nodes + the authoritative `topo` order, then per created PR `set <file> pr <url>` and `transition <file> pr-open`), titles each PR per the conventions' **PR titles and bodies (Conventional Commits)** spec — the DEFAULT that defers: if a PR-title/commit convention is already established in context (repo config, the repo's CLAUDE.md, or the user's Claude settings/guidelines) it honors that instead, and only falls back to `<type>(<slug>): <description>` (run slug as scope, no `Dx:` prefix) when none is supplied — builds each body (imperative what/why prose, summary, acceptance-criteria checklist, cross-repo `## Stack` table, `Depends on #<parent PR>` for same-repo non-roots, breaking-change footer when applicable), refreshes every stack table after all creations, and carries the Guardrails below verbatim. Do not hand-roll any of it.
 
 Dispatch the mono-workflow with a singleton stage list — invoke the Workflow tool with `scriptPath: $PLUGIN_ROOT/workflows/strapped-run.js` (scriptPath, not name: name resolution can serve a stale registration) — with args (full contract in the conventions' **Composable chains** section):
 
@@ -71,7 +71,7 @@ The rebase applies to **same-repo parent→child edges only**. A cross-repo chil
    git -C <childWorktree> push --force-with-lease
    ```
    `<old-parent-tip>` is the recorded merge-base from step 1. On rebase conflict: abort the rebase, park the child via `node $PLUGIN_ROOT/scripts/state.mjs transition <deliverableFile> parked` plus `node $PLUGIN_ROOT/scripts/state.mjs set <deliverableFile> parked_reason "rebase conflict onto <parent>"`, and report — never force through a conflict.
-3. Refresh PR bodies/bases with `gh pr edit` (run in each deliverable's own repo), keeping the conventions' **PR titles and bodies (Conventional Commits)** format for any regenerated title/body.
+3. Refresh PR bodies/bases with `gh pr edit` (run in each deliverable's own repo), keeping the conventions' **PR titles and bodies (Conventional Commits)** format for any regenerated title/body as the default — unless a PR-title/commit convention already established in context (repo config, the repo's CLAUDE.md, or the user's Claude settings/guidelines) applies, which takes precedence.
 
 ## Guardrails
 
