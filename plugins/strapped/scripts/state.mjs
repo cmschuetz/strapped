@@ -3277,6 +3277,10 @@ function cmdResolve(slug) {
     repos
   });
 }
+function cmdRunRoot() {
+  const stateRoot = resolveStateRoot(die2);
+  out({ stateRoot, runRoot: join2(stateRoot, "runs") });
+}
 var COMPLETE_STATUSES = new Set(["done", "pr-open", "merged"]);
 function cmdDag(runDir, only) {
   const manifestFile = join2(runDir, "manifest.md");
@@ -3567,7 +3571,7 @@ function cmdFeedbackIndexSet(runDir, externalId, status, commit) {
   writeFeedbackIndex(path, index);
   out({ externalId, from, to: status, commit: comment.commit, changed: true });
 }
-var USAGE = "usage: state.mjs <resolve|dag|set|transition|manifest-status|feedback-index> ...";
+var USAGE = "usage: state.mjs <resolve|runroot|dag|set|transition|manifest-status|feedback-index> ...";
 var [cmd, ...rest] = process.argv.slice(2);
 function takeFlag(args, flag) {
   const i = args.indexOf(flag);
@@ -3585,6 +3589,10 @@ switch (cmd) {
     if (!slug)
       die2("usage: state.mjs resolve <slug>");
     cmdResolve(slug);
+    break;
+  }
+  case "runroot": {
+    cmdRunRoot();
     break;
   }
   case "dag": {

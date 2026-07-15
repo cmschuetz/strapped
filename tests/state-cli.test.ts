@@ -181,6 +181,40 @@ test('resolve: missing slug argument → usage on stderr, exit 1', () => {
   assert.match(res.stderr, /usage/)
 })
 
+// --- runroot -----------------------------------------------------------------
+
+interface RunRootJson {
+  stateRoot: string
+  runRoot: string
+}
+
+test('runroot: env stateRoot → { stateRoot, runRoot } with no slug, exit 0', () => {
+  const env = makeStateEnv()
+  const res = env.runState(['runroot'])
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<RunRootJson>(res)
+  assert.equal(json.stateRoot, env.stateRoot)
+  assert.equal(json.runRoot, join(env.stateRoot, 'runs'))
+})
+
+test('runroot: no env, no anchor → default ~/.claude/strapped under isolated HOME', () => {
+  const env = makeStateEnv()
+  const res = env.runState(['runroot'], { env: { STRAPPED_STATE_ROOT: undefined } })
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<RunRootJson>(res)
+  assert.equal(json.stateRoot, join(env.home, '.claude', 'strapped'))
+  assert.equal(json.runRoot, join(env.home, '.claude', 'strapped', 'runs'))
+})
+
+test('runroot: relative stateRoot → exit 1 with one-line stderr, no silent fallback', () => {
+  const env = makeStateEnv()
+  const res = env.runState(['runroot'], { env: { STRAPPED_STATE_ROOT: 'plans/strapped' } })
+  assert.equal(res.status, 1)
+  assert.equal(res.stdout, '')
+  assert.match(res.stderr, /not absolute/)
+  assert.equal(res.stderr.trim().split('\n').length, 1)
+})
+
 // --- dag -----------------------------------------------------------------
 
 test('dag: roots ready, child blocked until parent done/pr-open/merged', () => {

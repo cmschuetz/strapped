@@ -43,6 +43,8 @@ The `resolve` output already carries the manifest `status`, `seed`, `budgets`, a
 
 Each deliverable's `repo:` field is **required** and names one of the `repos:` entries — a deliverable with no `repo:` is invalid input.
 
+**Baseline-freshness pre-flight.** The plan may have been written before `main` moved. Before dispatching, in each target repo `git -C <repoRoot> fetch` and diff the plan's architectural assumptions against current `origin/main` (recent commits touching the conventions/specs/modules the deliverables cite). If main has moved under the plan, surface the conflicts to the user and let them choose to amend the affected deliverables to match current main (or re-plan) — never implement a spec you know is stale.
+
 ## Step 2 — Rule assignments
 
 As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per the conventions' **Rule extraction**), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed.

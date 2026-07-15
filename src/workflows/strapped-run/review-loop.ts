@@ -19,7 +19,7 @@ import type {
 } from './types.ts'
 
 export const PLAN_LENSES: Record<ReviewerId, string> = {
-  a: 'completeness: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared',
+  a: "completeness AND fidelity to intent: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared. Beyond coverage, test the plan's KEY DESIGN DECISIONS against the ask's UNDERLYING INTENT, not just its own stated framing/ACs — a plan can satisfy every AC it wrote for itself while a core decision quietly contradicts what the user actually wanted. Re-open such decisions as findings",
   b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), planned work that is dead, duplicated, or superseded within the plan (steps or files a later step obviates, two deliverables doing the same work, or acceptance criteria/tests no remaining step produces), and steps that cannot work as written',
 }
 

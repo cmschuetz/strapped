@@ -5,6 +5,7 @@
 //
 // Commands (all print one JSON object on stdout; misuse = one-line stderr + exit 1):
 //   resolve <slug>                          config + run-root resolution
+//   runroot                                 slug-less stateRoot/runRoot resolution (for cross-run globs)
 //   dag <runDir> [--only <Did>]             nodes, ready set, topo order, blocked, remaining
 //   set <file> <field> <value>              single-field frontmatter write
 //   transition <file> <to> [--from <s>]     guarded deliverable status flip
@@ -81,6 +82,18 @@ function cmdResolve(slug: string): void {
     budgets: fm.budgets ?? null,
     repos,
   })
+}
+
+// --- runroot ---------------------------------------------------------------
+
+// Slug-less resolution: the single anchor value plus its `runs/` tier, for
+// callers that scan across ALL runs (e.g. /strapped:learn globbing every
+// `runs/*/critiques/user-critiques.md`) rather than one slug. Errors loudly
+// via resolveStateRoot's die on an unresolvable/relative anchor, so an empty
+// cross-run glob is unambiguously "no matches" — never a silently-wrong root.
+function cmdRunRoot(): void {
+  const stateRoot = resolveStateRoot(die)
+  out({ stateRoot, runRoot: join(stateRoot, 'runs') })
 }
 
 // --- dag -------------------------------------------------------------------
@@ -459,7 +472,7 @@ function cmdFeedbackIndexSet(runDir: string, externalId: string, status: string,
 
 // --- dispatch ---------------------------------------------------------------
 
-const USAGE = 'usage: state.mjs <resolve|dag|set|transition|manifest-status|feedback-index> ...'
+const USAGE = 'usage: state.mjs <resolve|runroot|dag|set|transition|manifest-status|feedback-index> ...'
 const [cmd, ...rest] = process.argv.slice(2)
 
 function takeFlag(args: string[], flag: string): string | null {
@@ -476,6 +489,10 @@ switch (cmd) {
     const slug = rest[0]
     if (!slug) die('usage: state.mjs resolve <slug>')
     cmdResolve(slug)
+    break
+  }
+  case 'runroot': {
+    cmdRunRoot()
     break
   }
   case 'dag': {
