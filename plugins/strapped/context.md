@@ -15,8 +15,9 @@ learning loop and a PR-feedback loop close back into planning.
 
 ## The skills — run one when
 
-- **/strapped:plan** — turn a large ask into a converged DAG plan (research +
-  adversarial plan-review loop + interactive final review). Use to start a run.
+- **/strapped:plan** — turn a large ask into a converged DAG plan (recursive
+  multi-source research fan-out + adversarial plan-review loop + interactive
+  final review). Use to start a run.
 - **/strapped:implement** — execute an approved DAG wave-by-wave: a persistent worktree
   per deliverable, a fresh implementer, validations, a bounded code-review/fix loop.
 - **/strapped:pr** — create/update the stacked GitHub PRs for a run's `done`

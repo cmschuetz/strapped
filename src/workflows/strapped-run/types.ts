@@ -32,6 +32,8 @@ export interface RunScripts {
 export interface PlanStageArgs {
   sourcePlan?: string
   repos?: RepoRef[]
+  /** Research fan-out wave budget for the plan stage (default 3, floor 1). */
+  researchWaves?: number
 }
 
 export interface FeedbackSynthStageArgs {
@@ -90,6 +92,34 @@ export interface PlanDeliverable {
 export interface PlanResult {
   deliverables: PlanDeliverable[]
   summary: string
+}
+
+/** One repo/directory/file/URL/data source in the plan-stage research frontier. */
+export interface ResearchSource {
+  /** kebab-case slug unique within the run's research set */
+  id: string
+  kind: 'repo' | 'directory' | 'file' | 'url' | 'other'
+  name: string
+  /** absolute path or URL */
+  location: string
+  /** why this source matters to the ask */
+  why: string
+}
+
+/** SCOPE_SCHEMA */
+export interface ScopeResult {
+  sources: ResearchSource[]
+}
+
+/** RESEARCH_SCHEMA */
+export interface ResearchResult {
+  /** absolute path of the digest written under <runDir>/research/; null when unreachable and nothing was written */
+  digestFile: string | null
+  summary: string
+  /** sources newly discovered while researching — drives the next wave */
+  newSources: ResearchSource[]
+  /** true when the source could not be accessed */
+  unreachable: boolean
 }
 
 export type Severity = 'blocking' | 'concern' | 'suggestion'

@@ -64,9 +64,26 @@ function finding(id: string, severity = 'blocking') {
   }
 }
 
+/** An ok researcher result: digest written, nothing new discovered. */
+function researchOk(id: string, newSources: unknown[] = []) {
+  return {
+    digestFile: `/state/runs/test-run/research/${id}.md`,
+    summary: `researched ${id}`,
+    newSources,
+    unreachable: false,
+  }
+}
+
+/** A ResearchSource as the scope agent / a researcher's newSources report it. */
+function researchSource(id: string, location: string, kind = 'repo') {
+  return { id, kind, name: id, location, why: 'mentioned in the plan' }
+}
+
 /** Agent stubs for a plan stage that converges in review round 1. */
 function planConverges() {
   return {
+    'research-scope': { sources: [] },
+    'research:alpha:w1': researchOk('alpha'),
     planner: PLAN,
     'plan-review:a:r1': NO_FINDINGS,
     'plan-review:b:r1': NO_FINDINGS,
@@ -192,6 +209,8 @@ test('plan non-convergence → stoppedAt plan, no approve, no later stages', asy
       stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: REPOS }, pr: {} },
     }),
     agent: agentByLabel({
+      'research-scope': { sources: [] },
+      'research:alpha:w1': researchOk('alpha'),
       planner: PLAN,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
@@ -214,6 +233,8 @@ test('null refuter result → finding handled as vote-not-cast, loop completes w
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg(),
     agent: agentByLabel({
+      'research-scope': { sources: [] },
+      'research:alpha:w1': researchOk('alpha'),
       planner: PLAN,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
@@ -226,6 +247,149 @@ test('null refuter result → finding handled as vote-not-cast, loop completes w
   // The vote-not-cast finding never reaches the consolidator's surviving set.
   const consolidate = callWithLabel(calls, 'consolidate:r1')
   assert.ok(!consolidate.prompt.includes('"r1-a-f1"'))
+})
+
+// --- plan-stage research fan-out ----------------------------------------------
+
+test('plan research fan-out: scope then per-source researchers then planner, in order', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      'research-scope': { sources: [researchSource('beta-docs', 'https://docs.example.com/beta', 'url')] },
+      'research:beta-docs:w1': researchOk('beta-docs'),
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+
+  // Scope runs before any researcher; every researcher precedes the planner.
+  const scopeIdx = calls.indexOf(callWithLabel(calls, 'research-scope'))
+  const alphaIdx = calls.indexOf(callWithLabel(calls, 'research:alpha:w1'))
+  const betaIdx = calls.indexOf(callWithLabel(calls, 'research:beta-docs:w1'))
+  const plannerIdx = calls.indexOf(callWithLabel(calls, 'planner'))
+  assert.ok(scopeIdx >= 0 && scopeIdx < alphaIdx && scopeIdx < betaIdx, 'scope must precede the researchers')
+  assert.ok(alphaIdx < plannerIdx && betaIdx < plannerIdx, 'researchers must precede the planner')
+
+  // Each researcher is told to write its own per-source digest exhaustively.
+  const alpha = callWithLabel(calls, 'research:alpha:w1')
+  assert.ok(alpha.prompt.includes(`${baseCfg().dir}/research/alpha.md`))
+  assert.ok(alpha.prompt.includes('exhaustively'))
+  const beta = callWithLabel(calls, 'research:beta-docs:w1')
+  assert.ok(beta.prompt.includes(`${baseCfg().dir}/research/beta-docs.md`))
+
+  // The planner synthesizes the digests and keeps the unchanged procedure:
+  // digest dir + source table, ~300-line cap, cross-repo base rule fragments,
+  // and the state.mjs commit step.
+  const planner = callWithLabel(calls, 'planner')
+  assert.ok(planner.prompt.includes(`${baseCfg().dir}/research/`))
+  assert.ok(planner.prompt.includes('- alpha (repo) at /repos/alpha — ok'))
+  assert.ok(planner.prompt.includes('- beta-docs (url) at https://docs.example.com/beta — ok'))
+  assert.ok(planner.prompt.includes('~300'))
+  assert.ok(planner.prompt.includes('ordering-only'))
+  assert.ok(planner.prompt.includes('base on their own repo\'s main'))
+  assert.ok(planner.prompt.includes('state.mjs commit'))
+})
+
+test('plan research: null scope result still researches every target repo', async () => {
+  const { result, calls, logs } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      'research-scope': () => null,
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(callsWithLabelPrefix(calls, 'research:alpha:w1').length, 1)
+  assert.ok(logs.some(l => l.includes('scope agent failed')), 'expected a scope-failure warning log')
+})
+
+test('plan research: newSources recurse next wave; visited locations deduped', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      'research-scope': { sources: [researchSource('beta-docs', 'https://docs.example.com/beta', 'url')] },
+      // beta-docs discovers gamma AND a re-mention of alpha's location (with a
+      // trailing slash — normalization must still dedupe it).
+      'research:beta-docs:w1': researchOk('beta-docs', [
+        researchSource('gamma', '/repos/gamma'),
+        researchSource('alpha-again', '/repos/alpha/'),
+      ]),
+      'research:gamma:w2': researchOk('gamma'),
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(callsWithLabelPrefix(calls, 'research:gamma').length, 1)
+  assert.equal(callWithLabel(calls, 'research:gamma:w2').opts?.label, 'research:gamma:w2')
+  // Alpha's location was already visited: exactly one dispatch ever targets it,
+  // and gamma reporting nothing new ends the loop before the 3-wave budget.
+  const researchers = callsWithLabelPrefix(calls, 'research:')
+  assert.equal(researchers.filter(c => c.prompt.includes('/repos/alpha')).length, 1)
+  assert.equal(researchers.length, 3)
+})
+
+test('plan research: newSource id collision gets a suffixed id and its own digest', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      // alpha discovers a DIFFERENTLY-located source that reuses its own id.
+      'research:alpha:w1': researchOk('alpha', [researchSource('alpha', '/repos/alpha-fork')]),
+      'research:alpha-2:w2': researchOk('alpha-2'),
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  const suffixed = callWithLabel(calls, 'research:alpha-2:w2')
+  assert.ok(suffixed.prompt.includes(`${baseCfg().dir}/research/alpha-2.md`))
+  assert.ok(!suffixed.prompt.includes(`${baseCfg().dir}/research/alpha.md`), 'must not overwrite the original alpha digest')
+})
+
+test('plan research: researchWaves budget stops recursion and surfaces leftovers to the planner', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: REPOS, researchWaves: 1 } },
+    }),
+    agent: agentByLabel({
+      ...planConverges(),
+      'research:alpha:w1': researchOk('alpha', [researchSource('gamma', '/repos/gamma')]),
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(callsWithLabelPrefix(calls, 'research:').filter(c => String(c.opts?.label).endsWith(':w2')).length, 0)
+  const planner = callWithLabel(calls, 'planner')
+  assert.ok(planner.prompt.includes('- gamma (repo) at /repos/gamma — un-researched'))
+})
+
+test('plan research: null researcher result is non-fatal and surfaced; unreachable is distinct', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      'research-scope': {
+        sources: [
+          researchSource('beta-docs', 'https://docs.example.com/beta', 'url'),
+          researchSource('delta-api', 'https://api.example.com/delta', 'url'),
+        ],
+      },
+      'research:beta-docs:w1': () => null, // agent failed
+      'research:delta-api:w1': { digestFile: null, summary: 'no access route', newSources: [], unreachable: true },
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  const planner = callWithLabel(calls, 'planner')
+  assert.ok(planner.prompt.includes('- beta-docs (url) at https://docs.example.com/beta — failed'))
+  assert.ok(planner.prompt.includes('- delta-api (url) at https://api.example.com/delta — unreachable'))
+  assert.ok(planner.prompt.includes('- alpha (repo) at /repos/alpha — ok'))
+})
+
+test('plan prompts carry the delegation grant', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel(planConverges()),
+  })
+  const grant = 'including the Task tool to spawn parallel subagents when the harness provides it'
+  assert.ok(callWithLabel(calls, 'research:alpha:w1').prompt.includes(grant))
+  assert.ok(callWithLabel(calls, 'planner').prompt.includes(grant))
 })
 
 // --- AC3: implement stage -----------------------------------------------------

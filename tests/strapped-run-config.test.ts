@@ -63,3 +63,22 @@ test('feedback-synth: a non-boolean lite flag is rejected at config parse', asyn
     /config: stageArgs\["feedback-synth"\]\.lite must be a boolean/
   )
 })
+
+test('plan: a non-number researchWaves is rejected at config parse', async () => {
+  const cfg = {
+    slug: 'test-run',
+    dir: '/state/runs/test-run',
+    conventionsFile: '/plugin/conventions.md',
+    scripts: { state: '/plugin/scripts/state.mjs', worktree: '/plugin/scripts/ensure-worktree.sh' },
+    seed: 42,
+    confidenceMin: 70,
+    planRounds: 3,
+    codeRounds: 3,
+    stages: ['plan'],
+    stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: [], researchWaves: 'many' } },
+  }
+  await assert.rejects(
+    runWorkflow(WORKFLOW, { args: cfg, agent: agentByLabel({}) }),
+    /config: stageArgs\.plan\.researchWaves must be a number/
+  )
+})

@@ -19,6 +19,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
  */
 export const SCHEMA_TYPES: ReadonlyArray<readonly [type: string, constant: string]> = [
   ['PlanResult', 'PLAN_SCHEMA'],
+  ['ScopeResult', 'SCOPE_SCHEMA'],
+  ['ResearchResult', 'RESEARCH_SCHEMA'],
   ['FindingsResult', 'FINDINGS_SCHEMA'],
   ['RefuteResult', 'REFUTE_SCHEMA'],
   ['ConsolidateResult', 'CONSOLIDATE_SCHEMA'],

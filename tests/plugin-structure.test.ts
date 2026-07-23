@@ -189,6 +189,25 @@ test('every conventions section cited by name in SKILL.md prose still exists as 
   }
 })
 
+test('plan skill grants Task and scaffolds research/', () => {
+  const src = readFileSync(join(PLUGIN_ROOT, 'skills', 'plan', 'SKILL.md'), 'utf8')
+  const frontmatter = src.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? ''
+  assert.match(frontmatter, /^allowed-tools:$/m, 'plan SKILL.md frontmatter lacks allowed-tools')
+  assert.match(frontmatter, /^\s+-\s+Task\s*$/m, 'plan SKILL.md allowed-tools lacks Task')
+  assert.ok(
+    src.includes('mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques,research}'),
+    'plan SKILL.md scaffold mkdir lacks research/'
+  )
+  assert.ok(src.includes('--research-waves'), 'plan SKILL.md Arguments lack --research-waves')
+  assert.ok(src.includes('"researchWaves"'), 'plan SKILL.md Step 3 args template lacks researchWaves')
+
+  const conventions = readFileSync(join(PLUGIN_ROOT, 'conventions.md'), 'utf8')
+  assert.ok(
+    conventions.includes('research/<sourceId>.md'),
+    'conventions.md Directory layout lacks the per-source research digest line'
+  )
+})
+
 test('workflow meta.names are unique and every referenced workflow name resolves', () => {
   const workflowsDir = join(PLUGIN_ROOT, 'workflows')
   const files = readdirSync(workflowsDir).filter(f => f.endsWith('.js'))

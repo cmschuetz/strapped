@@ -46,6 +46,130 @@ export const PLAN_SCHEMA = {
   "additionalProperties": false
 }
 
+/** Derived from the `ScopeResult` interface in types.ts. */
+export const SCOPE_SCHEMA = {
+  "type": "object",
+  "properties": {
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "kebab-case slug unique within the run's research set"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "repo",
+              "directory",
+              "file",
+              "url",
+              "other"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "description": "absolute path or URL"
+          },
+          "why": {
+            "type": "string",
+            "description": "why this source matters to the ask"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "location",
+          "why"
+        ],
+        "additionalProperties": false,
+        "description": "One repo/directory/file/URL/data source in the plan-stage research frontier."
+      }
+    }
+  },
+  "required": [
+    "sources"
+  ],
+  "additionalProperties": false
+}
+
+/** Derived from the `ResearchResult` interface in types.ts. */
+export const RESEARCH_SCHEMA = {
+  "type": "object",
+  "properties": {
+    "digestFile": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "absolute path of the digest written under <runDir>/research/; null when unreachable and nothing was written"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "newSources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "kebab-case slug unique within the run's research set"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "repo",
+              "directory",
+              "file",
+              "url",
+              "other"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "location": {
+            "type": "string",
+            "description": "absolute path or URL"
+          },
+          "why": {
+            "type": "string",
+            "description": "why this source matters to the ask"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "location",
+          "why"
+        ],
+        "additionalProperties": false,
+        "description": "One repo/directory/file/URL/data source in the plan-stage research frontier."
+      },
+      "description": "sources newly discovered while researching — drives the next wave"
+    },
+    "unreachable": {
+      "type": "boolean",
+      "description": "true when the source could not be accessed"
+    }
+  },
+  "required": [
+    "digestFile",
+    "summary",
+    "newSources",
+    "unreachable"
+  ],
+  "additionalProperties": false
+}
+
 /** Derived from the `FindingsResult` interface in types.ts. */
 export const FINDINGS_SCHEMA = {
   "type": "object",

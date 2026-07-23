@@ -106,6 +106,10 @@ function parsePlanArgs(value: unknown): PlanStageArgs {
     parsed.sourcePlan = value.sourcePlan
   }
   if (value.repos !== undefined) parsed.repos = parseRepos(value.repos, 'stageArgs.plan.repos')
+  if (value.researchWaves !== undefined) {
+    if (typeof value.researchWaves !== 'number') throw new Error('config: stageArgs.plan.researchWaves must be a number')
+    parsed.researchWaves = value.researchWaves
+  }
   return parsed
 }
 

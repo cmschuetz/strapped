@@ -10,6 +10,7 @@ allowed-tools:
   - Grep
   - Workflow
   - AskUserQuestion
+  - Task
 ---
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
@@ -18,11 +19,12 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 
 ## Arguments
 
-`$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]`
+`$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N] [--research-waves N]`
 
 - `--repo <path-or-name>` — **repeatable**; names the target repo(s) the work will change (an unordered set — no repo is special). Each value is either an absolute/relative path to a repo, or a bare name resolved under the user's repo-parent convention (e.g. `$WORK_DIR_PATH/<name>`, `~/chime/<name>`). When **omitted**, the skill first checks for an existing run to resume, and only if none exists infers candidate repos from the source plan text and confirms them with the user (see Step 1). Repo identity is **never** taken from the cwd.
 - `--seed` defaults to 42; recorded in the manifest so reviews are reproducible.
 - `--max-rounds` defaults to the `plan_rounds` budget (3).
+- `--research-waves` — research wave budget for the plan stage's fan-out (default 3, floor 1); passed through as `stageArgs.plan.researchWaves`.
 
 ## Step 1 — Resolve repos, config, then scaffold or resume
 
@@ -78,7 +80,7 @@ If this is a **resume** (either the 1a match on the `--repo`-omitted path, or th
 Otherwise scaffold a fresh run:
 
 ```bash
-mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques}
+mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques,research}
 touch <runRoot>/<slug>/critiques/user-critiques.md
 ```
 
@@ -101,6 +103,7 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   "stageArgs": {
     "plan": {
       "sourcePlan": "<abs path to the source plan.md>",
+      "researchWaves": <--research-waves value, default 3>,
       "repos": [
         { "name": "<targetRepo1>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] },
         { "name": "<targetRepo2>", "root": "<abs repo root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }
@@ -121,7 +124,7 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
 
 `stageArgs.plan.repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses it to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
 
-The plan stage runs the planner (which writes `research.md`, `manifest.md`, and the deliverable files), then up to `planRounds` adversarial review rounds. The workflow returns `{slug, stages, completed, stoppedAt, results}` — read `results.plan` for `{converged, rounds, deliverables, outstanding, summary}`. A singleton `["plan"]` dispatch NEVER auto-approves the manifest — approval is this skill's interactive gate (steps 5–6).
+The plan stage first fans research out (a scope agent enumerates every repo/data source the plan mentions beyond the target repos, then up to `researchWaves` recursive researcher waves write per-source digests under `<runRoot>/<slug>/research/`), then runs the planner (which synthesizes the digests into `research.md` and writes `manifest.md` and the deliverable files), then up to `planRounds` adversarial review rounds; `--max-rounds` pass-through is unchanged. The workflow returns `{slug, stages, completed, stoppedAt, results}` — read `results.plan` for `{converged, rounds, deliverables, outstanding, summary}`. A singleton `["plan"]` dispatch NEVER auto-approves the manifest — approval is this skill's interactive gate (steps 5–6).
 
 ## Step 4 — Handle the outcome
 

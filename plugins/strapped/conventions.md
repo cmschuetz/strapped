@@ -27,6 +27,7 @@ Under `stateRoot`, strapped writes exactly two sibling namespaces — `runs/` (r
   runs/<slug>/                   # RUN state — owned by the run, keyed by slug
     manifest.md                  # DAG structure + repos map + plan-level status
     research.md                  # distilled research digest (~300 line cap)
+    research/<sourceId>.md       # per-source research digests (planning-time fan-out)
     feedback-index.json          # PR-comment dedup index, keyed by GitHub external id (see Feedback index)
     deliverables/D1-<kebab>.md   # one self-contained plan per DAG node
     reviews/rules-snapshot.md    # numbered rules + sources + per-round assignments
@@ -337,7 +338,7 @@ All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.
 
 | stage | does | returns | gate (dispatch stops when it fails) |
 | --- | --- | --- | --- |
-| `plan` | planner writes research/manifest/deliverables (recording the run's EFFECTIVE seed + `plan_rounds`/`code_rounds` budgets in the manifest), then the bounded adversarial plan-review loop (`reviews/plan-round-<N>.md`) | `{converged, rounds, deliverables, outstanding, summary}` | `converged` |
+| `plan` | research fan-out first — a scope agent enumerates every repo/data source the plan mentions beyond the target repos, then bounded recursive researcher waves (budget `stageArgs.plan.researchWaves`, default 3) write per-source digests to `research/<sourceId>.md` — then the planner synthesizes them into research.md and writes manifest/deliverables (recording the run's EFFECTIVE seed + `plan_rounds`/`code_rounds` budgets in the manifest), then the bounded adversarial plan-review loop (`reviews/plan-round-<N>.md`) | `{converged, rounds, deliverables, outstanding, summary}` | `converged` |
 | `feedback-synth` | synthesize fetched PR comments (passed via `stageArgs`; fetching stays skill-side via `gh`) into `## Feedback addendum` sections, then the SAME review loop (`reviews/feedback-round-<N>.md`). With `stageArgs["feedback-synth"].lite: true` (the [Feedback-lite loop](#feedback-lite-loop)) synthesis returns the routed digest ONLY — writes no addenda and SKIPS the review loop, returning `converged: true, rounds: 0` | `{converged, rounds, outstanding, addenda, summary}` | `converged` |
 | `implement` | the FULL DAG wave loop: per pass a coordinator executor agent drives `state.mjs dag`/`resolve` + `ensure-worktree.sh` + status flips; per ready node a fresh implementer, validations, and bounded code-review/fix rounds; an outcome-applier agent flips `done`/`parked` + rounds counters. Zero newly-done progress terminates the loop (park-don't-spin) | `{outcomes, allDone, blocked}` — `allDone` = the dag's `remaining` is 0 (done-or-later, verbatim from `state.mjs dag`) | `allDone` |
 | `pr` | the stacked-PR create pass: one `pr-create` agent runs the [Stacked PRs](#stacked-prs) procedure through `state.mjs`, carrying the pr skill's Guardrails verbatim (never push `main`, never merge, never `--force` — only `--force-with-lease`; unauthenticated `gh` or a branch with no commits beyond base → report-and-skip via `prs[].skipped`/`reason`); `dryRun` = print-only, no mutation | `{prs: [{id, url, skipped, reason}], summary, dryRun}` | the done-or-later probe below |
@@ -351,7 +352,7 @@ All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.
   "slug": "<slug>", "dir": "<runRoot>/<slug>",
   "stages": ["plan", "implement", "pr"],
   "stageArgs": {
-    "plan": { "sourcePlan": "<abs>", "repos": [{ "name": "...", "root": "<abs>" }] },
+    "plan": { "sourcePlan": "<abs>", "repos": [{ "name": "...", "root": "<abs>" }], "researchWaves": 3 },
     "feedback-synth": { "comments": ["<fetched PR comments>"], "repos": [] },
     "implement": { "only": null, "addendumMode": false, "recordSuffix": "" },
     "pr": { "dryRun": false }
@@ -362,6 +363,8 @@ All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.
   "rulesByRound": ["<per-round {a, b} rule splits, computed skill-side>"]
 }
 ```
+
+`stageArgs.plan.researchWaves` is optional (default 3, floor 1) and settable by any direct dispatch of the mono-workflow; chain configs carry no `stageArgs`, so `/strapped:run` chains always use the default — the user-facing knob is `/strapped:plan --research-waves`.
 
 Returns `{ slug, stages, completed, stoppedAt, results }` — `results` keyed by stage name, `completed` the stages whose gate passed, `stoppedAt` the gate-failing stage (its result still lands in `results`; parked/blocked details surface there — the dispatch never proceeds silently).
 

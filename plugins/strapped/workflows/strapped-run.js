@@ -117,6 +117,11 @@ function parsePlanArgs(value) {
   }
   if (value.repos !== undefined)
     parsed.repos = parseRepos(value.repos, "stageArgs.plan.repos");
+  if (value.researchWaves !== undefined) {
+    if (typeof value.researchWaves !== "number")
+      throw new Error("config: stageArgs.plan.researchWaves must be a number");
+    parsed.researchWaves = value.researchWaves;
+  }
   return parsed;
 }
 function parseFeedbackSynthArgs(value) {
@@ -258,6 +263,126 @@ var PLAN_SCHEMA = {
   required: [
     "deliverables",
     "summary"
+  ],
+  additionalProperties: false
+};
+var SCOPE_SCHEMA = {
+  type: "object",
+  properties: {
+    sources: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "kebab-case slug unique within the run's research set"
+          },
+          kind: {
+            type: "string",
+            enum: [
+              "repo",
+              "directory",
+              "file",
+              "url",
+              "other"
+            ]
+          },
+          name: {
+            type: "string"
+          },
+          location: {
+            type: "string",
+            description: "absolute path or URL"
+          },
+          why: {
+            type: "string",
+            description: "why this source matters to the ask"
+          }
+        },
+        required: [
+          "id",
+          "kind",
+          "name",
+          "location",
+          "why"
+        ],
+        additionalProperties: false,
+        description: "One repo/directory/file/URL/data source in the plan-stage research frontier."
+      }
+    }
+  },
+  required: [
+    "sources"
+  ],
+  additionalProperties: false
+};
+var RESEARCH_SCHEMA = {
+  type: "object",
+  properties: {
+    digestFile: {
+      type: [
+        "string",
+        "null"
+      ],
+      description: "absolute path of the digest written under <runDir>/research/; null when unreachable and nothing was written"
+    },
+    summary: {
+      type: "string"
+    },
+    newSources: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "kebab-case slug unique within the run's research set"
+          },
+          kind: {
+            type: "string",
+            enum: [
+              "repo",
+              "directory",
+              "file",
+              "url",
+              "other"
+            ]
+          },
+          name: {
+            type: "string"
+          },
+          location: {
+            type: "string",
+            description: "absolute path or URL"
+          },
+          why: {
+            type: "string",
+            description: "why this source matters to the ask"
+          }
+        },
+        required: [
+          "id",
+          "kind",
+          "name",
+          "location",
+          "why"
+        ],
+        additionalProperties: false,
+        description: "One repo/directory/file/URL/data source in the plan-stage research frontier."
+      },
+      description: "sources newly discovered while researching — drives the next wave"
+    },
+    unreachable: {
+      type: "boolean",
+      description: "true when the source could not be accessed"
+    }
+  },
+  required: [
+    "digestFile",
+    "summary",
+    "newSources",
+    "unreachable"
   ],
   additionalProperties: false
 };
@@ -1282,9 +1407,111 @@ async function implementStage(cfg) {
 }
 
 // src/workflows/strapped-run/stages/plan.ts
+var DELEGATION_GRANT = "Use every tool available to you — including the Task tool to spawn parallel subagents when the harness provides it, and remote access (`gh`, web fetch/search) for non-local sources.";
+function normalizeLocation(location) {
+  return location.trim().replace(/\/+$/, "");
+}
+function makeFrontier() {
+  const locations = new Set;
+  const ids = new Set;
+  const pending = [];
+  return {
+    add(source) {
+      const location = normalizeLocation(source.location);
+      if (locations.has(location))
+        return;
+      let id = source.id;
+      for (let n = 2;ids.has(id); n++)
+        id = `${source.id}-${n}`;
+      locations.add(location);
+      ids.add(id);
+      pending.push({ ...source, id, location: source.location });
+    },
+    take() {
+      return pending.splice(0);
+    },
+    leftovers() {
+      return pending;
+    }
+  };
+}
+function researcherPrompt(cfg, source, sourcePlan) {
+  const digestFile = `${cfg.dir}/research/${source.id}.md`;
+  return `You are a research agent for strapped run "${cfg.slug}". Research this ONE source exhaustively for the ask.
+
+Source plan (the original ask, for context): ${sourcePlan}
+Your single source:
+- id: ${source.id}
+- kind: ${source.kind}
+- name: ${source.name}
+- location: ${source.location}
+- why it matters: ${source.why}
+
+Procedure:
+1. Research the source exhaustively for the ask. For a local path, explore the codebase: architecture, the modules the ask touches, existing utilities to reuse, test patterns. For a URL/remote source, use whatever access is available (\`gh\`, web fetch/search). If NO access route works, set \`unreachable: true\`, write NO digest, and return \`digestFile: null\` with a \`summary\` saying why the source was unreachable.
+2. Otherwise write a digest (~100 lines: the source's role, key files/APIs with one-line roles, findings relevant to the ask, pitfalls) to ${digestFile} (create the directory if needed) and return its absolute path as \`digestFile\`.
+3. Report \`newSources\`: any FURTHER repos, docs, or data sources this source references that bear on the ask, each with a resolved location (absolute path or URL), a unique kebab-case id, and a one-line why.
+
+${DELEGATION_GRANT} If the Task tool is unavailable, do the work directly — the workflow already parallelizes across sources.`;
+}
+async function runResearchFanOut(cfg, a) {
+  phase("Research");
+  const maxWaves = Math.max(1, Math.floor(a.researchWaves ?? 3));
+  const frontier = makeFrontier();
+  for (const repo of a.repos ?? []) {
+    frontier.add({ id: repo.name, kind: "repo", name: repo.name, location: repo.root, why: "target repo" });
+  }
+  const scope = await agent(`You are the research-scope agent for strapped run "${cfg.slug}". Read the source plan at ${a.sourcePlan} and enumerate EVERY additional repo, directory, file, URL, API, or data source the plan mentions or implies BEYOND the target repos (list them all):
+${repoList(a.repos)}
+
+For each additional source: resolve repo names to absolute local paths where possible (siblings of the target repo roots, common project dirs), else record the best remote locator (URL, \`gh\` repo slug); give each a unique kebab-case id and a one-line why it matters to the ask. Return an empty list if the plan mentions no additional sources.`, { label: "research-scope", effort: "low", schema: SCOPE_SCHEMA });
+  if (scope) {
+    for (const source of scope.sources)
+      frontier.add(source);
+  } else {
+    log("plan research: scope agent failed — continuing with the target repos only");
+  }
+  const researched = [];
+  for (let wave = 1;wave <= maxWaves; wave++) {
+    const batch = frontier.take();
+    if (batch.length === 0)
+      break;
+    const results = await parallel(batch.map((source) => () => agent(researcherPrompt(cfg, source, a.sourcePlan), {
+      label: `research:${source.id}:w${wave}`,
+      schema: RESEARCH_SCHEMA
+    })));
+    results.forEach((result, i) => {
+      const source = batch[i];
+      if (!source)
+        return;
+      if (!result) {
+        log(`plan research: researcher for ${source.id} failed — continuing without its digest`);
+        researched.push({ source, status: "failed" });
+        return;
+      }
+      researched.push({ source, status: result.unreachable || !result.digestFile ? "unreachable" : "ok" });
+      for (const discovered of result.newSources)
+        frontier.add(discovered);
+    });
+  }
+  const leftovers = frontier.leftovers();
+  if (leftovers.length) {
+    log(`plan research: wave budget (${maxWaves}) exhausted — un-researched: ${leftovers.map((s) => s.id).join(", ")}`);
+  }
+  const bad = researched.filter((r) => r.status !== "ok");
+  if (bad.length) {
+    log(`plan research: sources without digests: ${bad.map((r) => `${r.source.id} (${r.status})`).join(", ")}`);
+  }
+  return { researched, leftovers };
+}
 async function planStage(cfg, ctx) {
   const a = stageArgsFor(cfg, "plan");
   const stateScript = cfg.scripts.state;
+  const { researched, leftovers } = await runResearchFanOut(cfg, a);
+  const sourceTable = researched.map((r) => `- ${r.source.id} (${r.source.kind}) at ${r.source.location} — ${r.status}`).join(`
+`);
+  const leftoverLines = leftovers.length ? leftovers.map((s) => `- ${s.id} (${s.kind}) at ${s.location} — un-researched (wave budget exhausted)`).join(`
+`) : "(none)";
   const plan = await agent(`You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
 
 Source plan (the original ask): ${a.sourcePlan}
@@ -1293,9 +1520,16 @@ ${repoList(a.repos)}
 Output directory (already scaffolded): ${cfg.dir}
 Conventions you MUST follow for every file format: ${cfg.conventionsFile}
 
+A research fan-out already ran: per-source digests live under ${cfg.dir}/research/ (one <sourceId>.md per ok source). Researched sources (ok = digest written; failed = researcher agent failed, no digest; unreachable = source inaccessible, no digest):
+${sourceTable || "(no sources were researched)"}
+Un-researched leftovers (discovered but never researched — the wave budget ran out):
+${leftoverLines}
+
+${DELEGATION_GRANT} That includes Task subagents for any remaining research gap.
+
 Procedure:
-1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
-2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
+1. Read the source plan in full, then read every per-source digest under ${cfg.dir}/research/. Verify and deepen findings in the target repos directly as needed — especially for any failed, unreachable, or un-researched source above.
+2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max) synthesized from the per-source digests: architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. Cover the failed/unreachable/un-researched sources explicitly (what is missing and how you compensated) so nothing silently disappears. This is the only research context implementers will ever see.
 3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
 4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
 5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
