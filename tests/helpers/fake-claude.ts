@@ -3,7 +3,8 @@
 // faked seam in the eval engine. Envelope factories mirror the verified real
 // `--output-format json` shape (installed claude 2.1.207).
 
-import type { Envelope, EvalUsage, Spawn } from '../../src/eval/types.ts'
+import { AGENT_LABEL_ENV } from '../../src/eval/scenario/executor.ts'
+import type { Envelope, EvalUsage, Spawn, SpawnOptions } from '../../src/eval/types.ts'
 
 /** A `Spawn` that ignores args/stdin and emits `envelope` as JSON on stdout, exit 0. */
 export function fakeSpawn(envelope: Envelope): Spawn {
@@ -79,4 +80,58 @@ export function errorEnvelope(subtype = 'error_max_turns'): Envelope {
 /** A success envelope whose `structured_output` omits a required key (schema miss). */
 export function schemaMismatchEnvelope(): Envelope {
   return successEnvelope({ unexpected: true })
+}
+
+// --- scripted multi-call fake for scenario tests -----------------------------
+
+/** One spawn recorded by `scriptedSpawn`, with the agent label lifted off the env. */
+export interface RecordedSpawnCall {
+  cmd: string
+  args: string[]
+  input: string | undefined
+  opts: SpawnOptions | undefined
+  label: string
+}
+
+/**
+ * A per-label handler: a reusable single envelope, a queue consumed one
+ * envelope per call, or a function producing an envelope per call.
+ */
+export type ScriptedHandler = Envelope | Envelope[] | ((call: RecordedSpawnCall) => Envelope)
+
+export interface ScriptedSpawn {
+  spawn: Spawn
+  /** Every spawn in dispatch order. */
+  calls: RecordedSpawnCall[]
+  /** Labels that arrived with no scripted envelope (or an exhausted queue). */
+  unexpected: string[]
+}
+
+/**
+ * A scripted multi-call `Spawn` for scenario tests: dispatches on the agent
+ * label the executor stamps into the spawn env (`STRAPPED_AGENT_LABEL`) and
+ * answers each call from that label's envelope queue. An unscripted label is
+ * recorded in `unexpected` and answered with an error envelope naming it (a
+ * throw here would be swallowed into the engine's availability skip), so tests
+ * assert `unexpected` is empty.
+ */
+export function scriptedSpawn(handlers: Record<string, ScriptedHandler>): ScriptedSpawn {
+  const calls: RecordedSpawnCall[] = []
+  const unexpected: string[] = []
+  const spawn: Spawn = (cmd, args, input, opts) => {
+    const label = opts?.env?.[AGENT_LABEL_ENV] ?? '(no label)'
+    const call: RecordedSpawnCall = { cmd, args, input, opts, label }
+    calls.push(call)
+    const handler = handlers[label]
+    let envelope: Envelope | undefined
+    if (typeof handler === 'function') envelope = handler(call)
+    else if (Array.isArray(handler)) envelope = handler.shift()
+    else envelope = handler
+    if (envelope === undefined) {
+      unexpected.push(label)
+      envelope = { type: 'result', subtype: `unscripted_label:${label}`, is_error: true }
+    }
+    return { status: 0, stdout: JSON.stringify(envelope), stderr: '' }
+  }
+  return { spawn, calls, unexpected }
 }

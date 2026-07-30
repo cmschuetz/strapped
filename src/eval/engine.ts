@@ -21,6 +21,8 @@ import type {
   EvalUsage,
   JsonSchema,
   Spawn,
+  SpawnOptions,
+  SpawnResult,
 } from './types.ts'
 import { cacheKey } from './cache.ts'
 
@@ -37,10 +39,31 @@ const DEFAULT_DISALLOWED_TOOLS = [
   'Grep',
 ]
 
-/** Real spawn: `spawnSync('claude', …)` with the prompt on stdin. */
-export const defaultSpawn: Spawn = (cmd, args, input) => {
-  const res = spawnSync(cmd, args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 })
-  return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' }
+/**
+ * Real spawn: `spawnSync('claude', …)` with the prompt on stdin. Threads the
+ * per-spawn options — `cwd`, `timeoutMs` (spawnSync `timeout`), and `env`
+ * merged over `process.env` — and copies spawnSync's returned `error.code`
+ * and termination `signal` onto the result so a timeout (`'ETIMEDOUT'` /
+ * `'SIGTERM'`) travels on a distinct channel from an absent CLI (`'ENOENT'`).
+ */
+export const defaultSpawn: Spawn = (cmd, args, input, opts) => {
+  const res = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    input,
+    maxBuffer: 64 * 1024 * 1024,
+    cwd: opts?.cwd,
+    timeout: opts?.timeoutMs,
+    env: opts?.env === undefined ? undefined : { ...process.env, ...opts.env },
+  })
+  const result: SpawnResult = {
+    status: res.status,
+    stdout: res.stdout ?? '',
+    stderr: res.stderr ?? '',
+    signal: res.signal,
+  }
+  const code = (res.error as NodeJS.ErrnoException | undefined)?.code
+  if (typeof code === 'string') result.errorCode = code
+  return result
 }
 
 /**
@@ -62,6 +85,12 @@ export function buildArgs(req: EvalRequest): string[] {
     '--settings',
     req.settings ?? '{}',
   ]
+  // Scenario/agentic knobs — emitted only when the request carries them, so a
+  // request without them produces the exact pre-change argv. `maxTurns` has no
+  // flag mapping: the installed CLI (`claude --help`, 2.1.x) does not support
+  // `--max-turns`, so the field is deliberately left unemitted.
+  for (const dir of req.addDirs ?? []) args.push('--add-dir', dir)
+  if (req.permissionMode !== undefined) args.push('--permission-mode', req.permissionMode)
   if (req.systemPrompt !== undefined) args.push('--system-prompt', req.systemPrompt)
   if (req.appendSystemPrompt !== undefined) args.push('--append-system-prompt', req.appendSystemPrompt)
   if (req.tools && req.tools.length > 0) {
@@ -202,11 +231,30 @@ export function runClaude(req: EvalRequest, { spawn = defaultSpawn, cache }: Run
     if (hit) return { ...hit, cached: true }
   }
 
+  const spawnOpts: SpawnOptions = {}
+  if (req.cwd !== undefined) spawnOpts.cwd = req.cwd
+  if (req.timeoutMs !== undefined) spawnOpts.timeoutMs = req.timeoutMs
+  if (req.env !== undefined) spawnOpts.env = req.env
+
   let res
   try {
-    res = spawn('claude', buildArgs(req), req.prompt)
+    res = spawn('claude', buildArgs(req), req.prompt, spawnOpts)
   } catch {
     return { ...failureNoMetrics(req, 'claude CLI unavailable'), skipped: true }
+  }
+
+  // Spawn-level failures travel on distinct channels: ONLY an absent binary
+  // (`ENOENT`) is the availability skip; any other spawn error or a kill
+  // signal (a `timeoutMs` expiry surfaces as `ETIMEDOUT` and/or `SIGTERM`) is
+  // a graded `ok:false` failure — never a throw, never `skipped`.
+  if (res.errorCode === 'ENOENT') {
+    return { ...failureNoMetrics(req, 'claude CLI unavailable'), skipped: true }
+  }
+  if (res.errorCode !== undefined || (res.signal !== undefined && res.signal !== null)) {
+    const parts: string[] = []
+    if (res.errorCode !== undefined) parts.push(res.errorCode)
+    if (res.signal !== undefined && res.signal !== null) parts.push(`signal ${res.signal}`)
+    return failureNoMetrics(req, `claude spawn failed: ${parts.join(', ')}`)
   }
 
   if (res.status !== 0 && res.stdout.trim() === '') {
