@@ -1,4 +1,4 @@
-// Scenario graders (D2 AC1–AC3): built-in correctness graders against a
+// Scenario graders: built-in correctness graders against a
 // fabricated ScenarioOutcome over a REAL temp sandbox, the deterministic
 // adherence suite against a well-formed state root and each seeded violation,
 // and the weighted-mean aggregation. Fully offline — the only model boundary
@@ -124,9 +124,9 @@ function byName(grades: readonly GradeResult[], name: string): GradeResult {
   return found
 }
 
-// --- AC1: built-in correctness graders ----------------------------------------
+// --- built-in correctness graders ---------------------------------------------
 
-test('commandGrader passes on exit 0 with the output tail as detail (AC1)', () => {
+test('commandGrader passes on exit 0 with the output tail as detail', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -137,7 +137,7 @@ test('commandGrader passes on exit 0 with the output tail as detail (AC1)', () =
   })
 })
 
-test('commandGrader fails on a nonzero exit with the exit code in the detail (AC1)', () => {
+test('commandGrader fails on a nonzero exit with the exit code in the detail', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -149,7 +149,7 @@ test('commandGrader fails on a nonzero exit with the exit code in the detail (AC
   })
 })
 
-test('commandGrader resolves {worktree:<Did>} from the deliverable frontmatter (AC1)', () => {
+test('commandGrader resolves {worktree:<Did>} from the deliverable frontmatter', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -159,7 +159,7 @@ test('commandGrader resolves {worktree:<Did>} from the deliverable frontmatter (
   })
 })
 
-test('commandGrader grades a token error as a fail, never a throw (AC1)', () => {
+test('commandGrader grades a token error as a fail, never a throw', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -172,7 +172,7 @@ test('commandGrader grades a token error as a fail, never a throw (AC1)', () => 
   })
 })
 
-test('artifactAssert passes/fails on the predicate and never propagates a throw (AC1)', () => {
+test('artifactAssert passes/fails on the predicate and never propagates a throw', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -186,7 +186,7 @@ test('artifactAssert passes/fails on the predicate and never propagates a throw 
   })
 })
 
-test('scenarioJudge routes rendered evidence through the injected spawn (AC1)', () => {
+test('scenarioJudge routes rendered evidence through the injected spawn', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -207,7 +207,7 @@ test('scenarioJudge routes rendered evidence through the injected spawn (AC1)', 
   })
 })
 
-test('scenarioJudge grades a judge failure or a thrown render as a fail (AC1)', () => {
+test('scenarioJudge grades a judge failure or a thrown render as a fail', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     const outcome = outcomeFor(scenario, sandbox)
@@ -225,9 +225,9 @@ test('scenarioJudge grades a judge failure or a thrown render as a fail (AC1)', 
   })
 })
 
-// --- AC2: adherence suite -------------------------------------------------------
+// --- adherence suite ------------------------------------------------------------
 
-test('adherence suite passes on a well-formed sandbox state root (AC2)', () => {
+test('adherence suite passes on a well-formed sandbox state root', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -238,7 +238,7 @@ test('adherence suite passes on a well-formed sandbox state root (AC2)', () => {
   })
 })
 
-test('manifest below the expected status (or off-ladder, or missing) fails the manifest check (AC2)', () => {
+test('manifest below the expected status (or off-ladder, or missing) fails the manifest check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -261,7 +261,7 @@ test('manifest below the expected status (or off-ladder, or missing) fails the m
   })
 })
 
-test('a missing required frontmatter field or illegal status fails the deliverable check (AC2)', () => {
+test('a missing required frontmatter field or illegal status fails the deliverable check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -280,7 +280,7 @@ test('a missing required frontmatter field or illegal status fails the deliverab
   })
 })
 
-test('a malformed branch name fails the branch check with the file named (AC2)', () => {
+test('a malformed branch name fails the branch check with the file named', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -296,7 +296,7 @@ test('a malformed branch name fails the branch check with the file named (AC2)',
   })
 })
 
-test('a dangling dep fails the deps check (AC2)', () => {
+test('a dangling dep fails the deps check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -311,7 +311,7 @@ test('a dangling dep fails the deps check (AC2)', () => {
   })
 })
 
-test('missing review round records fail their checks for the stages that ran (AC2)', () => {
+test('missing review round records fail their checks for the stages that ran', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -329,7 +329,7 @@ test('missing review round records fail their checks for the stages that ran (AC
   })
 })
 
-test('a state root without .git fails the commit-cadence check (AC2)', () => {
+test('a state root without .git fails the commit-cadence check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     rmSync(join(sandbox.stateRoot, '.git'), { recursive: true, force: true })
@@ -339,7 +339,7 @@ test('a state root without .git fails the commit-cadence check (AC2)', () => {
   })
 })
 
-test('no commit beyond the seed after a transitioning stage fails the cadence check (AC2)', () => {
+test('no commit beyond the seed after a transitioning stage fails the cadence check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     // Deliberately NO commitBeyondSeed: only the sandbox seed commit exists.
@@ -349,7 +349,7 @@ test('no commit beyond the seed after a transitioning stage fails the cadence ch
   })
 })
 
-test('a completed/stoppedAt mismatch fails the run-result check (AC2)', () => {
+test('a completed/stoppedAt mismatch fails the run-result check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {
     commitBeyondSeed(sandbox)
@@ -363,7 +363,7 @@ test('a completed/stoppedAt mismatch fails the run-result check (AC2)', () => {
   })
 })
 
-test('checks that do not apply to the stage subset are neutral, not failures (AC2)', () => {
+test('checks that do not apply to the stage subset are neutral, not failures', () => {
   const scenario = baseScenario({
     stages: ['feedback-synth'],
     seedRunState: { files: { 'manifest.md': manifest('approved') } },
@@ -386,9 +386,9 @@ test('checks that do not apply to the stage subset are neutral, not failures (AC
   })
 })
 
-// --- AC3: aggregation -----------------------------------------------------------
+// --- aggregation ----------------------------------------------------------------
 
-test('gradeScenario aggregates via the weighted-mean rule; empty set ⇒ 0 (AC3)', () => {
+test('gradeScenario aggregates via the weighted-mean rule; empty set ⇒ 0', () => {
   const scenario = baseScenario({
     correctness: [
       artifactAssert('always-pass', () => true),
@@ -415,7 +415,7 @@ test('gradeScenario aggregates via the weighted-mean rule; empty set ⇒ 0 (AC3)
   })
 })
 
-test('a throwing custom grader becomes a failed grade, not a crash (AC3)', () => {
+test('a throwing custom grader becomes a failed grade, not a crash', () => {
   const scenario = baseScenario({
     correctness: [
       () => {

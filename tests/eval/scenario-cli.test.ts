@@ -1,4 +1,4 @@
-// Scenario CLI mode + offline compare gating (D2 AC6): drive `main(argv, deps)`
+// Scenario CLI mode + offline compare gating: drive `main(argv, deps)`
 // with injected scenarios and a scripted per-label fake spawn — the workflow
 // executed is the REAL shipped deployable; only the `claude` subprocess
 // boundary is scripted, so everything here is fully offline.
@@ -69,7 +69,7 @@ function planScenario(overrides: Partial<Scenario> = {}): Scenario {
   }
 }
 
-test('scenario mode runs end-to-end offline: report-only exit 0 with the four-axis table (AC6)', async () => {
+test('scenario mode runs end-to-end offline: report-only exit 0 with the four-axis table', async () => {
   const scripted = scriptedSpawn(envelopes(PLAN_HANDLERS))
   const res = await main(['--scenarios', 'unused-dir'], { scenarios: [planScenario()], spawn: probedSpawn(scripted.spawn) })
   assert.deepEqual(scripted.unexpected, [])
@@ -80,7 +80,7 @@ test('scenario mode runs end-to-end offline: report-only exit 0 with the four-ax
   assert.match(res.output, /serialized sum of agent calls/)
 })
 
-test('--filter selects scenarios by id or tag; non-matching scenarios never run (AC6)', async () => {
+test('--filter selects scenarios by id or tag; non-matching scenarios never run', async () => {
   const scripted = scriptedSpawn(envelopes(PLAN_HANDLERS))
   const scenarios = [planScenario(), planScenario({ id: 'cli-other', tags: ['other'] })]
   const res = await main(['--scenarios', 'unused-dir', '--filter', 'cli-plan-only', '--json'], {
@@ -100,7 +100,7 @@ test('--filter selects scenarios by id or tag; non-matching scenarios never run 
   assert.match(none.output, /no scenarios matched/)
 })
 
-test('--json emits the stable machine report: ledger without prompts, metrics summed (AC6)', async () => {
+test('--json emits the stable machine report: ledger without prompts, metrics summed', async () => {
   const scripted = scriptedSpawn(envelopes(PLAN_HANDLERS))
   const res = await main(['--scenarios', 'unused-dir', '--json'], {
     scenarios: [planScenario()],
@@ -119,7 +119,7 @@ test('--json emits the stable machine report: ledger without prompts, metrics su
   for (const entry of row.ledger) assert.ok(!('prompt' in entry), 'report ledger must not carry prompts')
 })
 
-test('the sandbox is torn down by default and kept (with its path reported) under --keep-sandbox (AC6)', async () => {
+test('the sandbox is torn down by default and kept (with its path reported) under --keep-sandbox', async () => {
   const torn = scriptedSpawn(envelopes(PLAN_HANDLERS))
   await main(['--scenarios', 'unused-dir'], { scenarios: [planScenario()], spawn: probedSpawn(torn.spawn) })
   const tornStateRoot = torn.calls[0]?.opts?.env?.STRAPPED_STATE_ROOT
@@ -165,7 +165,7 @@ function writeReports(baseline: ScenarioReportRow[], candidate: ScenarioReportRo
   return { a, b }
 }
 
-test('--compare exits 1 on a seeded regression past tolerance and 0 within it (AC6)', async () => {
+test('--compare exits 1 on a seeded regression past tolerance and 0 within it', async () => {
   const { a, b } = writeReports([reportRow()], [reportRow({ correctness: 0.9 })])
   // A 10pp correctness dip past a 5% tolerance gates…
   const gated = await main(['--compare', a, b, '--tolerance', '5'])
@@ -177,7 +177,7 @@ test('--compare exits 1 on a seeded regression past tolerance and 0 within it (A
   assert.match(clean.output, /negative = regression/)
 })
 
-test('--compare needs no claude CLI and reports bad inputs as exit 2 (AC6)', async () => {
+test('--compare needs no claude CLI and reports bad inputs as exit 2', async () => {
   const { a, b } = writeReports([reportRow()], [reportRow()])
   // throwingSpawn: if compare probed the CLI this would "skip"; it must diff instead.
   const res = await main(['--compare', a, b], { spawn: throwingSpawn() })
@@ -198,7 +198,7 @@ test('--compare needs no claude CLI and reports bad inputs as exit 2 (AC6)', asy
 
 // --- guards and skip semantics --------------------------------------------------
 
-test('flag conflicts error with exit 2 before anything runs (AC6)', async () => {
+test('flag conflicts error with exit 2 before anything runs', async () => {
   const conflicts = [
     ['--scenarios', 'd', '--suite', 's'],
     ['--scenarios', 'd', '--ab'],
@@ -213,7 +213,7 @@ test('flag conflicts error with exit 2 before anything runs (AC6)', async () => 
   }
 })
 
-test('an absent claude CLI skips scenario mode with a notice and exit 0 (AC6)', async () => {
+test('an absent claude CLI skips scenario mode with a notice and exit 0', async () => {
   const res = await main(['--scenarios', 'unused-dir'], { scenarios: [planScenario()], spawn: throwingSpawn() })
   assert.equal(res.code, 0)
   assert.match(res.output, /claude CLI unavailable — skipping scenarios/)
@@ -221,7 +221,7 @@ test('an absent claude CLI skips scenario mode with a notice and exit 0 (AC6)', 
 
 // --- scenario loading (real dynamic import from a temp dir) ---------------------
 
-test('loadScenarios dynamically imports scenario modules via the magic `scenarios` export (AC6)', async () => {
+test('loadScenarios dynamically imports scenario modules via the magic `scenarios` export', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'eval-scenarios-'))
   writeFileSync(
     join(dir, 'sample.ts'),

@@ -1,4 +1,4 @@
-// Scenario report + offline compare (D2 AC4, AC5): deterministic text
+// Scenario report + offline compare: deterministic text
 // snapshots for the scenario table / agent breakdown / compare table, the
 // lossless JSON round-trip, the documented compare sign conventions, and the
 // exit-code gate matrix. Pure — no sandboxes, no spawns.
@@ -58,9 +58,9 @@ const row = (over: Partial<ScenarioReportRow> = {}): ScenarioReportRow => ({
 /** Trailing pad is cell alignment noise — compare content + inner alignment. */
 const lines = (text: string): string[] => text.split('\n').map(l => l.trimEnd())
 
-// --- AC4: scenario report -------------------------------------------------------
+// --- scenario report ------------------------------------------------------------
 
-test('formatScenarioReport renders the four-axis table deterministically (AC4)', () => {
+test('formatScenarioReport renders the four-axis table deterministically', () => {
   assert.deepEqual(lines(formatScenarioReport([row()])), [
     'Scenario       Stages             Correct  Adhere  Cost $    Wall (ser)  Turns  Agents',
     '-------------  -----------------  -------  ------  --------  ----------  -----  ------',
@@ -79,14 +79,14 @@ test('formatScenarioReport renders the four-axis table deterministically (AC4)',
   ])
 })
 
-test('the agent breakdown aggregates the ledger by label in first-appearance order (AC4)', () => {
+test('the agent breakdown aggregates the ledger by label in first-appearance order', () => {
   const text = formatScenarioReport([row()])
   // Two `planner` calls fold into one line: 2 calls, summed cost/turns/latency.
   assert.match(text, /planner\s+2\s+\$0\.09000\s+18\s+8000ms/)
   assert.match(text, /plan-review:a:r1\s+1\s+\$0\.04000\s+8\s+4000ms/)
 })
 
-test('a workflow error and a kept sandbox surface in the report (AC4)', () => {
+test('a workflow error and a kept sandbox surface in the report', () => {
   const text = formatScenarioReport([
     row({ error: 'unknown stage "bogus"', sandbox: '/tmp/strapped-scenario-x', ledger: [] }),
   ])
@@ -94,14 +94,14 @@ test('a workflow error and a kept sandbox surface in the report (AC4)', () => {
   assert.match(text, /sandbox kept: full-pipeline → \/tmp\/strapped-scenario-x/)
 })
 
-test('the wall column is labeled serialized and the footnote explains it (AC4)', () => {
+test('the wall column is labeled serialized and the footnote explains it', () => {
   const text = formatScenarioReport([row()])
   assert.match(text, /Wall \(ser\)/)
   assert.match(text, /serialized sum of agent calls/)
   assert.equal(formatScenarioReport([]), 'no scenarios matched')
 })
 
-test('scenario JSON round-trips through JSON.parse losslessly (AC4)', () => {
+test('scenario JSON round-trips through JSON.parse losslessly', () => {
   const report = scenarioReportToJSON([row(), row({ scenarioId: 'plan-only', stages: ['plan'] })])
   const parsed = JSON.parse(JSON.stringify(report)) as ScenarioReportJSON
   assert.deepEqual(parsed, report)
@@ -109,7 +109,7 @@ test('scenario JSON round-trips through JSON.parse losslessly (AC4)', () => {
   assert.deepEqual(parseScenarioReport(parsed, 'roundtrip.json'), report)
 })
 
-// --- AC5: compare ---------------------------------------------------------------
+// --- compare --------------------------------------------------------------------
 
 function comparePair(): CompareResult {
   const baseline = scenarioReportToJSON([row(), row({ scenarioId: 'gone' })])
@@ -120,7 +120,7 @@ function comparePair(): CompareResult {
   return compareReports(baseline, candidate)
 }
 
-test('compareReports produces the documented sign conventions (AC5)', () => {
+test('compareReports produces the documented sign conventions', () => {
   const result = comparePair()
   const joined = result.rows.find(r => r.scenarioId === 'full-pipeline')
   assert.ok(joined !== undefined)
@@ -134,7 +134,7 @@ test('compareReports produces the documented sign conventions (AC5)', () => {
   assert.equal(joined.deltaTurns, 6)
 })
 
-test('rows missing on either side are flagged with null deltas (AC5)', () => {
+test('rows missing on either side are flagged with null deltas', () => {
   const result = comparePair()
   const gone = result.rows.find(r => r.scenarioId === 'gone')
   const fresh = result.rows.find(r => r.scenarioId === 'fresh')
@@ -146,7 +146,7 @@ test('rows missing on either side are flagged with null deltas (AC5)', () => {
   assert.equal(fresh?.deltaTurns, null)
 })
 
-test('formatCompareReport renders the AB-style delta table with a legend (AC5)', () => {
+test('formatCompareReport renders the AB-style delta table with a legend', () => {
   assert.deepEqual(lines(formatCompareReport(comparePair())), [
     'Scenario       ΔCorrect  ΔAdhere  ΔCost      ΔWall (ser)  ΔTurns  Base C/A      Cand C/A      Note',
     '-------------  --------  -------  ---------  -----------  ------  ------------  ------------  --------------',
@@ -161,7 +161,7 @@ test('formatCompareReport renders the AB-style delta table with a legend (AC5)',
   assert.deepEqual(JSON.parse(JSON.stringify(compareToJSON(comparePair()))), comparePair())
 })
 
-test('compareExitCode gates only on correctness/adherence regressions past tolerance (AC5)', () => {
+test('compareExitCode gates only on correctness/adherence regressions past tolerance', () => {
   const gate = (over: Partial<ScenarioReportRow>): number => {
     const baseline = scenarioReportToJSON([row()])
     const candidate = scenarioReportToJSON([row(over)])
@@ -183,7 +183,7 @@ test('compareExitCode gates only on correctness/adherence regressions past toler
   assert.equal(compareExitCode(oneSided, 0), 0)
 })
 
-test('parseScenarioReport rejects non-report JSON with the source named (AC5)', () => {
+test('parseScenarioReport rejects non-report JSON with the source named', () => {
   assert.throws(() => parseScenarioReport({ mode: 'suite', cases: [] }, 'a.json'), /a\.json: not a scenario report/)
   assert.throws(() => parseScenarioReport({ mode: 'scenarios' }, 'b.json'), /b\.json: missing rows array/)
   assert.throws(
