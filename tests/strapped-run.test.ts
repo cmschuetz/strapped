@@ -110,7 +110,7 @@ const PR_RESULT = {
   summary: 'opened 1 PR, skipped 1',
 }
 
-// --- AC1: stage validation + zero workflow() calls ---------------------------
+// --- stage validation + zero workflow() calls --------------------------------
 
 test('stage validation: unknown / out-of-order / duplicate / empty stages throw', async () => {
   await assert.rejects(runWorkflow(WORKFLOW, { args: baseCfg({ stages: [] }) }), /non-empty ordered subset/)
@@ -125,7 +125,7 @@ test('the mono-workflow source makes zero workflow() calls', () => {
   assert.equal(src.match(/\bworkflow\((?!\))/), null)
 })
 
-// --- AC1 + AC2: dispatch loop, approve gating -------------------------------
+// --- dispatch loop, approve gating --------------------------------------------
 
 test('full chain [plan, implement, pr]: stage order, approve exactly once between plan and implement, completed all, stoppedAt null', async () => {
   const cfg = baseCfg({
@@ -228,7 +228,7 @@ test('null refuter result → finding handled as vote-not-cast, loop completes w
   assert.ok(!consolidate.prompt.includes('"r1-a-f1"'))
 })
 
-// --- AC3: implement stage -----------------------------------------------------
+// --- implement stage -----------------------------------------------------------
 
 test('implement: two waves then allDone; manifest-status implementing in first coordinator prompt only', async () => {
   const { result, calls } = await runWorkflow(WORKFLOW, {
@@ -447,7 +447,7 @@ test('addendumMode: coordinator progress ledger — pass 1 treats every addendum
   assert.ok(!callWithLabel(plain.calls, 'coordinate:1').prompt.includes('Progress ledger'))
 })
 
-// --- AC4: pr stage -------------------------------------------------------------
+// --- pr stage -------------------------------------------------------------------
 
 test('pr: guardrails + report-and-skip in prompt; dryRun print-only; skipped/reason surfaced', async () => {
   const cfg = baseCfg({ stages: ['pr'], stageArgs: { pr: { dryRun: false } } })
@@ -508,7 +508,7 @@ test('pr as first stage: dag probe gate blocks when a node is earlier than done'
   assert.equal(callsWithLabelPrefix(calls, 'pr-create').length, 0)
 })
 
-// --- AC5: feedback-synth --------------------------------------------------------
+// --- feedback-synth --------------------------------------------------------------
 
 test('feedback-synth: synthesis agent then review loop with feedback-round prefix', async () => {
   const comments = [

@@ -86,7 +86,7 @@ test('no skill retains an unconditional conventions-read instruction; every skil
       src.includes('$PLUGIN_ROOT/conventions.md'),
       `${dir}/SKILL.md fallback nudge lacks the conventions path`
     )
-    // Progressive-disclosure reframe (AC4): the old whole-conventions-in-context
+    // Progressive-disclosure reframe: the old whole-conventions-in-context
     // claim is gone, the slim context.md operating model is referenced, and the
     // explicit do-not-front-load instruction is present.
     assert.ok(

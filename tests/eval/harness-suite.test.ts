@@ -48,7 +48,7 @@ const FIXTURES: Fixture[] = [
   },
   {
     case: reviewerCase,
-    // A blocking finding naming the missing test + an AC violation → gap surfaced.
+    // A blocking finding naming the missing test + an acceptance-criteria violation → gap surfaced.
     good: {
       findings: [
         {
