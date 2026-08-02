@@ -1,24 +1,24 @@
 // Harness SCENARIO suite smoke test — fully hermetic (no real `claude`).
 //
 // Proves the scenario CONTENT is sound without spending a cent:
-//   AC1  the CLI loads exactly the four scenarios from the suite directory and
-//        `--filter` narrows by id and by tag (agent calls answered by a stub
-//        spawn returning error envelopes — the REAL deployable still executes);
-//   AC2  every scenario is well-formed (unique ids, canonical stage order,
-//        ask/rules/graders/fixtures present, rules verbatim in the fixture
-//        CLAUDE.md);
-//   AC3  per scenario, a canned GOOD outcome (sandbox materialized + seeded
-//        with the artifacts a correct run would produce) grades to
-//        correctness 1 / adherence 1, and a canned BAD outcome grades strictly
-//        below 1 on the axis it violates;
-//   AC4  the implement-only and review-loop seedRunStates produce runDirs the
-//        REAL `node plugins/strapped/scripts/state.mjs dag` accepts, with
-//        materialized `repos:` roots that are existing absolute sandbox paths;
-//   AC5  the docs cover the scenario layer and conventions.md no longer claims
-//        only `--ab` gates;
-//   AC7  the review-loop graders discriminate on the anti-saturation axes:
-//        an unfixed defect, a churned nit site, and excess total churn each
-//        fail their own grader.
+//   - the CLI loads exactly the four scenarios from the suite directory and
+//     `--filter` narrows by id and by tag (agent calls answered by a stub
+//     spawn returning error envelopes — the REAL deployable still executes);
+//   - every scenario is well-formed (unique ids, canonical stage order,
+//     ask/rules/graders/fixtures present, rules verbatim in the fixture
+//     CLAUDE.md);
+//   - per scenario, a canned GOOD outcome (sandbox materialized + seeded
+//     with the artifacts a correct run would produce) grades to
+//     correctness 1 / adherence 1, and a canned BAD outcome grades strictly
+//     below 1 on the axis it violates;
+//   - the implement-only and review-loop seedRunStates produce runDirs the
+//     REAL `node plugins/strapped/scripts/state.mjs dag` accepts, with
+//     materialized `repos:` roots that are existing absolute sandbox paths;
+//   - the docs cover the scenario layer and conventions.md no longer claims
+//     only `--ab` gates;
+//   - the review-loop graders discriminate on the anti-saturation axes:
+//     an unfixed defect, a churned nit site, and excess total churn each
+//     fail their own grader.
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -345,9 +345,9 @@ function stubSpawn(): Spawn {
       : { status: 0, stdout: JSON.stringify(errorEnvelope()), stderr: '' }
 }
 
-// --- AC2: every scenario is well-formed ----------------------------------------
+// --- scenario well-formedness ---------------------------------------------------
 
-test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures (AC2)', () => {
+test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
   assert.equal(scenarios.length, 4)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
@@ -393,9 +393,9 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.ok(reviewLoopScenario.seedRunState !== undefined)
 })
 
-// --- AC1: loader + filter through the CLI --------------------------------------
+// --- loader + filter through the CLI --------------------------------------------
 
-test('loadScenarios loads exactly the four harness scenarios from the suite directory (AC1)', async () => {
+test('loadScenarios loads exactly the four harness scenarios from the suite directory', async () => {
   const loaded = await loadScenarios(SCENARIOS_DIR)
   assert.deepEqual(loaded.map(s => s.id).sort(), ALL_IDS)
 })
@@ -407,7 +407,7 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(reviewLoopScenario))
 })
 
-test('the CLI loads the suite directory and --filter narrows by id and by tag (AC1)', async () => {
+test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
   const rowsOf = (output: string): string[] =>
     (JSON.parse(output) as ScenarioReportJSON).rows.map(r => r.scenarioId).sort()
 
@@ -431,9 +431,9 @@ test('the CLI loads the suite directory and --filter narrows by id and by tag (A
   assert.match(none.output, /no scenarios matched/)
 })
 
-// --- AC3: canned good/bad discrimination per scenario ---------------------------
+// --- canned good/bad discrimination per scenario --------------------------------
 
-test('full-pipeline: canned good grades 1/1; validation-failing code grades below 1 (AC3)', () => {
+test('full-pipeline: canned good grades 1/1; validation-failing code grades below 1', () => {
   const { sandbox, outcome, worktree } = goodFullPipeline()
   try {
     const good = grade(outcome)
@@ -449,7 +449,7 @@ test('full-pipeline: canned good grades 1/1; validation-failing code grades belo
   }
 })
 
-test('full-pipeline: a non-dry-run pr result fails the pr grader (AC3)', () => {
+test('full-pipeline: a non-dry-run pr result fails the pr grader', () => {
   const { sandbox, outcome } = goodFullPipeline()
   try {
     const runResult = runResultFor(fullPipelineScenario, {
@@ -464,7 +464,7 @@ test('full-pipeline: a non-dry-run pr result fails the pr grader (AC3)', () => {
   }
 })
 
-test('plan-only: canned good grades 1/1; a missing round record dents both axes (AC3)', () => {
+test('plan-only: canned good grades 1/1; a missing round record dents both axes', () => {
   const { sandbox, outcome } = goodPlanOnly()
   try {
     const good = grade(outcome)
@@ -482,7 +482,7 @@ test('plan-only: canned good grades 1/1; a missing round record dents both axes 
   }
 })
 
-test('implement-only: canned good grades 1/1; a not-done deliverable grades below 1 (AC3)', () => {
+test('implement-only: canned good grades 1/1; a not-done deliverable grades below 1', () => {
   const { sandbox, outcome } = goodImplementOnly()
   try {
     const good = grade(outcome)
@@ -498,10 +498,10 @@ test('implement-only: canned good grades 1/1; a not-done deliverable grades belo
   }
 })
 
-// --- AC4: seeded state stands on the real state.mjs -----------------------------
+// --- seeded state stands on the real state.mjs -----------------------------------
 
 for (const scenario of [implementOnlyScenario, reviewLoopScenario]) {
-  test(`${scenario.id}: the seeded runDir is accepted by the real state.mjs dag with D1 ready (AC4)`, () => {
+  test(`${scenario.id}: the seeded runDir is accepted by the real state.mjs dag with D1 ready`, () => {
     const sandbox = buildSandbox(scenario)
     try {
       const res = spawnSync(NODE, [STATE_MJS, 'dag', sandbox.runDir], { encoding: 'utf8' })
@@ -542,9 +542,9 @@ for (const scenario of [implementOnlyScenario, reviewLoopScenario]) {
   })
 }
 
-// --- AC7: review-loop anti-saturation discrimination ----------------------------
+// --- review-loop anti-saturation discrimination ----------------------------------
 
-test('review-loop: defects fixed + nits untouched + small churn grades 1/1 (AC7)', () => {
+test('review-loop: defects fixed + nits untouched + small churn grades 1/1', () => {
   const { sandbox, outcome } = reviewLoopOutcome(wt => {
     write(join(wt, 'src', 'calc.ts'), FIXED_DEFECT_CALC)
   })
@@ -557,7 +557,7 @@ test('review-loop: defects fixed + nits untouched + small churn grades 1/1 (AC7)
   }
 })
 
-test('review-loop: an unfixed defect fails defect-tests-green and only that grader (AC7)', () => {
+test('review-loop: an unfixed defect fails defect-tests-green and only that grader', () => {
   const { sandbox, outcome } = reviewLoopOutcome(wt => {
     write(join(wt, 'src', 'calc.ts'), PARTIALLY_FIXED_CALC)
   })
@@ -573,7 +573,7 @@ test('review-loop: an unfixed defect fails defect-tests-green and only that grad
   }
 })
 
-test('review-loop: a churned nit site fails nits-untouched and only that grader (AC7)', () => {
+test('review-loop: a churned nit site fails nits-untouched and only that grader', () => {
   const { sandbox, outcome } = reviewLoopOutcome(wt => {
     write(join(wt, 'src', 'calc.ts'), FIXED_DEFECT_CALC)
     write(join(wt, 'src', 'quirks.ts'), CHURNED_QUIRKS)
@@ -589,7 +589,7 @@ test('review-loop: a churned nit site fails nits-untouched and only that grader 
   }
 })
 
-test('review-loop: excess total churn fails churn-within-threshold and only that grader (AC7)', () => {
+test('review-loop: excess total churn fails churn-within-threshold and only that grader', () => {
   const filler = Array.from({ length: CHURN_THRESHOLD_LINES + 10 }, (_, i) => `export const filler${i} = ${i}`).join(
     '\n'
   )
@@ -624,9 +624,9 @@ test('the seeded defect repo is genuinely red before the fix (the tests expose t
   }
 })
 
-// --- AC5: docs ------------------------------------------------------------------
+// --- docs -----------------------------------------------------------------------
 
-test('conventions.md documents scenarios and no longer claims only --ab gates (AC5)', () => {
+test('conventions.md documents scenarios and no longer claims only --ab gates', () => {
   const conventions = readFileSync(CONVENTIONS_MD, 'utf8')
   assert.ok(!conventions.includes('only `--ab` gates'), 'the stale "only --ab gates" claim must not survive')
   assert.match(conventions, /only `--ab` and scenario `--compare` gate/)
@@ -635,7 +635,7 @@ test('conventions.md documents scenarios and no longer claims only --ab gates (A
   assert.match(conventions, /SERIALIZED sum of agent calls/)
 })
 
-test('CLAUDE.md documents the scenario layer, the compare workflow, and the cost warning (AC5)', () => {
+test('CLAUDE.md documents the scenario layer, the compare workflow, and the cost warning', () => {
   const claudeMd = readFileSync(CLAUDE_MD, 'utf8')
   assert.match(claudeMd, /--scenarios src\/eval\/scenarios\/harness/)
   assert.match(claudeMd, /--compare/)
