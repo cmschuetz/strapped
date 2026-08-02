@@ -4,8 +4,8 @@
 
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
-import { buildArgs, isAvailable, parseEnvelope, runClaude } from '../../src/eval/engine.ts'
-import type { EvalRequest, JsonSchema } from '../../src/eval/types.ts'
+import { buildArgs, defaultSpawn, isAvailable, parseEnvelope, runClaude } from '../../src/eval/engine.ts'
+import type { EvalRequest, JsonSchema, Spawn, SpawnOptions } from '../../src/eval/types.ts'
 import {
   errorEnvelope,
   fakeSpawn,
@@ -85,6 +85,101 @@ test('buildArgs adds system-prompt flags only when set, and passes custom settin
     '--settings',
     '{"x":1}',
   ])
+})
+
+// --- scenario extensions: new flags + spawn options ---------------------------
+
+test('a request without the new fields produces the exact pre-change argv', () => {
+  assert.deepEqual(buildArgs(baseReq()), [
+    '--print',
+    '--output-format',
+    'json',
+    '--json-schema',
+    JSON.stringify(SCHEMA),
+    '--model',
+    'claude-haiku-4-5',
+    '--strict-mcp-config',
+    '--settings',
+    '{}',
+    '--disallowedTools',
+    'Bash Read Write Edit WebFetch WebSearch Task Glob Grep',
+  ])
+})
+
+test('buildArgs emits one --add-dir pair per entry and --permission-mode only when set', () => {
+  const args = buildArgs(baseReq({ addDirs: ['/sandbox', '/other'], permissionMode: 'bypassPermissions' }))
+  const addDirValues = args.flatMap((a, i) => (a === '--add-dir' ? [args[i + 1]] : []))
+  assert.deepEqual(addDirValues, ['/sandbox', '/other'])
+  assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), [
+    '--permission-mode',
+    'bypassPermissions',
+  ])
+  assert.ok(!buildArgs(baseReq()).includes('--add-dir'))
+  assert.ok(!buildArgs(baseReq()).includes('--permission-mode'))
+})
+
+test('maxTurns stays unmapped — the installed CLI has no --max-turns flag', () => {
+  const args = buildArgs(baseReq({ maxTurns: 5 }))
+  assert.ok(!args.includes('--max-turns'))
+  assert.deepEqual(args, buildArgs(baseReq()))
+})
+
+test('runClaude threads cwd/env/timeoutMs into the spawn options', () => {
+  const seen: Array<SpawnOptions | undefined> = []
+  const spy: Spawn = (_cmd, _args, _input, opts) => {
+    seen.push(opts)
+    return { status: 0, stdout: JSON.stringify(successEnvelope({ answer: 1 })), stderr: '' }
+  }
+  const result = runClaude(
+    baseReq({ cwd: '/sandbox', env: { STRAPPED_STATE_ROOT: '/sandbox/state' }, timeoutMs: 1234 }),
+    { spawn: spy }
+  )
+  assert.equal(result.ok, true)
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0]?.cwd, '/sandbox')
+  assert.equal(seen[0]?.timeoutMs, 1234)
+  assert.deepEqual(seen[0]?.env, { STRAPPED_STATE_ROOT: '/sandbox/state' })
+})
+
+test('defaultSpawn runs the child in cwd with env merged over process.env and enforces timeoutMs', () => {
+  // Real spawns of `sh`/`sleep` — offline, hermetic, no claude involved.
+  const echoed = defaultSpawn('sh', ['-c', 'printf "%s %s %s" "$SCENARIO_PROBE" "$HOME" "$PWD"'], undefined, {
+    cwd: '/tmp',
+    env: { SCENARIO_PROBE: 'probe-value' },
+  })
+  assert.equal(echoed.status, 0)
+  const [probe, home, pwd] = echoed.stdout.split(' ')
+  assert.equal(probe, 'probe-value') // extra env applied…
+  assert.equal(home, process.env.HOME) // …merged OVER process.env, which survives
+  assert.equal(pwd, '/tmp')
+
+  const timedOut = defaultSpawn('sleep', ['5'], undefined, { timeoutMs: 50 })
+  assert.equal(timedOut.errorCode, 'ETIMEDOUT')
+  assert.ok(timedOut.signal !== null && timedOut.signal !== undefined)
+})
+
+test('a timeout grades ok:false with a named error — never skipped, never a throw', () => {
+  const timedOut: Spawn = () => ({ status: null, stdout: '', stderr: '', errorCode: 'ETIMEDOUT', signal: 'SIGTERM' })
+  const result = runClaude(baseReq(), { spawn: timedOut })
+  assert.equal(result.ok, false)
+  assert.equal(result.skipped, undefined)
+  assert.match(result.error ?? '', /ETIMEDOUT/)
+  assert.match(result.error ?? '', /SIGTERM/)
+
+  // A bare kill signal (no errorCode) is also a graded failure, not a skip.
+  const killed: Spawn = () => ({ status: null, stdout: '', stderr: '', signal: 'SIGKILL' })
+  const killResult = runClaude(baseReq(), { spawn: killed })
+  assert.equal(killResult.ok, false)
+  assert.equal(killResult.skipped, undefined)
+  assert.match(killResult.error ?? '', /SIGKILL/)
+})
+
+test('errorCode ENOENT — and only that — maps to skipped:true', () => {
+  const absent: Spawn = () => ({ status: null, stdout: '', stderr: '', errorCode: 'ENOENT', signal: null })
+  const result = runClaude(baseReq(), { spawn: absent })
+  assert.equal(result.skipped, true)
+  assert.equal(result.ok, false)
+  assert.match(result.error ?? '', /unavailable/)
 })
 
 // --- success + fallback (acceptance criterion 2) -----------------------------

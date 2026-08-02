@@ -34,6 +34,27 @@ export interface EvalRequest {
   tools?: string[]
   /** Inline settings JSON (`--settings`); defaults to `'{}'` to isolate from ambient config. */
   settings?: string
+  /** Working directory for the spawned CLI — agentic scenario runs pin this to a sandbox. */
+  cwd?: string
+  /** Extra directories the CLI's tools may touch; one repeated `--add-dir <dir>` each. */
+  addDirs?: string[]
+  /** Permission mode (`--permission-mode`), e.g. `bypassPermissions` inside a throwaway sandbox. */
+  permissionMode?: string
+  /**
+   * Reserved turn cap. The installed `claude` CLI (verified against
+   * `claude --help`, 2.1.x) exposes no `--max-turns` flag, so `buildArgs`
+   * currently emits nothing for it — the field is carried so a future CLI
+   * that supports the flag can be mapped without a type change.
+   */
+  maxTurns?: number
+  /**
+   * Kill the child after this many ms. A timeout surfaces on `SpawnResult`
+   * (`errorCode: 'ETIMEDOUT'` and/or a termination `signal`) and grades as an
+   * `ok:false` result — never a throw, never `skipped`.
+   */
+  timeoutMs?: number
+  /** Extra child environment, merged over `process.env` for the spawn. */
+  env?: Record<string, string>
 }
 
 /** Normalized token usage lifted from the envelope's snake_case `usage` block. */
@@ -97,14 +118,34 @@ export interface SpawnResult {
   status: number | null
   stdout: string
   stderr: string
+  /**
+   * `spawnSync`'s returned `error.code` when the spawn itself failed — e.g.
+   * `'ENOENT'` (absent binary) or `'ETIMEDOUT'` (the `timeoutMs` kill). Kept
+   * on its OWN channel so a timed-out child is distinguishable from an absent
+   * CLI: only `'ENOENT'` maps to `skipped`.
+   */
+  errorCode?: string
+  /** The signal that terminated the child (e.g. `'SIGTERM'` on timeout), else null. */
+  signal?: string | null
+}
+
+/** Per-spawn options threaded from the request into the child process. */
+export interface SpawnOptions {
+  /** Child working directory. */
+  cwd?: string
+  /** Kill the child after this many ms (spawnSync `timeout`). */
+  timeoutMs?: number
+  /** Extra child env, merged over `process.env`. */
+  env?: Record<string, string>
 }
 
 /**
  * The injected spawn dependency. Default is a thin `spawnSync('claude', …)`
  * wrapper; tests pass a stub returning a canned envelope. `input` is fed to the
  * child's stdin (the prompt travels there, keeping argv free of large text).
+ * The optional `opts` arg is backward-compatible — existing stubs ignore it.
  */
-export type Spawn = (cmd: string, args: string[], input?: string) => SpawnResult
+export type Spawn = (cmd: string, args: string[], input?: string, opts?: SpawnOptions) => SpawnResult
 
 /** A response cache the engine can consult before spawning. */
 export interface Cache {

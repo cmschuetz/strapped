@@ -49,6 +49,12 @@ test('cacheKey changes when any output-affecting field changes', () => {
     baseReq({ appendSystemPrompt: 'Context.' }),
     baseReq({ tools: ['Read'] }),
     baseReq({ settings: '{"x":1}' }),
+    baseReq({ cwd: '/sandbox/a' }),
+    baseReq({ addDirs: ['/sandbox/a'] }),
+    baseReq({ permissionMode: 'bypassPermissions' }),
+    baseReq({ env: { STRAPPED_STATE_ROOT: '/sandbox/a/state' } }),
+    baseReq({ timeoutMs: 60_000 }),
+    baseReq({ maxTurns: 3 }),
   ]
   for (const v of variants) {
     assert.notEqual(cacheKey(v), base)
@@ -56,6 +62,14 @@ test('cacheKey changes when any output-affecting field changes', () => {
   // All variants are distinct from each other too.
   const keys = new Set(variants.map(cacheKey))
   assert.equal(keys.size, variants.length)
+})
+
+test('cacheKey separates two requests differing only in an agentic field', () => {
+  // Two sandboxes, same prompt/model/schema: the keys must NOT collide, or a
+  // cache-using caller would serve sandbox A's answer to sandbox B.
+  const a = baseReq({ cwd: '/sandbox/a', env: { STRAPPED_STATE_ROOT: '/sandbox/a/state' } })
+  const b = baseReq({ cwd: '/sandbox/b', env: { STRAPPED_STATE_ROOT: '/sandbox/b/state' } })
+  assert.notEqual(cacheKey(a), cacheKey(b))
 })
 
 // --- file round-trip ---------------------------------------------------------

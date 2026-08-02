@@ -1,8 +1,11 @@
 // Content-addressed response cache for eval results. The key is a SHA-256 over a
 // CANONICAL (sorted-key) JSON of every request field that changes the model's
-// output — prompt, both system-prompt knobs, model, schema, tool policy, and
-// settings. Include every such field or an A/B would collide; a changed prompt
-// naturally misses. Results are stored one JSON file per key; no eviction.
+// output — prompt, both system-prompt knobs, model, schema, tool policy,
+// settings, and the agentic knobs (cwd, addDirs, permissionMode, env,
+// timeoutMs, maxTurns). Include every such field or an A/B would collide; a
+// changed prompt naturally misses. The agentic fields enter the canonical JSON
+// only when set, so a plain prompt-eval request hashes to the exact pre-agentic
+// key. Results are stored one JSON file per key; no eviction.
 
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -24,17 +27,26 @@ function sortKeys(value: unknown): unknown {
 
 /** Stable, key-sorted JSON of the output-affecting fields of a request. */
 function canonicalRequest(req: EvalRequest): string {
-  return JSON.stringify(
-    sortKeys({
-      prompt: req.prompt,
-      systemPrompt: req.systemPrompt ?? null,
-      appendSystemPrompt: req.appendSystemPrompt ?? null,
-      model: req.model,
-      schema: req.schema,
-      tools: req.tools ?? null,
-      settings: req.settings ?? null,
-    })
-  )
+  const canonical: Record<string, unknown> = {
+    prompt: req.prompt,
+    systemPrompt: req.systemPrompt ?? null,
+    appendSystemPrompt: req.appendSystemPrompt ?? null,
+    model: req.model,
+    schema: req.schema,
+    tools: req.tools ?? null,
+    settings: req.settings ?? null,
+  }
+  // Agentic fields also change the model's behavior/output — buildArgs emits
+  // --add-dir/--permission-mode from them and defaultSpawn changes the child's
+  // cwd/env/timeout. Hash them too, but ONLY when set: a request without them
+  // must keep its exact pre-agentic key so existing caches stay valid.
+  if (req.cwd !== undefined) canonical.cwd = req.cwd
+  if (req.addDirs !== undefined) canonical.addDirs = req.addDirs
+  if (req.permissionMode !== undefined) canonical.permissionMode = req.permissionMode
+  if (req.env !== undefined) canonical.env = req.env
+  if (req.timeoutMs !== undefined) canonical.timeoutMs = req.timeoutMs
+  if (req.maxTurns !== undefined) canonical.maxTurns = req.maxTurns
+  return JSON.stringify(sortKeys(canonical))
 }
 
 /** Hex SHA-256 cache key over a request's output-affecting fields. */
