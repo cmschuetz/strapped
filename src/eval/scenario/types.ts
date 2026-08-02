@@ -5,6 +5,7 @@
 // returns a ScenarioOutcome with a per-agent cost/latency/turns ledger.
 
 import type { EvalUsage } from '../types.ts'
+import type { ScenarioGrader } from './grade.ts'
 
 /** One review rule fed to the workflow's seeded rule-partition machinery. */
 export interface ScenarioRule {
@@ -39,6 +40,20 @@ export interface ScenarioStageArgs {
   implement?: Record<string, unknown>
 }
 
+/**
+ * Expected end-state a scenario declares for the deterministic adherence
+ * suite. Every field is optional — an omitted expectation makes its check
+ * neutral (n/a), never a failure.
+ */
+export interface ScenarioExpect {
+  /** Exact `RunResult.completed` stage list. */
+  completed?: string[]
+  /** Exact `RunResult.stoppedAt` (null = ran to completion). */
+  stoppedAt?: string | null
+  /** Minimum manifest status on the forward-only ladder (e.g. `approved`). */
+  manifestStatus?: string
+}
+
 /** One self-contained end-to-end workflow evaluation unit. */
 export interface Scenario {
   id: string
@@ -54,6 +69,12 @@ export interface Scenario {
    */
   seedRunState?: { files: Record<string, string> }
   rules: ScenarioRule[]
+  /** Correctness graders — did the run produce good code/artifacts? */
+  correctness: ScenarioGrader[]
+  /** Adherence graders; defaults to the built-in deterministic suite (`adherenceGraders()`). */
+  adherence?: ScenarioGrader[]
+  /** Expected end-state driving the adherence suite's parameterized checks. */
+  expect?: ScenarioExpect
   seed: number
   planRounds: number
   codeRounds: number

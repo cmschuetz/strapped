@@ -77,6 +77,7 @@ function baseScenario(overrides: Partial<Scenario> = {}): Scenario {
       { id: 'A1', source: 'CLAUDE.md', text: 'rule a' },
       { id: 'B1', source: 'CLAUDE.md', text: 'rule b' },
     ],
+    correctness: [],
     seed: 7,
     planRounds: 2,
     codeRounds: 2,

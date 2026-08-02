@@ -35,6 +35,7 @@ function baseScenario(overrides: Partial<Scenario> = {}): Scenario {
       },
     ],
     rules: [],
+    correctness: [],
     seed: 1,
     planRounds: 1,
     codeRounds: 1,
