@@ -1,5 +1,5 @@
 // runScenario against the REAL shipped deployable strapped-run.js, with every
-// agent call answered by a scripted per-label fake spawn (D1 AC4–AC7, AC9).
+// agent call answered by a scripted per-label fake spawn.
 // Fully offline: the sandbox is real (temp dirs + git), the workflow is the
 // real deployable, only the `claude` subprocess boundary is scripted.
 
@@ -120,7 +120,7 @@ const FULL_CHAIN_HANDLERS = {
   'pr-create': PR_RESULT,
 }
 
-test('full chain against the real deployable: RunResult shape, ledger entries, totals (AC4)', async () => {
+test('full chain against the real deployable: RunResult shape, ledger entries, totals', async () => {
   const scenario = baseScenario({ stages: ['plan', 'implement', 'pr'] })
   const { outcome, scripted } = await runAndClean(scenario, envelopes(FULL_CHAIN_HANDLERS))
 
@@ -164,7 +164,7 @@ test('full chain against the real deployable: RunResult shape, ledger entries, t
   assert.deepEqual(stagePhases, ['plan', 'implement', 'pr'])
 })
 
-test('every agent spawn is sandbox-pinned: state-root env, cwd, add-dir, bypass permissions, tools (AC9)', async () => {
+test('every agent spawn is sandbox-pinned: state-root env, cwd, add-dir, bypass permissions, tools', async () => {
   const { outcome, scripted } = await runAndClean(
     baseScenario({ stages: ['plan', 'implement', 'pr'] }),
     envelopes(FULL_CHAIN_HANDLERS)
@@ -192,7 +192,7 @@ test('every agent spawn is sandbox-pinned: state-root env, cwd, add-dir, bypass 
   }
 })
 
-test('stage subset: stages ["plan"] dispatches only the plan stage (AC5)', async () => {
+test('stage subset: stages ["plan"] dispatches only the plan stage', async () => {
   const { outcome, scripted } = await runAndClean(
     baseScenario(),
     envelopes({
@@ -212,7 +212,7 @@ test('stage subset: stages ["plan"] dispatches only the plan stage (AC5)', async
   assert.ok(!labels.includes('approve'), 'singleton plan never dispatches approve')
 })
 
-test('pr always runs dry: the scenario spec cannot unset dryRun (AC5)', async () => {
+test('pr always runs dry: the scenario spec cannot unset dryRun', async () => {
   const { outcome, scripted } = await runAndClean(
     baseScenario({ stages: ['plan', 'implement', 'pr'] }),
     envelopes(FULL_CHAIN_HANDLERS)
@@ -226,7 +226,7 @@ test('pr always runs dry: the scenario spec cannot unset dryRun (AC5)', async ()
   // The Scenario type itself admits no pr stage args — only implement passes through.
 })
 
-test('a failed agent returns null into the workflow and still lands in the ledger (AC6)', async () => {
+test('a failed agent returns null into the workflow and still lands in the ledger', async () => {
   // Mirrors the harness's plan-non-convergence contract: the reviser fails
   // (error envelope → engine ok:false → null), so the review loop stops
   // non-converged and the dispatch halts at plan.
@@ -256,7 +256,7 @@ test('a failed agent returns null into the workflow and still lands in the ledge
   assert.ok(Math.abs(outcome.totals.costUsd - expected) < 1e-9)
 })
 
-test('a workflow throw is captured on the outcome, not propagated (AC6)', async () => {
+test('a workflow throw is captured on the outcome, not propagated', async () => {
   const { outcome, scripted } = await runAndClean(baseScenario({ stages: ['bogus'] }), {})
   assert.match(outcome.error ?? '', /unknown stage "bogus"/)
   assert.equal(outcome.runResult, null)
@@ -265,7 +265,7 @@ test('a workflow throw is captured on the outcome, not propagated (AC6)', async 
   assert.ok(outcome.sandbox.root.length > 0) // paths still returned for grading/cleanup
 })
 
-test('codeRounds > planRounds: rulesByRound covers every code-review round (AC7)', async () => {
+test('codeRounds > planRounds: rulesByRound covers every code-review round', async () => {
   // planRounds 1, codeRounds 2, and the code review actually reaches round 2.
   // If the executor sized rulesByRound by planRounds alone, round 2's lookup
   // would throw "rulesByRound has no entry for round 2".

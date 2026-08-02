@@ -1,4 +1,4 @@
-// buildSandbox/removeSandbox against real git in temp dirs (D1 AC3/AC10/AC11):
+// buildSandbox/removeSandbox against real git in temp dirs:
 // fixture repo + state root both git-initialized with identity and commits,
 // config.json + runDir scaffold + source plan + seedRunState materialized,
 // sandbox-token interpolation, and the opt-in snapshotPath heavy tier.
@@ -53,7 +53,7 @@ function withSandbox(scenario: Scenario, body: (sandbox: ScenarioSandbox) => voi
   }
 }
 
-test('fixture repo: git-initialized on main with local identity and an initial commit (AC3)', () => {
+test('fixture repo: git-initialized on main with local identity and an initial commit', () => {
   withSandbox(baseScenario(), sandbox => {
     const repo = sandbox.repos[0]
     assert.ok(repo !== undefined)
@@ -69,7 +69,7 @@ test('fixture repo: git-initialized on main with local identity and an initial c
   })
 })
 
-test('state root: git-initialized with a seed commit, and a state.mjs transition auto-commits (AC3)', () => {
+test('state root: git-initialized with a seed commit, and a state.mjs transition auto-commits', () => {
   const scenario = baseScenario({
     seedRunState: {
       files: {
@@ -94,7 +94,7 @@ test('state root: git-initialized with a seed commit, and a state.mjs transition
   })
 })
 
-test('scaffold: config.json content, runDir skeleton, source plan, seedRunState files (AC3)', () => {
+test('scaffold: config.json content, runDir skeleton, source plan, seedRunState files', () => {
   const scenario = baseScenario({
     seedRunState: { files: { 'research.md': 'seeded research for {{stateRoot}}' } },
   })
@@ -119,7 +119,7 @@ test('scaffold: config.json content, runDir skeleton, source plan, seedRunState 
   })
 })
 
-test('token interpolation: all four tokens substitute to real absolute paths (AC10)', () => {
+test('token interpolation: all four tokens substitute to real absolute paths', () => {
   const scenario = baseScenario({
     repos: [
       {
@@ -156,7 +156,7 @@ test('token interpolation: all four tokens substitute to real absolute paths (AC
   })
 })
 
-test('an unknown token throws at build time (AC10)', () => {
+test('an unknown token throws at build time', () => {
   assert.throws(
     () =>
       buildSandbox(
@@ -175,7 +175,7 @@ test('a repo with neither files nor snapshotPath throws', () => {
   )
 })
 
-test('snapshotPath tier: snapshot copied, files overlaid, committed git repo with identity (AC11)', () => {
+test('snapshotPath tier: snapshot copied, files overlaid, committed git repo with identity', () => {
   const snapshot = mkdtempSync(join(tmpdir(), 'scenario-snapshot-'))
   try {
     mkdirSync(join(snapshot, 'src'), { recursive: true })
@@ -208,7 +208,7 @@ test('snapshotPath tier: snapshot copied, files overlaid, committed git repo wit
   }
 })
 
-test('snapshotPath with a .git history: no re-init, overlay committed on top (AC11)', () => {
+test('snapshotPath with a .git history: no re-init, overlay committed on top', () => {
   const snapshot = mkdtempSync(join(tmpdir(), 'scenario-snapshot-git-'))
   try {
     writeFileSync(join(snapshot, 'README.md'), 'original readme\n')
@@ -237,7 +237,7 @@ test('snapshotPath with a .git history: no re-init, overlay committed on top (AC
   }
 })
 
-test('removeSandbox deletes the whole tree (AC3)', () => {
+test('removeSandbox deletes the whole tree', () => {
   const sandbox = buildSandbox(baseScenario())
   assert.ok(existsSync(sandbox.root))
   removeSandbox(sandbox)

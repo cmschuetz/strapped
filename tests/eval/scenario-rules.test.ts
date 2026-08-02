@@ -1,4 +1,4 @@
-// splitRules: deterministic seeded per-round rule partitions (D1 AC7).
+// splitRules: deterministic seeded per-round rule partitions.
 
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'

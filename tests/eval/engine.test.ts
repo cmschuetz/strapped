@@ -87,7 +87,7 @@ test('buildArgs adds system-prompt flags only when set, and passes custom settin
   ])
 })
 
-// --- scenario extensions: new flags + spawn options (D1 AC1/AC2) -------------
+// --- scenario extensions: new flags + spawn options ---------------------------
 
 test('a request without the new fields produces the exact pre-change argv', () => {
   assert.deepEqual(buildArgs(baseReq()), [
