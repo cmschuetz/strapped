@@ -105,6 +105,9 @@ export interface Envelope {
   is_error?: boolean
   result?: string
   structured_output?: unknown
+  session_id?: string
+  stop_reason?: string | null
+  terminal_reason?: string | null
   total_cost_usd?: number
   usage?: EnvelopeUsage
   duration_ms?: number

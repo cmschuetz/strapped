@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
 import { buildArgs, defaultSpawn, isAvailable, parseEnvelope, runClaude } from '../../src/eval/engine.ts'
-import type { EvalRequest, JsonSchema, Spawn, SpawnOptions } from '../../src/eval/types.ts'
+import type { Envelope, EvalRequest, JsonSchema, Spawn, SpawnOptions } from '../../src/eval/types.ts'
 import {
   errorEnvelope,
   fakeSpawn,
@@ -213,6 +213,74 @@ test('a missing structured_output falls back to JSON.parse(result)', () => {
   const result = runClaude(baseReq(), { spawn: fakeSpawn(envelope) })
   assert.equal(result.ok, true)
   assert.deepEqual(result.output, { answer: 7 })
+})
+
+test('a missing structured_output failure names the envelope stop/terminal reasons', () => {
+  const envelope = successEnvelope({ answer: 7 }, { structured: false })
+  envelope.result = 'I finished the task successfully but forgot to include any JSON.'
+  envelope.stop_reason = 'end_turn'
+  const result = runClaude(baseReq(), { spawn: fakeSpawn(envelope) })
+  assert.equal(result.ok, false)
+  assert.match(result.error ?? '', /unparseable result JSON/)
+  assert.match(result.error ?? '', /stop_reason=end_turn/)
+})
+
+// --- schema-forced --resume retry --------------------------------------------
+
+function sequencedSpawn(envelopes: readonly Envelope[], calls: string[][]): Spawn {
+  return (_cmd, args) => {
+    calls.push([...args])
+    const envelope = envelopes[Math.min(calls.length, envelopes.length) - 1]
+    return { status: 0, stdout: JSON.stringify(envelope), stderr: '' }
+  }
+}
+
+test('a --resume retry recovers a success run that ended without structured output', () => {
+  const first = successEnvelope({ answer: 0 }, { structured: false, cost: 0.25, numTurns: 9 })
+  first.result = 'Task complete — everything is committed. (No JSON here.)'
+  first.session_id = 'sess-1'
+  const second = successEnvelope({ answer: 4 }, { cost: 0.5, numTurns: 1 })
+  const calls: string[][] = []
+  const result = runClaude(baseReq(), { spawn: sequencedSpawn([first, second], calls) })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.output, { answer: 4 })
+  assert.equal(calls.length, 2)
+  const secondArgs = calls[1] ?? []
+  const resumeAt = secondArgs.indexOf('--resume')
+  assert.ok(resumeAt >= 0)
+  assert.equal(secondArgs[resumeAt + 1], 'sess-1')
+  assert.ok(secondArgs.includes('--json-schema'))
+  assert.equal(result.cost, 0.75)
+  assert.equal(result.numTurns, 10)
+})
+
+test('the retry runs at most once; a still-bad result keeps the original error with summed cost', () => {
+  const first = successEnvelope({ answer: 0 }, { structured: false, cost: 0.25, numTurns: 9 })
+  first.result = 'Done, but no JSON.'
+  first.session_id = 'sess-2'
+  const second = successEnvelope({ answer: 0 }, { structured: false, cost: 0.5, numTurns: 1 })
+  second.result = 'Still prose, still no JSON.'
+  second.session_id = 'sess-2'
+  const calls: string[][] = []
+  const result = runClaude(baseReq(), { spawn: sequencedSpawn([first, second], calls) })
+  assert.equal(result.ok, false)
+  assert.match(result.error ?? '', /unparseable result JSON/)
+  assert.equal(calls.length, 2)
+  assert.equal(result.cost, 0.75)
+})
+
+test('no retry without a session_id, and none on an envelope-level claude error', () => {
+  const noSession = successEnvelope({ answer: 0 }, { structured: false })
+  noSession.result = 'No JSON and no session to resume.'
+  const noSessionCalls: string[][] = []
+  const noSessionResult = runClaude(baseReq(), { spawn: sequencedSpawn([noSession], noSessionCalls) })
+  assert.equal(noSessionResult.ok, false)
+  assert.equal(noSessionCalls.length, 1)
+
+  const errorCalls: string[][] = []
+  const errorResult = runClaude(baseReq(), { spawn: sequencedSpawn([errorEnvelope('error_max_turns')], errorCalls) })
+  assert.equal(errorResult.ok, false)
+  assert.equal(errorCalls.length, 1)
 })
 
 // --- graded failures, no throw (acceptance criterion 3) ----------------------
