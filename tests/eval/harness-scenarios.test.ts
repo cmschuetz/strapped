@@ -47,6 +47,7 @@ const SCENARIOS_DIR = join(ROOT, 'src', 'eval', 'scenarios', 'harness')
 const STATE_MJS = join(ROOT, 'plugins', 'strapped', 'scripts', 'state.mjs')
 const CONVENTIONS_MD = join(ROOT, 'plugins', 'strapped', 'conventions.md')
 const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
+const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
 const ALL_IDS = ['full-pipeline', 'implement-only', 'plan-only', 'review-loop']
@@ -626,13 +627,22 @@ test('the seeded defect repo is genuinely red before the fix (the tests expose t
 
 // --- docs -----------------------------------------------------------------------
 
-test('conventions.md documents scenarios and no longer claims only --ab gates', () => {
+test('conventions.md stays user-facing: no contributor-only guidance survives there', () => {
   const conventions = readFileSync(CONVENTIONS_MD, 'utf8')
   assert.ok(!conventions.includes('only `--ab` gates'), 'the stale "only --ab gates" claim must not survive')
-  assert.match(conventions, /only `--ab` and scenario `--compare` gate/)
-  assert.match(conventions, /Scenario evaluations/)
-  assert.match(conventions, /--scenarios src\/eval\/scenarios\/harness/)
-  assert.match(conventions, /SERIALIZED sum of agent calls/)
+  assert.ok(!conventions.includes('Prompt evaluation suite'), 'the eval-suite section is contributor-only and lives in CONTRIBUTING.md')
+  assert.ok(!conventions.includes('Scenario evaluations'), 'scenario-eval guidance is contributor-only and lives in CONTRIBUTING.md')
+  assert.ok(!conventions.includes('Workflow nesting limit'), 'the nesting-limit record is contributor-only and lives in CONTRIBUTING.md')
+})
+
+test('CONTRIBUTING.md documents the eval layers and no longer claims only --ab gates', () => {
+  const contributing = readFileSync(CONTRIBUTING_MD, 'utf8')
+  assert.ok(!contributing.includes('only `--ab` gates'), 'the stale "only --ab gates" claim must not survive')
+  assert.match(contributing, /only `--ab` and scenario `--compare` gate/)
+  assert.match(contributing, /Scenario evaluations/)
+  assert.match(contributing, /--scenarios src\/eval\/scenarios\/harness/)
+  assert.match(contributing, /SERIALIZED sum of agent calls/)
+  assert.match(contributing, /Workflow nesting limit/)
 })
 
 test('CLAUDE.md documents the scenario layer, the compare workflow, and the cost warning', () => {

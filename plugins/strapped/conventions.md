@@ -329,7 +329,7 @@ Chain-name → validated stage list per [Chain configs](#chain-configs). `<chain
 
 ## Composable chains
 
-All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.name `strapped-run`). Workflow files cannot import each other (they are not modules), but plain functions in one file compose freely — so every loop that used to be its own stage workflow (planner + plan-review loop, feedback synthesis, the implement wave loop with bounded code review, the stacked-PR create pass) is a stage FUNCTION in this single file, selected by the injected `args.stages` list. The file makes **zero `workflow()` calls**, so the nesting limit recorded below never engages. A chain is just a longer stage list.
+All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.name `strapped-run`). Workflow files cannot import each other (they are not modules), but plain functions in one file compose freely — so every loop that used to be its own stage workflow (planner + plan-review loop, feedback synthesis, the implement wave loop with bounded code review, the stacked-PR create pass) is a stage FUNCTION in this single file, selected by the injected `args.stages` list. The file makes **zero `workflow()` calls**, so the harness's one-level workflow-nesting limit never engages. A chain is just a longer stage list.
 
 ### Canonical stage table
 
@@ -385,26 +385,9 @@ A **chain** is a named, non-empty ordered subset of `{plan, implement, pr}` in c
 - **Validity** (enforced by `resolve-chain.mjs`; a violation exits 1 naming the chain, the offending stage, and the rule): every stage is one of `plan|implement|pr`, in strictly canonical order, with no duplicates, and the list is non-empty.
 - **Exclusions**: `feedback`, `feedback-lite`, `learn`, and `status` can never appear in a chain — they are interactive by design (`feedback` gates on explicit user approval of synthesized addenda before touching branches, `feedback-lite` gates on the user's native-plan-mode approval, `learn` gates on approving CLAUDE.md diffs, `status` is a read-only dashboard for a human). A chain exists to run unattended, so a stage whose whole point is a human decision cannot be part of one. `feedback-synth` stays reachable via skill dispatch only, as recorded above.
 
-### Workflow nesting limit (verified; moot by design)
-
-Verified 2026-07-11 against the real Workflow tool, with throwaway scriptPath chains dispatched at depths 2, 3, and 4:
-
-- **Depth 2** — a root workflow dispatching one child via `workflow({ scriptPath })` — **works**: the child's return value and its `phase`/`log` output surface at the root.
-- **Depth 3 and depth 4 fail**: a CHILD workflow may not call `workflow()` at all. Exact runtime error: `workflow() cannot be called from within a child workflow — nesting is limited to one level. Inline the inner script or call its agents directly.`
-
-This limit is why the retired multi-file architecture (stage workflows dispatching each other — the planner and feedback flows each dispatching a shared review-loop file, the wave workflow dispatching a code-review file, and a chain orchestrator above them) could not be built, and why everything was consolidated into the single strapped-run file: with zero `workflow()` calls the limit never engages. Kept as the record for anyone tempted to reintroduce sub-workflow dispatch.
-
 ## Validations
 
 Every command in the **deliverable's repo's** config `validations` must be green before code review and after every fix round, run inside the deliverable's worktree.
-
-### Prompt evaluation suite
-
-The strapped repo carries a prompt-effectiveness eval suite under `src/eval/` (run via `bun run eval`, not bundled into any plugin deployable). It grades the harness's own agent prompts on three axes — **correctness** (layered graders: schema-conformance, assertion predicates, an optional LLM judge), **cost** (`total_cost_usd` + token usage), and **latency** (`duration_ms` / `num_turns`) — by shelling out to `claude -p` (never the Anthropic SDK) and reading the `--output-format json` envelope. It supports **A/B** (baseline vs candidate prompt at one model, reporting Δcorrectness / Δcost / Δlatency side by side so a human judges the trade — a correctness dip that buys a large cost/latency win is a WIN) and a **model matrix** (`--models opus,sonnet,haiku`).
-
-It is the **heavy, opt-in test layer for prompt changes**: it needs a real `claude` and spends cost, so it is deliberately kept OUT of `bun test` (which stays hermetic/offline). When you change an agent prompt (`src/workflows/strapped-run/**` or a skill's `SKILL.md` step prose), run the eval suite alongside `bun test` and keep both green — it is the evidence that the prompt change is a real improvement. An absent `claude` CLI is a graceful skip (notice + exit 0), and only `--ab` and scenario `--compare` gate: exit non-zero on a correctness (for `--compare`: correctness or adherence) regression past `--tolerance`.
-
-**Scenario evaluations.** The same `src/eval/` tree also carries *scenario* evals (`src/eval/scenarios/harness/`, run via `bun run eval --scenarios src/eval/scenarios/harness`): each scenario materializes a sandboxed synthetic fixture repo + ask, drives the REAL shipped workflow deployable (`plugins/strapped/workflows/strapped-run.js`) through a stage subset with every `agent()` call lowered into a real `claude -p` run, and grades the whole run on **correctness**, **adherence** (the workflow's own state/frontmatter rules), **time**, and **price**. Run them when changing WORKFLOW behavior — stage logic, review budgets, orchestration prompts — and capture a `--json` report before and after the change: the offline `bun run eval --compare <baseline.json> <candidate.json>` diff is the before/after evidence for a workflow change. Scenarios are much heavier than prompt cases: every agent call is a real multi-turn agentic run, so expect minutes of wall clock and real cost per scenario (keep asks tiny; the pr stage is always forced dry-run). Known limitation: the engine's sync spawn boundary serializes the workflow's `parallel()`/`pipeline()`, so scenario wall clock is the SERIALIZED sum of agent calls — rest time verdicts on Σturns / ΣapiDurationMs deltas, never on the wall column.
 
 ## Worktrees and branches
 
