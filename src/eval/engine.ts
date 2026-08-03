@@ -194,9 +194,7 @@ export function parseEnvelope(stdout: string, req: EvalRequest): EvalResult {
   }
 
   // Prefer the parsed, schema-forced object; fall back to parsing stringified
-  // `result`. The CLI intermittently omits `structured_output` on multi-turn
-  // runs — carry its stop/terminal reasons in the error so the ledger records
-  // WHY (runClaude then makes one schema-forced `--resume` retry).
+  // `result`, carrying the stop/terminal reasons so the ledger records WHY.
   let output = envelope.structured_output
   if (output === undefined || output === null) {
     const why = `stop_reason=${String(envelope.stop_reason)} terminal_reason=${String(envelope.terminal_reason)}`
@@ -294,13 +292,8 @@ function sumMetrics(first: EvalResult, second: EvalResult): EvalResult {
 }
 
 /**
- * ONE schema-forced follow-up turn against the SAME session when a success
- * envelope ended without usable structured output (missing field, no
- * extractable JSON, or a schema miss). `--resume <session_id>` re-enters the
- * run with the full argv — including `--json-schema` — so the CLI's
- * structured-output forcing produces the value; the model re-evaluates what it
- * already did and returns it in contract. Envelope-level claude errors and
- * spawn failures are NOT retried: they are real run failures, not formatting.
+ * One schema-forced `--resume` follow-up when a success envelope ends without
+ * usable structured output; claude errors and spawn failures never retry.
  */
 function retryStructured(req: EvalRequest, stdout: string, first: EvalResult, spawn: Spawn, spawnOpts: SpawnOptions): EvalResult {
   let envelope: Envelope

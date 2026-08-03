@@ -96,6 +96,10 @@ function item(id: string, pr: string | null = null) {
   }
 }
 
+function wave(items: ReturnType<typeof item>[], remaining: number, blocked: { id: string; blockedOn: string[] }[] = []) {
+  return { items, dag: { ready: items.map(i => i.id), remaining, blocked }, remaining, blocked }
+}
+
 const IMPLEMENTED = { status: 'implemented', summary: 'built the thing', validations_green: true, blocker: null }
 const BLOCKED = { status: 'blocked', summary: 'partial', validations_green: false, blocker: 'missing dependency X' }
 
@@ -147,10 +151,10 @@ test('full chain [plan, implement, pr]: stage order, approve exactly once betwee
     agent: agentByLabel({
       ...planConverges(),
       approve: { changed: true },
-      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'coordinate:1': wave([item('D1')], 1),
       ...nodeConverges('D1'),
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'coordinate:2': wave([], 0),
       'pr-create': PR_RESULT,
     }),
   })
@@ -289,7 +293,7 @@ test('zero plan rounds: plan stage converges with no review agents and still aut
     agent: agentByLabel({
       planner: PLAN,
       approve: { changed: true },
-      'coordinate:1': { items: [], remaining: 0, blocked: [] },
+      'coordinate:1': wave([], 0),
     }),
   })
   assert.equal(result.results.plan.converged, true)
@@ -309,10 +313,10 @@ test('zero code rounds: implemented node goes done without review; a blocked one
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ codeRounds: 0, rulesByRound: [], stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'coordinate:1': wave([item('D1')], 1),
       'implement:D1': IMPLEMENTED,
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'coordinate:2': wave([], 0),
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -329,7 +333,7 @@ test('zero code rounds: implemented node goes done without review; a blocked one
   const blocked = await runWorkflow(WORKFLOW, {
     args: baseCfg({ codeRounds: 0, rulesByRound: [], stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'coordinate:1': wave([item('D1')], 1),
       'implement:D1': BLOCKED,
       'apply:1': { applied: [{ id: 'D1', status: 'parked' }] },
     }),
@@ -344,13 +348,13 @@ test('implement: two waves then allDone; manifest-status implementing in first c
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 2, blocked: [{ id: 'D2', blockedOn: ['D1'] }] },
+      'coordinate:1': wave([item('D1')], 2, [{ id: 'D2', blockedOn: ['D1'] }]),
       ...nodeConverges('D1'),
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [item('D2')], remaining: 1, blocked: [] },
+      'coordinate:2': wave([item('D2')], 1),
       ...nodeConverges('D2'),
       'apply:2': { applied: [{ id: 'D2', status: 'done' }] },
-      'coordinate:3': { items: [], remaining: 0, blocked: [] },
+      'coordinate:3': wave([], 0),
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -369,7 +373,7 @@ test('implement: node already pr-open at entry → allDone true with no implemen
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
-      'coordinate:1': { items: [], remaining: 0, blocked: [] },
+      'coordinate:1': wave([], 0),
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -383,7 +387,7 @@ test('implement: parked node blocks children → stoppedAt implement, no pr stag
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement', 'pr'], stageArgs: { pr: {} } }),
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 2, blocked: [{ id: 'D2', blockedOn: ['D1'] }] },
+      'coordinate:1': wave([item('D1')], 2, [{ id: 'D2', blockedOn: ['D1'] }]),
       'implement:D1': BLOCKED,
       'apply:1': { applied: [{ id: 'D1', status: 'parked' }] },
     }),
@@ -402,10 +406,10 @@ test('implement: zero-progress wave terminates the loop', async () => {
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 3, blocked: [] },
+      'coordinate:1': wave([item('D1')], 3),
       ...nodeConverges('D1'),
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [item('D2')], remaining: 2, blocked: [] },
+      'coordinate:2': wave([item('D2')], 2),
       'implement:D2': BLOCKED,
       'apply:2': { applied: [{ id: 'D2', status: 'parked' }] },
       // No coordinate:3 handler: dispatching it would throw. Zero newly-done
@@ -417,6 +421,37 @@ test('implement: zero-progress wave terminates the loop', async () => {
   assert.equal(callsWithLabelPrefix(calls, 'coordinate:').length, 2)
 })
 
+test('implement: coordinator wave contradicting its dag paste is re-dispatched once and the retry wave is used', async () => {
+  const lyingWave = { items: [], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': lyingWave,
+      'coordinate:1:retry': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': wave([], 0),
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+  assert.equal(callsWithLabelPrefix(calls, 'coordinate:1').length, 2)
+  assert.equal(callsWithLabelPrefix(calls, 'implement:').length, 1)
+})
+
+test('implement: a second dag-contradicting wave is a hard error, never a fake allDone', async () => {
+  const lyingWave = { items: [], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  await assert.rejects(
+    runWorkflow(WORKFLOW, {
+      args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+      agent: agentByLabel({
+        'coordinate:1': lyingWave,
+        'coordinate:1:retry': lyingWave,
+      }),
+    }),
+    /does not match its own dag ready/
+  )
+})
+
 test('addendumMode + recordSuffix thread through to the review-record path and feedback_rounds_used', async () => {
   const cfg = baseCfg({
     stages: ['implement'],
@@ -425,7 +460,7 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: cfg,
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'coordinate:1': wave([item('D1')], 1),
       'implement:D1': IMPLEMENTED,
       'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
@@ -435,7 +470,7 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
       'review:D1:b:r2': NO_FINDINGS,
       'verify:D1:r2': EMPTY_VERIFY,
       'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
-      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'coordinate:2': wave([], 0),
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -476,11 +511,11 @@ test('addendumMode: apply prompt carries each node\'s real pr value; done/pre-PR
     args: cfg,
     agent: agentByLabel({
       // One node with an open PR, one pre-PR node still at done (pr: null).
-      'coordinate:1': { items: [item('D1', PR_URL), item('D2')], remaining: 2, blocked: [] },
+      'coordinate:1': wave([item('D1', PR_URL), item('D2')], 2),
       ...nodeConverges('D1'),
       ...nodeConverges('D2'),
       'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }, { id: 'D2', status: 'done' }] },
-      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'coordinate:2': wave([], 0),
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -512,14 +547,14 @@ test('addendumMode: coordinator progress ledger — pass 1 treats every addendum
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: cfg,
     agent: agentByLabel({
-      'coordinate:1': { items: [item('D1')], remaining: 3, blocked: [] },
+      'coordinate:1': wave([item('D1')], 3),
       ...nodeConverges('D1'),
       'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
-      'coordinate:2': { items: [item('D2'), item('D3')], remaining: 2, blocked: [] },
+      'coordinate:2': wave([item('D2'), item('D3')], 2),
       ...nodeConverges('D2'),
       'implement:D3': BLOCKED,
       'apply:2': { applied: [{ id: 'D2', status: 'pr-open' }, { id: 'D3', status: 'parked' }] },
-      'coordinate:3': { items: [], remaining: 1, blocked: [] },
+      'coordinate:3': wave([], 1),
     }),
   })
 
@@ -551,7 +586,7 @@ test('addendumMode: coordinator progress ledger — pass 1 treats every addendum
   // coordinator consumes the dag's remaining verbatim instead.
   const plain = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
-    agent: agentByLabel({ 'coordinate:1': { items: [], remaining: 0, blocked: [] } }),
+    agent: agentByLabel({ 'coordinate:1': wave([], 0) }),
   })
   assert.ok(!callWithLabel(plain.calls, 'coordinate:1').prompt.includes('Progress ledger'))
 })

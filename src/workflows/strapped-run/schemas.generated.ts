@@ -384,6 +384,49 @@ export const WAVE_SCHEMA = {
         "additionalProperties": false
       }
     },
+    "dag": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remaining": {
+          "type": "number"
+        },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "blockedOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "blockedOn"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ready",
+        "remaining",
+        "blocked"
+      ],
+      "additionalProperties": false,
+      "description": "Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes."
+    },
     "remaining": {
       "type": "number"
     },
@@ -412,6 +455,7 @@ export const WAVE_SCHEMA = {
   },
   "required": [
     "items",
+    "dag",
     "remaining",
     "blocked"
   ],

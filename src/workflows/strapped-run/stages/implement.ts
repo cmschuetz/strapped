@@ -183,7 +183,7 @@ ${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from exi
    - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
    - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
    - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`dag\` = the \`ready\`, \`remaining\`, and \`blocked\` fields copied verbatim from step 1's dag output (recorded for auditing; the ledger-derived values below stay authoritative on feedback passes), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
   }
 
   return `${header}
@@ -195,7 +195,7 @@ Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile a
    - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
    - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), the dag's \`remaining\` verbatim, and its \`blocked\` list verbatim. When \`remaining\` is 0, return items: [].`
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = the \`ready\`, \`remaining\`, and \`blocked\` fields COPIED VERBATIM from the dag command's printed JSON (the workflow validates your wave against this paste — a wave that omits a ready node is rejected), plus top-level \`remaining\` and \`blocked\` mirroring those same dag values. When the dag's \`remaining\` is 0, return items: [].`
 }
 
 function applyPrompt(cfg: RunConfig, pass: number, results: readonly NodeOutcome[], { addendumMode, roundsField }: { addendumMode: boolean; roundsField: RoundsField }): string {
@@ -242,23 +242,47 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
 
   while (pass < maxPasses) {
     pass++
-    const wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
+    let wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
       label: `coordinate:${pass}`,
       phase: 'Implement',
       schema: WAVE_SCHEMA,
     })
     if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass}`)
-    if (pass === 1) maxPasses = wave.remaining + 1
-    blocked = wave.blocked
 
-    if (wave.remaining === 0) {
+    // Trust the pasted dag, not the agent's summary; mismatch → one retry, then hard stop.
+    if (!addendumMode) {
+      const matchesDag = (w: WaveResult) => {
+        const itemIds = [...new Set(w.items.map(i => i.id))].sort()
+        const readyIds = [...new Set(w.dag.ready)].sort()
+        return itemIds.length === readyIds.length && itemIds.every((id, i) => id === readyIds[i])
+      }
+      if (!matchesDag(wave)) {
+        log(`pass ${pass}: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match dag ready [${wave.dag.ready.join(', ')}] — re-dispatching once`)
+        wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
+          label: `coordinate:${pass}:retry`,
+          phase: 'Implement',
+          schema: WAVE_SCHEMA,
+        })
+        if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass} retry`)
+        if (!matchesDag(wave)) {
+          throw new Error(
+            `implement stage: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match its own dag ready [${wave.dag.ready.join(', ')}] after a retry on pass ${pass}`
+          )
+        }
+      }
+    }
+    const remaining = addendumMode ? wave.remaining : wave.dag.remaining
+    if (pass === 1) maxPasses = remaining + 1
+    blocked = addendumMode ? wave.blocked : wave.dag.blocked
+
+    if (remaining === 0) {
       allDone = true
       break
     }
     if (!wave.items.length) {
       // Nothing dispatchable but work remains (parked nodes / blocked children):
       // park, don't spin.
-      log(`pass ${pass}: no dispatchable node with ${wave.remaining} remaining — stopping`)
+      log(`pass ${pass}: no dispatchable node with ${remaining} remaining — stopping`)
       break
     }
 

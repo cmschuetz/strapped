@@ -201,8 +201,17 @@ export interface BlockedNode {
 }
 
 /** WAVE_SCHEMA */
+/** `ready`/`remaining`/`blocked` copied verbatim from `state.mjs dag` output. */
+export interface DagSnapshot {
+  ready: string[]
+  remaining: number
+  blocked: BlockedNode[]
+}
+
 export interface WaveResult {
   items: WaveItem[]
+  /** Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes. */
+  dag: DagSnapshot
   remaining: number
   blocked: BlockedNode[]
 }
