@@ -12,13 +12,20 @@
 //
 // Flags: --suite <dir>  --filter <tag|id>  --ab  --matrix  --models a,b
 //        --json  --tolerance <pct>
-//        --scenarios <dir>  --keep-sandbox  --compare <baseline.json> <candidate.json>
+//        --scenarios <dir>  --keep-sandbox  --deployable <path>
+//        --compare <baseline.json> <candidate.json>
+//
+// `--deployable <path>` (scenario mode only) runs the suite against the named
+// workflow deployable instead of the repo's shipped strapped-run.js. Only for
+// args-contract-COMPATIBLE builds (e.g. two candidate builds of the same tree)
+// — a cross-contract baseline must come from a self-consistent checkout (see
+// CONTRIBUTING.md), never from pointing the new executor at an old deployable.
 //
 // `main` returns { code, output } (does not exit) so tests can drive the exact
 // exit-code semantics through the injected spawn; the bottom guard is the only
 // place that touches the process.
 
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { EvalCase } from './case.ts'
 import { isAvailable } from './engine.ts'
@@ -49,6 +56,8 @@ export interface EvalFlags {
   scenarios?: string
   /** Keep each scenario's sandbox on disk and print its path. */
   keepSandbox: boolean
+  /** Scenario mode: explicit workflow deployable path (contract-compatible builds only). */
+  deployable?: string
   /** Offline compare: the two report paths consumed after `--compare`. */
   compare?: string[]
 }
@@ -84,6 +93,9 @@ export function parseArgs(argv: readonly string[]): EvalFlags {
         break
       case '--keep-sandbox':
         flags.keepSandbox = true
+        break
+      case '--deployable':
+        flags.deployable = argv[++i]
         break
       case '--compare':
         // Consumes the next TWO args (baseline, candidate); main validates arity.
@@ -183,6 +195,9 @@ function runCompare(flags: EvalFlags): CliResult {
 
 /** Scenario-mode dispatch: load, filter, run, report. Always report-only (exit 0). */
 async function runScenarioMode(flags: EvalFlags, deps: CliDeps): Promise<CliResult> {
+  if (flags.deployable !== undefined && !existsSync(flags.deployable)) {
+    return { code: 2, output: `eval: --deployable file not found: ${flags.deployable}\n` }
+  }
   if (!isAvailable(deps.spawn)) {
     return { code: 0, output: 'eval: claude CLI unavailable — skipping scenarios (exit 0)\n' }
   }
@@ -198,6 +213,7 @@ async function runScenarioMode(flags: EvalFlags, deps: CliDeps): Promise<CliResu
     spawn: deps.spawn,
     cache: deps.cache,
     keepSandbox: flags.keepSandbox,
+    deployable: flags.deployable,
   })
   const output = flags.json
     ? `${JSON.stringify(scenarioReportToJSON(rows), null, 2)}\n`

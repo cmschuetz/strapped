@@ -76,6 +76,7 @@ export interface Deliverable {
 
 export interface PlanStageResult {
   converged: boolean
+  rounds: number
   deliverables: Deliverable[]
   outstanding: { id: string }[]
   summary?: string

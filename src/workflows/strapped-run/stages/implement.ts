@@ -15,7 +15,6 @@ import type {
   NodeOutcome,
   NodeState,
   ProcessedOutcome,
-  Refuted,
   RoundsField,
   RunConfig,
   SeenFinding,
@@ -56,7 +55,7 @@ ${item.validations.map(v => `- ${v}`).join('\n')}
 Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
 }
 
-function fixPrompt(cfg: RunConfig, item: WaveItem, findings: ReadonlyArray<Refuted<CodeFinding>>, round: number, recordSuffix: string): string {
+function fixPrompt(cfg: RunConfig, item: WaveItem, findings: readonly CodeFinding[], round: number, recordSuffix: string): string {
   return `You are the fix agent for deliverable ${item.id} of strapped run "${cfg.slug}", code-review round ${round}. Fresh context — everything you need is below.
 
 Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
@@ -90,6 +89,13 @@ async function implementOne(cfg: RunConfig, item: WaveItem, addendumMode: boolea
 async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: string): Promise<NodeOutcome> {
   if (state.outcome === 'parked') return { ...state, suggestions: [] }
   const item = state.item
+  // A 0-round code-review budget means "skip adversarial review entirely and
+  // trust the implementer" (its validations already ran green) — the node goes
+  // straight to done and the confirmation pass never fires.
+  if (cfg.codeRounds === 0) {
+    log(`${item.id}: code-review budget 0 — skipping adversarial review`)
+    return { item, outcome: 'done', roundsUsed: 0, summary: state.summary, suggestions: [] }
+  }
   const seen: SeenFinding[] = []
   const suggestions: CodeFinding[] = []
   let converged = false

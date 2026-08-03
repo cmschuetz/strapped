@@ -18,7 +18,7 @@ import type { EvalCase } from '../../src/eval/case.ts'
 import { cases } from '../../src/eval/suites/harness/index.ts'
 import { plannerCase } from '../../src/eval/suites/harness/planner.case.ts'
 import { reviewerCase } from '../../src/eval/suites/harness/reviewer.case.ts'
-import { refuterCase } from '../../src/eval/suites/harness/refuter.case.ts'
+import { verifierCase } from '../../src/eval/suites/harness/verifier.case.ts'
 import { implementerCase } from '../../src/eval/suites/harness/implementer.case.ts'
 import { fakeSpawn, successEnvelope } from '../helpers/fake-claude.ts'
 
@@ -81,9 +81,19 @@ const FIXTURES: Fixture[] = [
     },
   },
   {
-    case: refuterCase,
-    good: { verdict: 'refuted', confidence: 15, evidence: 'The deliverable names resolver.ts in Files to touch.' },
-    bad: { verdict: 'confirmed', confidence: 90, evidence: 'No target file found.' },
+    case: verifierCase,
+    // The one weak gating finding is adjudicated refuted, nothing survives.
+    good: {
+      verdicts: [{ id: 'r1-a-f1', verdict: 'refuted', confidence: 15, evidence: 'The deliverable names resolver.ts in Files to touch.' }],
+      new_confirmed_ids: [],
+      duplicate_ids: [],
+    },
+    // The verifier waved the weak finding through as a NEW confirmed gap.
+    bad: {
+      verdicts: [{ id: 'r1-a-f1', verdict: 'confirmed', confidence: 90, evidence: 'No target file found.' }],
+      new_confirmed_ids: ['r1-a-f1'],
+      duplicate_ids: [],
+    },
   },
   {
     case: implementerCase,
@@ -111,7 +121,7 @@ test('every harness case is well-formed (id/tags/prompt/schema/graders)', () => 
 
 test('the four required harness cases are present by id', () => {
   const ids = cases.map(c => c.id).sort()
-  assert.deepEqual(ids, ['implementer', 'planner', 'refuter', 'reviewer'])
+  assert.deepEqual(ids, ['implementer', 'planner', 'reviewer', 'verifier'])
 })
 
 // --- acceptance criterion: ids + tags unique ---------------------------------
@@ -121,7 +131,7 @@ test('case ids and primary tags are unique across the suite', () => {
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   const tags = cases.flatMap(c => c.tags)
   assert.equal(new Set(tags).size, tags.length, 'no tag is shared between cases')
-  for (const expected of ['planner', 'reviewer', 'refuter', 'implementer']) {
+  for (const expected of ['planner', 'reviewer', 'verifier', 'implementer']) {
     assert.equal(cases.filter(c => c.tags.includes(expected)).length, 1, `exactly one case tagged ${expected}`)
   }
 })
@@ -147,12 +157,12 @@ for (const fx of FIXTURES) {
 test('loadSuite loads exactly the four harness cases from the suite directory', async () => {
   const loaded = await loadSuite(SUITE_DIR)
   assert.equal(loaded.length, 4)
-  assert.deepEqual(loaded.map(c => c.id).sort(), ['implementer', 'planner', 'refuter', 'reviewer'])
+  assert.deepEqual(loaded.map(c => c.id).sort(), ['implementer', 'planner', 'reviewer', 'verifier'])
 })
 
 test('the imported case objects are identical to the suite export', () => {
   assert.equal(cases.includes(plannerCase), true)
   assert.equal(cases.includes(reviewerCase), true)
-  assert.equal(cases.includes(refuterCase), true)
+  assert.equal(cases.includes(verifierCase), true)
   assert.equal(cases.includes(implementerCase), true)
 })

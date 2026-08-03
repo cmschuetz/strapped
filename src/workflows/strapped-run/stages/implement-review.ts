@@ -1,19 +1,18 @@
 // One adversarial code-review round for one deliverable: 2 rule-partitioned
-// reviewers, per-finding refute pass, dedup-vs-seen consolidation writing
+// reviewers, then ONE verify-consolidate agent (batch skeptical verification of
+// every gating finding + dedup-vs-seen consolidation) writing
 // reviews/<id>-code-round-<N><suffix>.md.
 
 import { rulesForRound } from '../config.ts'
 import { digest, ruleBlock } from '../review-loop.ts'
-import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from '../schemas.generated.ts'
+import { FINDINGS_SCHEMA, VERIFY_SCHEMA } from '../schemas.generated.ts'
 import type {
   CodeFinding,
-  ConsolidateResult,
   FindingsResult,
-  RefuteResult,
-  Refuted,
   ReviewerId,
   RunConfig,
   SeenFinding,
+  VerifyResult,
   WaveItem,
 } from '../types.ts'
 
@@ -31,7 +30,7 @@ export interface CodeReviewRoundOpts {
 }
 
 export interface CodeReviewRoundResult {
-  newConfirmed: Array<Refuted<CodeFinding>>
+  newConfirmed: CodeFinding[]
   suggestions: CodeFinding[]
   roundFile: string
   converged: boolean
@@ -71,16 +70,6 @@ Report only real, evidenced issues. Severity: "blocking" = bug or guideline viol
 You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), the ac_checklist covering every AC (and addendum task) from step 1, plus your findings.`
   }
 
-  function refutePrompt(f: CodeFinding): string {
-    return `You are a skeptical verifier with fresh context. A code reviewer claims the following issue in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
-
-Claim [${f.severity}] at ${f.location}: ${f.what}
-Why the reviewer thinks so: ${f.why}
-Their evidence: ${f.evidence}
-
-Your stance: this is NOT a real issue unless the code proves otherwise. Read the actual code in the worktree and try to refute the claim — look for handling the reviewer missed, misread control flow, or a claim about code that does not exist. Return your verdict, a corrected confidence (0-100) that the issue is real, and one line of evidence.`
-  }
-
   const reviews = await parallel([
     () => agent<FindingsResult>(reviewerPrompt('a'), { label: `review:${item.id}:a:r${roundLabel}`, phase: 'Review', schema: FINDINGS_SCHEMA }),
     () => agent<FindingsResult>(reviewerPrompt('b'), { label: `review:${item.id}:b:r${roundLabel}`, phase: 'Review', schema: FINDINGS_SCHEMA }),
@@ -99,27 +88,18 @@ Your stance: this is NOT a real issue unless the code proves otherwise. Read the
   const suggestions = allFindings.filter(f => f.severity === 'suggestion')
   log(`${item.id} round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
 
-  const verified = await parallel(
-    gating.map(f => () =>
-      agent<RefuteResult>(refutePrompt(f), { label: `refute:${item.id}:${f.id}`, phase: 'Verify', effort: 'low', schema: REFUTE_SCHEMA })
-        .then(v => ({ ...f, refute: v }))
-    )
-  )
-  // Null refuter result = vote not cast; never dereferenced, never surviving.
-  const surviving = verified
-    .filter(Boolean)
-    .filter(f => f.refute && f.refute.verdict !== 'refuted' && f.refute.confidence >= cfg.confidenceMin)
-  const dropped = gating.length - surviving.length
-  if (dropped > 0) log(`${item.id} round ${roundLabel}: refute pass dropped ${dropped} finding(s)`)
-
   const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`
-  const consolidation = await agent<ConsolidateResult>(
-    `You are consolidating verified code-review findings for deliverable ${item.id}, round ${roundLabel}, of strapped run "${cfg.slug}". Follow the round-record format in ${cfg.conventionsFile}.
+  const verification = await agent<VerifyResult>(
+    `You are the verify-consolidate agent for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW issue remains.' : ''}
 
-Surviving verified findings (already passed the refute filter):
-${JSON.stringify(surviving, null, 2)}
+Code reviewers claim the following issues in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
 
-Suggestions (non-gating, record only):
+Gating findings to adjudicate:
+${JSON.stringify(gating, null, 2)}
+
+Verification stance, applied to each finding independently: it is NOT a real issue unless the code proves otherwise. Read the actual code in the worktree and try to refute each claim — look for handling the reviewer missed, misread control flow, or a claim about code that does not exist. Cast one verdict per finding id — "confirmed" (the issue is proven real), "plausible" (credible but unproven), or "refuted" (not a real issue) — with a corrected confidence (0-100) that the issue is real and one line of evidence. A finding with verdict refuted, or confidence below ${cfg.confidenceMin}, does not survive.
+
+Suggestions (non-gating, never verified, record only):
 ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
@@ -131,14 +111,28 @@ ${seenDigest || '(none — first round)'}
 
 Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-code-round-*${recordSuffix}.md — read them.
 
-Tasks:
+Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
 2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
-3. Return the ids of truly-NEW confirmed findings and the ids of duplicates.`,
-    { label: `consolidate:${item.id}:r${roundLabel}`, phase: 'Consolidate', effort: 'low', schema: CONSOLIDATE_SCHEMA }
+3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`,
+    { label: `verify:${item.id}:r${roundLabel}`, phase: 'Verify', effort: 'low', schema: VERIFY_SCHEMA }
   )
 
-  const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map(f => f.id))
+  // A null verifier result is a vote NOT cast on every finding — never
+  // dereferenced, and a finding without a cast confirming vote never survives.
+  if (!verification) {
+    if (gating.length) log(`${item.id} round ${roundLabel}: verifier cast no vote — ${gating.length} gating finding(s) excluded`)
+    return { newConfirmed: [], suggestions, roundFile, converged: true }
+  }
+  const verdictById = new Map(verification.verdicts.map(v => [v.id, v] as const))
+  const surviving = gating.filter(f => {
+    const v = verdictById.get(f.id)
+    return v !== undefined && v.verdict !== 'refuted' && v.confidence >= cfg.confidenceMin
+  })
+  const dropped = gating.length - surviving.length
+  if (dropped > 0) log(`${item.id} round ${roundLabel}: verify pass dropped ${dropped} finding(s)`)
+
+  const newIds = new Set(verification.new_confirmed_ids)
   const newConfirmed = surviving.filter(f => newIds.has(f.id))
   log(`${item.id} round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`)
 

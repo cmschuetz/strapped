@@ -41,8 +41,15 @@ function baseCfg(overrides: Record<string, unknown> = {}) {
 }
 
 const NO_FINDINGS = { findings: [], rule_checklist: [{ rule: 'A1', verdict: 'pass', evidence: 'ok' }] }
-const EMPTY_CONSOLIDATION = { new_confirmed_ids: [], duplicate_ids: [] }
-const CONFIRMED = { verdict: 'confirmed', confidence: 95, evidence: 'real' }
+const EMPTY_VERIFY = { verdicts: [], new_confirmed_ids: [], duplicate_ids: [] }
+
+function confirmedVerify(...ids: string[]) {
+  return {
+    verdicts: ids.map(id => ({ id, verdict: 'confirmed', confidence: 95, evidence: 'real' })),
+    new_confirmed_ids: ids,
+    duplicate_ids: [],
+  }
+}
 
 const PLAN = {
   deliverables: [{ id: 'D1', file: 'deliverables/D1-thing.md', title: 'Thing', deps: [] }],
@@ -70,7 +77,7 @@ function planConverges() {
     planner: PLAN,
     'plan-review:a:r1': NO_FINDINGS,
     'plan-review:b:r1': NO_FINDINGS,
-    'consolidate:r1': EMPTY_CONSOLIDATION,
+    'verify:r1': EMPTY_VERIFY,
   }
 }
 
@@ -98,7 +105,7 @@ function nodeConverges(id: string) {
     [`implement:${id}`]: IMPLEMENTED,
     [`review:${id}:a:r1`]: NO_FINDINGS,
     [`review:${id}:b:r1`]: NO_FINDINGS,
-    [`consolidate:${id}:r1`]: EMPTY_CONSOLIDATION,
+    [`verify:${id}:r1`]: EMPTY_VERIFY,
   }
 }
 
@@ -195,8 +202,7 @@ test('plan non-convergence → stoppedAt plan, no approve, no later stages', asy
       planner: PLAN,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
-      'refute:r1-a-f1': CONFIRMED,
-      'consolidate:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
+      'verify:r1': confirmedVerify('r1-a-f1'),
       'revise:r1': () => null, // reviser fails → loop stops non-converged
     }),
   })
@@ -210,22 +216,126 @@ test('plan non-convergence → stoppedAt plan, no approve, no later stages', asy
   assert.equal(callsWithLabelPrefix(calls, 'pr-').length, 0)
 })
 
-test('null refuter result → finding handled as vote-not-cast, loop completes without crash', async () => {
-  const { result, calls } = await runWorkflow(WORKFLOW, {
+test('null verifier result → votes not cast, no finding confirmed, loop completes without crash', async () => {
+  const { result, calls, logs } = await runWorkflow(WORKFLOW, {
     args: baseCfg(),
     agent: agentByLabel({
       planner: PLAN,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
-      'refute:r1-a-f1': () => null,
-      'consolidate:r1': EMPTY_CONSOLIDATION,
+      'verify:r1': () => null,
     }),
   })
   assert.equal(result.results.plan.converged, true)
   assert.equal(result.stoppedAt, null)
-  // The vote-not-cast finding never reaches the consolidator's surviving set.
-  const consolidate = callWithLabel(calls, 'consolidate:r1')
-  assert.ok(!consolidate.prompt.includes('"r1-a-f1"'))
+  // No vote cast → the finding never survives, so no reviser runs.
+  assert.equal(callsWithLabelPrefix(calls, 'revise:').length, 0)
+  assert.ok(logs.some(l => l.includes('verifier cast no vote')))
+})
+
+test('a verdict missing from the verifier result is a vote not cast on that finding only', async () => {
+  const { result } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      planner: PLAN,
+      'plan-review:a:r1': { findings: [finding('f1'), finding('f2')], rule_checklist: [] },
+      'plan-review:b:r1': NO_FINDINGS,
+      // Only f1 gets a verdict — and it is refuted; f2 has no vote at all.
+      'verify:r1': {
+        verdicts: [{ id: 'r1-a-f1', verdict: 'refuted', confidence: 10, evidence: 'not real' }],
+        new_confirmed_ids: [],
+        duplicate_ids: [],
+      },
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(result.stoppedAt, null)
+})
+
+test('single verifier per round regardless of finding count', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      planner: PLAN,
+      'plan-review:a:r1': { findings: [finding('f1'), finding('f2'), finding('f3')], rule_checklist: [] },
+      'plan-review:b:r1': NO_FINDINGS,
+      'verify:r1': confirmedVerify('r1-a-f1', 'r1-a-f2', 'r1-a-f3'),
+      'revise:r1': { ok: true },
+      'plan-review:a:r2': NO_FINDINGS,
+      'plan-review:b:r2': NO_FINDINGS,
+      'verify:r2': EMPTY_VERIFY,
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  // Three gating findings in round 1 still dispatch exactly ONE verifier —
+  // the per-round agent-call count is constant.
+  assert.equal(callsWithLabelPrefix(calls, 'verify:r1').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'verify:').length, 2)
+  // The one verifier saw every finding.
+  const verify = callWithLabel(calls, 'verify:r1')
+  assert.ok(verify.prompt.includes('"r1-a-f1"'))
+  assert.ok(verify.prompt.includes('"r1-a-f2"'))
+  assert.ok(verify.prompt.includes('"r1-a-f3"'))
+})
+
+test('zero plan rounds: plan stage converges with no review agents and still auto-approves when chained', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      planRounds: 0,
+      rulesByRound: [],
+      stages: ['plan', 'implement'],
+      stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: REPOS } },
+    }),
+    agent: agentByLabel({
+      planner: PLAN,
+      approve: { changed: true },
+      'coordinate:1': { items: [], remaining: 0, blocked: [] },
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(result.results.plan.rounds, 0)
+  assert.deepEqual(result.results.plan.outstanding, [])
+  assert.deepEqual(result.completed, ['plan', 'implement'])
+  assert.equal(result.stoppedAt, null)
+  // Zero review agents of any kind — the planner and approve still ran.
+  assert.equal(callsWithLabelPrefix(calls, 'plan-review').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'verify:').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'revise:').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'planner').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'approve').length, 1)
+})
+
+test('zero code rounds: implemented node goes done without review; a blocked one still parks', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ codeRounds: 0, rulesByRound: [], stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'implement:D1': IMPLEMENTED,
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+  assert.equal(result.results.implement.outcomes[0]?.outcome, 'done')
+  assert.equal(result.results.implement.outcomes[0]?.roundsUsed, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'review:').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'verify:').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'fix:').length, 0)
+  // review_rounds_used is applied as 0.
+  const apply = callWithLabel(calls, 'apply:1')
+  assert.ok(apply.prompt.includes('"roundsUsed": 0'))
+
+  // A blocked implementation still parks — 0 rounds never launders a failure.
+  const blocked = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ codeRounds: 0, rulesByRound: [], stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': { items: [item('D1')], remaining: 1, blocked: [] },
+      'implement:D1': BLOCKED,
+      'apply:1': { applied: [{ id: 'D1', status: 'parked' }] },
+    }),
+  })
+  assert.equal(blocked.result.results.implement.outcomes[0]?.outcome, 'parked')
+  assert.equal(blocked.result.results.implement.outcomes[0]?.parkedReason, 'missing dependency X')
 })
 
 // --- implement stage -----------------------------------------------------------
@@ -319,12 +429,11 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
       'implement:D1': IMPLEMENTED,
       'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
-      'refute:D1:r1-a-f1': CONFIRMED,
-      'consolidate:D1:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
+      'verify:D1:r1': confirmedVerify('r1-a-f1'),
       'fix:D1:r1': IMPLEMENTED,
       'review:D1:a:r2': NO_FINDINGS,
       'review:D1:b:r2': NO_FINDINGS,
-      'consolidate:D1:r2': EMPTY_CONSOLIDATION,
+      'verify:D1:r2': EMPTY_VERIFY,
       'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
       'coordinate:2': { items: [], remaining: 0, blocked: [] },
     }),
@@ -338,10 +447,10 @@ test('addendumMode + recordSuffix thread through to the review-record path and f
   assert.ok(implement.prompt.includes('Feedback addendum'))
   assert.ok(!implement.prompt.includes('You are the implementation agent'))
 
-  // recordSuffix in the round-record write path (consolidator) and the fix
-  // agent's read path — writer and reader agree.
-  const consolidate = callWithLabel(calls, 'consolidate:D1:r1')
-  assert.ok(consolidate.prompt.includes(`${cfg.dir}/reviews/D1-code-round-1-feedback.md`))
+  // recordSuffix in the round-record write path (the verify-consolidate agent)
+  // and the fix agent's read path — writer and reader agree.
+  const verify = callWithLabel(calls, 'verify:D1:r1')
+  assert.ok(verify.prompt.includes(`${cfg.dir}/reviews/D1-code-round-1-feedback.md`))
   const fix = callWithLabel(calls, 'fix:D1:r1')
   assert.ok(fix.prompt.includes(`${cfg.dir}/reviews/D1-code-round-1-feedback.md`))
 
@@ -534,7 +643,7 @@ test('feedback-synth: synthesis agent then review loop with feedback-round prefi
       'feedback-synth': synth,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
-      'consolidate:r1': EMPTY_CONSOLIDATION,
+      'verify:r1': EMPTY_VERIFY,
     }),
   })
   const stageResult = result.results['feedback-synth']
@@ -549,8 +658,8 @@ test('feedback-synth: synthesis agent then review loop with feedback-round prefi
   const synthCall = callWithLabel(calls, 'feedback-synth')
   assert.ok(synthCall.prompt.includes('rename this'))
   assert.ok(synthCall.prompt.includes('Feedback addendum'))
-  const consolidate = callWithLabel(calls, 'consolidate:r1')
-  assert.ok(consolidate.prompt.includes(`${cfg.dir}/reviews/feedback-round-1.md`))
+  const verify = callWithLabel(calls, 'verify:r1')
+  assert.ok(verify.prompt.includes(`${cfg.dir}/reviews/feedback-round-1.md`))
 })
 
 test('feedback-synth: lite mode synthesizes without the review loop', async () => {
@@ -589,7 +698,7 @@ test('feedback-synth: lite mode synthesizes without the review loop', async () =
   // Lite runs the synthesis agent but NO adversarial review-loop agents.
   assert.equal(callsWithLabelPrefix(calls, 'feedback-synth').length, 1)
   assert.equal(callsWithLabelPrefix(calls, 'plan-review').length, 0)
-  assert.equal(callsWithLabelPrefix(calls, 'consolidate').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'verify').length, 0)
 
   // The lite synth prompt returns the digest only — it does NOT instruct
   // writing `## Feedback addendum` files.

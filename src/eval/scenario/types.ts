@@ -40,6 +40,16 @@ export interface ScenarioStageArgs {
   implement?: Record<string, unknown>
 }
 
+/** Expected end-state of one deliverable's on-disk frontmatter. */
+export interface ScenarioExpectDeliverable {
+  /** The deliverable id (matched against `<id>-*.md` under the runDir). */
+  id: string
+  /** Exact frontmatter `status`. */
+  status: string
+  /** String regex (`new RegExp(...)`) matched against the frontmatter `parked_reason`. */
+  parkedReasonPattern?: string
+}
+
 /**
  * Expected end-state a scenario declares for the deterministic adherence
  * suite. Every field is optional — an omitted expectation makes its check
@@ -52,6 +62,8 @@ export interface ScenarioExpect {
   stoppedAt?: string | null
   /** Minimum manifest status on the forward-only ladder (e.g. `approved`). */
   manifestStatus?: string
+  /** Per-deliverable end-state checks (status equality + optional parked_reason pattern). */
+  deliverables?: ScenarioExpectDeliverable[]
 }
 
 /** One self-contained end-to-end workflow evaluation unit. */

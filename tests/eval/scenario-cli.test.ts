@@ -4,7 +4,7 @@
 // boundary is scripted, so everything here is fully offline.
 
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'bun:test'
@@ -32,7 +32,7 @@ const PLAN_HANDLERS: Record<string, unknown> = {
   planner: PLAN,
   'plan-review:a:r1': NO_FINDINGS,
   'plan-review:b:r1': NO_FINDINGS,
-  'consolidate:r1': { new_confirmed_ids: [], duplicate_ids: [] },
+  'verify:r1': { verdicts: [], new_confirmed_ids: [], duplicate_ids: [] },
 }
 
 function envelopes(outputs: Record<string, unknown>): Record<string, ScriptedHandler> {
@@ -135,6 +135,42 @@ test('the sandbox is torn down by default and kept (with its path reported) unde
   assert.ok(row?.sandbox != null, '--keep-sandbox must report the sandbox path')
   assert.ok(existsSync(row.sandbox))
   rmSync(row.sandbox, { recursive: true, force: true })
+})
+
+// --- --deployable ----------------------------------------------------------------
+
+test('--deployable threads the named workflow file into the scenario run', async () => {
+  // Copy the shipped deployable into a foreign plugin-shaped dir: if the flag
+  // threads through, the run works AND every prompt's conventions/scripts
+  // paths derive from the copy's plugin dir, not the repo's.
+  const pluginDir = mkdtempSync(join(tmpdir(), 'eval-deployable-'))
+  mkdirSync(join(pluginDir, 'workflows'), { recursive: true })
+  const copied = join(pluginDir, 'workflows', 'strapped-run.js')
+  const shipped = join(import.meta.dir, '..', '..', 'plugins', 'strapped', 'workflows', 'strapped-run.js')
+  writeFileSync(copied, readFileSync(shipped, 'utf8'))
+
+  const scripted = scriptedSpawn(envelopes(PLAN_HANDLERS))
+  const res = await main(['--scenarios', 'unused-dir', '--deployable', copied, '--json'], {
+    scenarios: [planScenario()],
+    spawn: probedSpawn(scripted.spawn),
+  })
+  assert.deepEqual(scripted.unexpected, [])
+  assert.equal(res.code, 0)
+  const report = JSON.parse(res.output) as ScenarioReportJSON
+  assert.equal(report.rows[0]?.correctness, 1)
+  const plannerCall = scripted.calls.find(c => c.label === 'planner')
+  assert.ok(plannerCall !== undefined)
+  assert.ok(plannerCall.input?.includes(join(pluginDir, 'conventions.md')), 'prompt paths must derive from the copied deployable')
+  rmSync(pluginDir, { recursive: true, force: true })
+})
+
+test('--deployable with a missing file errors with exit 2 before any run or CLI probe', async () => {
+  const res = await main(['--scenarios', 'unused-dir', '--deployable', '/definitely/not/there.js'], {
+    scenarios: [planScenario()],
+    spawn: throwingSpawn(),
+  })
+  assert.equal(res.code, 2)
+  assert.match(res.output, /--deployable file not found: \/definitely\/not\/there\.js/)
 })
 
 // --- offline compare ------------------------------------------------------------

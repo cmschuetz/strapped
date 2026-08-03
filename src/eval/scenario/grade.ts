@@ -404,6 +404,38 @@ export const checkStateCommits: ScenarioGrader = check('adherence:state-commits'
   return pass(name, `${beyond} commit(s) beyond the seed`)
 })
 
+/**
+ * Each `expect.deliverables` entry matches its deliverable's on-disk
+ * frontmatter: exact `status` equality, plus `parkedReasonPattern` (a string
+ * regex) tested against `parked_reason` when declared. Neutral when the
+ * scenario declares no `deliverables` expectation (the existing n/a rule).
+ */
+export const checkDeliverableEndState: ScenarioGrader = check('adherence:deliverable-end-state', outcome => {
+  const name = 'adherence:deliverable-end-state'
+  const expected = outcome.scenario.expect?.deliverables
+  if (expected === undefined || expected.length === 0) return na(name, 'no per-deliverable end-state expectation declared')
+  const files = deliverableFiles(outcome.sandbox.runDir)
+  const problems: string[] = []
+  for (const want of expected) {
+    const file = files.find(f => f.startsWith(`${want.id}-`))
+    if (file === undefined) {
+      problems.push(`no deliverable file ${want.id}-*.md in runDir`)
+      continue
+    }
+    const { data } = readFrontmatter(join(outcome.sandbox.runDir, 'deliverables', file))
+    const status = typeof data.status === 'string' ? data.status : String(data.status ?? '')
+    if (status !== want.status) problems.push(`${file}: status "${status}" ≠ expected "${want.status}"`)
+    if (want.parkedReasonPattern !== undefined) {
+      const reason = typeof data.parked_reason === 'string' ? data.parked_reason : ''
+      if (!new RegExp(want.parkedReasonPattern).test(reason)) {
+        problems.push(`${file}: parked_reason ${JSON.stringify(reason || null)} does not match /${want.parkedReasonPattern}/`)
+      }
+    }
+  }
+  if (problems.length > 0) return fail(name, problems.join('; '))
+  return pass(name, `${expected.length} deliverable end-state(s) match`)
+})
+
 /** RunResult shape the run-result check reads. */
 interface RunResultView {
   completed?: unknown
@@ -444,6 +476,7 @@ export function adherenceGraders(): ScenarioGrader[] {
     checkDeps,
     checkPlanReviewRecords,
     checkCodeReviewRecords,
+    checkDeliverableEndState,
     checkStateCommits,
     checkRunResult,
   ]

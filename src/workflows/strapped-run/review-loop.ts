@@ -1,21 +1,21 @@
 // The shared bounded adversarial review loop (plan flow + feedback flow):
-// 2 rule-partitioned reviewers, refute pass, dedup-vs-seen consolidation
-// writing reviews/<prefix>-round-<N>.md, reviser, final-round confirmation.
+// 2 rule-partitioned reviewers, then ONE verify-consolidate agent per round
+// (batch skeptical verification of every gating finding + dedup-vs-seen
+// consolidation writing reviews/<prefix>-round-<N>.md), reviser, final-round
+// confirmation. A 0-round budget skips the loop entirely (converged, rounds 0).
 
 import { repoList, rulesForRound } from './config.ts'
-import { CONSOLIDATE_SCHEMA, FINDINGS_SCHEMA, REFUTE_SCHEMA } from './schemas.generated.ts'
+import { FINDINGS_SCHEMA, VERIFY_SCHEMA } from './schemas.generated.ts'
 import type {
-  ConsolidateResult,
   Finding,
   FindingsResult,
-  RefuteResult,
-  Refuted,
   RepoRef,
   ReviewLoopResult,
   ReviewerId,
   Rule,
   RunConfig,
   SeenFinding,
+  VerifyResult,
 } from './types.ts'
 
 export const PLAN_LENSES: Record<ReviewerId, string> = {
@@ -38,8 +38,8 @@ export interface ReviewLoopOpts {
   artifactDescription: string
   artifactLocation: string
   artifactNoun: string
-  refuteArtifactPhrase: string
-  reviserPromptFn: (newConfirmed: Array<Refuted<Finding>>, roundFile: string) => string
+  verifyArtifactPhrase: string
+  reviserPromptFn: (newConfirmed: Finding[], roundFile: string) => string
   roundFilePrefix: string
   maxRounds: number
   /**
@@ -56,11 +56,17 @@ export interface ReviewLoopOpts {
   enumeratedItemsSection: string
 }
 
-// Runs the bounded adversarial review loop (2 rule-partitioned reviewers,
-// refute pass, dedup-vs-seen consolidation writing reviews/<prefix>-round-<N>.md,
-// reviser, final-round confirmation pass) over an ask + an artifact.
+// Runs the bounded adversarial review loop (2 rule-partitioned reviewers, one
+// batch verify-consolidate agent writing reviews/<prefix>-round-<N>.md,
+// reviser, final-round confirmation pass) over an ask + an artifact. A
+// maxRounds of 0 means "skip adversarial review entirely and trust the
+// producer": no review agents run and the loop returns converged.
 export async function runReviewLoop(cfg: RunConfig, opts: ReviewLoopOpts): Promise<ReviewLoopResult> {
   const maxRounds = opts.maxRounds
+  if (maxRounds === 0) {
+    log('review budget 0 — skipping adversarial review')
+    return { converged: true, rounds: 0, outstanding: [] }
+  }
   const artifactNounCap = opts.artifactNoun.charAt(0).toUpperCase() + opts.artifactNoun.slice(1)
 
   function reviewerPrompt(which: ReviewerId, rules: readonly Rule[], seen: readonly SeenFinding[], round: number): string {
@@ -87,17 +93,6 @@ Enumerated ${opts.enumeratedItemsLabel} checklist — you and the other reviewer
 Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
 
 You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map(r => r.id).join(', ')}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`
-  }
-
-  function refutePrompt(f: Finding): string {
-    return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in ${opts.refuteArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check the claim:
-${repoList(opts.repos)}
-
-Claim [${f.severity}] at ${f.location}: ${f.what}
-Why: ${f.why}
-Evidence: ${f.evidence}
-
-Your stance: this is NOT a real gap unless the documents prove otherwise. Read the ask and the ${opts.artifactNoun} files yourself — the claimed-missing item may be covered elsewhere in the ${opts.artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Return your verdict, a corrected confidence (0-100) that the gap is real, and one line of evidence.`
   }
 
   const seen: SeenFinding[] = []
@@ -127,28 +122,19 @@ Your stance: this is NOT a real gap unless the documents prove otherwise. Read t
     const suggestions = allFindings.filter(f => f.severity === 'suggestion')
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
 
-    const verified = await parallel(
-      gating.map(f => () =>
-        agent<RefuteResult>(refutePrompt(f), { label: `refute:${f.id}`, phase: 'Verify', effort: 'low', schema: REFUTE_SCHEMA })
-          .then(v => ({ ...f, refute: v }))
-      )
-    )
-    // A null refuter result is a vote NOT cast — never dereferenced, and a
-    // finding without a cast confirming vote does not survive.
-    const noVote = verified.filter(f => f && !f.refute)
-    if (noVote.length) log(`round ${roundLabel}: refuter cast no vote on ${noVote.length} finding(s) — excluded`)
-    const surviving = verified
-      .filter(Boolean)
-      .filter(f => f.refute && f.refute.verdict !== 'refuted' && f.refute.confidence >= cfg.confidenceMin)
-
     const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`
-    const consolidation = await agent<ConsolidateResult>(
-      `You are consolidating verified plan-review findings for round ${roundLabel} of strapped run "${cfg.slug}". Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
+    const verification = await agent<VerifyResult>(
+      `You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
 
-Surviving verified findings:
-${JSON.stringify(surviving, null, 2)}
+Plan reviewers claim the following gaps in ${opts.verifyArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check each claim:
+${repoList(opts.repos)}
 
-Suggestions (non-gating, record only):
+Gating findings to adjudicate:
+${JSON.stringify(gating, null, 2)}
+
+Verification stance, applied to each finding independently: it is NOT a real gap unless the documents prove otherwise. Read the ask and the ${opts.artifactNoun} files yourself — a claimed-missing item may be covered elsewhere in the ${opts.artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Cast one verdict per finding id — "confirmed" (the gap is proven real), "plausible" (credible but unproven), or "refuted" (not a real gap) — with a corrected confidence (0-100) that the gap is real and one line of evidence. A finding with verdict refuted, or confidence below ${cfg.confidenceMin}, does not survive.
+
+Suggestions (non-gating, never verified, record only):
 ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
@@ -160,17 +146,30 @@ ${digest(seen)}
 
 Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — read them.
 
-Tasks:
+Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
 2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
-3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`,
-      { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: CONSOLIDATE_SCHEMA }
+3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`,
+      { label: `verify:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: VERIFY_SCHEMA }
     )
 
-    const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map(f => f.id))
+    // A null verifier result is a vote NOT cast on every finding — never
+    // dereferenced, and a finding without a cast confirming vote never survives.
+    if (!verification) {
+      if (gating.length) log(`round ${roundLabel}: verifier cast no vote — ${gating.length} gating finding(s) excluded`)
+      return { newConfirmed: [] as Finding[], newIds: new Set<string>(), roundFile }
+    }
+    const verdictById = new Map(verification.verdicts.map(v => [v.id, v] as const))
+    const noVote = gating.filter(f => !verdictById.has(f.id))
+    if (noVote.length) log(`round ${roundLabel}: verifier cast no vote on ${noVote.length} finding(s) — excluded`)
+    const surviving = gating.filter(f => {
+      const v = verdictById.get(f.id)
+      return v !== undefined && v.verdict !== 'refuted' && v.confidence >= cfg.confidenceMin
+    })
+    const newIds = new Set(verification.new_confirmed_ids)
     const newConfirmed = surviving.filter(f => newIds.has(f.id))
     log(`round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`)
-    return { newConfirmed, newIds, roundFile }
+    return { newConfirmed, newIds: new Set(newConfirmed.map(f => f.id)), roundFile }
   }
 
   let lastRoundFixedAll = false

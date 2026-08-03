@@ -173,41 +173,46 @@
     ],
     "additionalProperties": false
   },
-  "REFUTE_SCHEMA": {
+  "VERIFY_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "verdict",
-      "confidence",
-      "evidence"
-    ],
     "properties": {
-      "verdict": {
-        "type": "string",
-        "enum": [
-          "confirmed",
-          "refuted",
-          "uncertain"
-        ]
+      "verdicts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The adjudicated finding's id."
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "plausible",
+                "refuted"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "verdict",
+            "confidence",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "description": "One per-finding verdict cast by the verify-consolidate agent."
+        },
+        "description": "One verdict per gating finding adjudicated this round."
       },
-      "confidence": {
-        "type": "number",
-        "minimum": 0,
-        "maximum": 100
-      },
-      "evidence": {
-        "type": "string"
-      }
-    }
-  },
-  "CONSOLIDATE_SCHEMA": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "new_confirmed_ids",
-      "duplicate_ids"
-    ],
-    "properties": {
       "new_confirmed_ids": {
         "type": "array",
         "items": {
@@ -220,7 +225,13 @@
           "type": "string"
         }
       }
-    }
+    },
+    "required": [
+      "verdicts",
+      "new_confirmed_ids",
+      "duplicate_ids"
+    ],
+    "additionalProperties": false
   },
   "SYNTH_SCHEMA": {
     "type": "object",
