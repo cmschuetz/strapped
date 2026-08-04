@@ -1,7 +1,7 @@
 // Harness SCENARIO suite smoke test — fully hermetic (no real `claude`).
 //
 // Proves the scenario CONTENT is sound without spending a cent:
-//   - the CLI loads exactly the four scenarios from the suite directory and
+//   - the CLI loads exactly the seven scenarios from the suite directory and
 //     `--filter` narrows by id and by tag (agent calls answered by a stub
 //     spawn returning error envelopes — the REAL deployable still executes);
 //   - every scenario is well-formed (unique ids, canonical stage order,
@@ -30,12 +30,17 @@ import { gradeScenario, type ScenarioGrade } from '../../src/eval/scenario/grade
 import { buildSandbox, removeSandbox } from '../../src/eval/scenario/sandbox.ts'
 import type { Scenario, ScenarioOutcome, ScenarioSandbox } from '../../src/eval/scenario/types.ts'
 import { scenarios } from '../../src/eval/scenarios/harness/index.ts'
+import { dirtyBranchScenario } from '../../src/eval/scenarios/harness/dirty-branch.scenario.ts'
 import { fullPipelineScenario } from '../../src/eval/scenarios/harness/full-pipeline.scenario.ts'
+import { manyRulesScenario } from '../../src/eval/scenarios/harness/many-rules.scenario.ts'
 import { planOnlyScenario } from '../../src/eval/scenarios/harness/plan-only.scenario.ts'
 import { implementOnlyScenario } from '../../src/eval/scenarios/harness/implement-only.scenario.ts'
 import { reviewLoopScenario } from '../../src/eval/scenarios/harness/review-loop.scenario.ts'
 import { zeroRoundsScenario } from '../../src/eval/scenarios/harness/zero-rounds.scenario.ts'
 import { CHURN_THRESHOLD_LINES, NIT_SITES } from '../../src/eval/scenarios/harness/fixtures/defect-repo.ts'
+import { FLAW_PROBES } from '../../src/eval/scenarios/harness/fixtures/dirty-repo.ts'
+import { MANY_RULES } from '../../src/eval/scenarios/harness/fixtures/many-rules.ts'
+import { splitRules } from '../../src/eval/scenario/rules.ts'
 import { readFrontmatterFile, writeFrontmatterFile, type Die } from '../../src/lib/frontmatter.ts'
 import type { GradeResult } from '../../src/eval/grade.ts'
 import type { ScenarioReportJSON } from '../../src/eval/scenario/compare.ts'
@@ -51,7 +56,7 @@ const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
-const ALL_IDS = ['full-pipeline', 'implement-only', 'plan-only', 'review-loop', 'zero-rounds']
+const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'review-loop', 'zero-rounds']
 
 const raise: Die = msg => {
   throw new Error(msg)
@@ -150,7 +155,9 @@ function addWorktree(sandbox: ScenarioSandbox, branch: string): string {
   assert.ok(repo !== undefined, 'sandbox has a repo')
   const wt = join(repo.worktreeRoot, sandbox.slug, 'D1')
   mkdirSync(dirname(wt), { recursive: true })
-  git(repo.root, 'worktree', 'add', '-q', wt, '-b', branch, 'main')
+  const exists = spawnSync('git', ['rev-parse', '--verify', '-q', branch], { cwd: repo.root }).status === 0
+  if (exists) git(repo.root, 'worktree', 'add', '-q', wt, branch)
+  else git(repo.root, 'worktree', 'add', '-q', wt, '-b', branch, 'main')
   return wt
 }
 
@@ -350,7 +357,7 @@ function stubSpawn(): Spawn {
 // --- scenario well-formedness ---------------------------------------------------
 
 test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
-  assert.equal(scenarios.length, 5)
+  assert.equal(scenarios.length, 7)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   for (const s of scenarios) {
@@ -394,11 +401,13 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.ok(implementOnlyScenario.seedRunState !== undefined)
   assert.ok(reviewLoopScenario.seedRunState !== undefined)
   assert.ok(zeroRoundsScenario.seedRunState !== undefined)
+  assert.ok(manyRulesScenario.seedRunState !== undefined)
+  assert.ok(dirtyBranchScenario.seedRunState !== undefined)
 })
 
 // --- loader + filter through the CLI --------------------------------------------
 
-test('loadScenarios loads exactly the five harness scenarios from the suite directory', async () => {
+test('loadScenarios loads exactly the seven harness scenarios from the suite directory', async () => {
   const loaded = await loadScenarios(SCENARIOS_DIR)
   assert.deepEqual(loaded.map(s => s.id).sort(), ALL_IDS)
 })
@@ -409,6 +418,8 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(implementOnlyScenario))
   assert.ok(scenarios.includes(reviewLoopScenario))
   assert.ok(scenarios.includes(zeroRoundsScenario))
+  assert.ok(scenarios.includes(manyRulesScenario))
+  assert.ok(scenarios.includes(dirtyBranchScenario))
 })
 
 test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
@@ -423,7 +434,7 @@ test('the CLI loads the suite directory and --filter narrows by id and by tag', 
   assert.deepEqual(rowsOf(byId.output), ['plan-only'])
 
   const byTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'implement', '--json'], { spawn: stubSpawn() })
-  assert.deepEqual(rowsOf(byTag.output), ['implement-only', 'review-loop', 'zero-rounds'])
+  assert.deepEqual(rowsOf(byTag.output), ['dirty-branch', 'implement-only', 'many-rules', 'review-loop', 'zero-rounds'])
 
   const byLoopTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'review-loop', '--json'], {
     spawn: stubSpawn(),
@@ -561,7 +572,7 @@ test('zero-rounds: a non-zero review_rounds_used fails done-with-zero-rounds', (
 
 // --- seeded state stands on the real state.mjs -----------------------------------
 
-for (const scenario of [implementOnlyScenario, reviewLoopScenario, zeroRoundsScenario]) {
+for (const scenario of [implementOnlyScenario, reviewLoopScenario, zeroRoundsScenario, manyRulesScenario, dirtyBranchScenario]) {
   test(`${scenario.id}: the seeded runDir is accepted by the real state.mjs dag with D1 ready`, () => {
     const sandbox = buildSandbox(scenario)
     try {
@@ -664,6 +675,220 @@ test('review-loop: excess total churn fails churn-within-threshold and only that
     assert.equal(byName(graded.correctnessGrades, 'churn-within-threshold').pass, false)
     assert.equal(byName(graded.correctnessGrades, 'defect-tests-green').pass, true)
     assert.equal(byName(graded.correctnessGrades, 'nits-untouched').pass, true)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+// --- many-rules rules-as-files discrimination ------------------------------------
+
+/** The seeded round-1 id split the many-rules record must carry verbatim. */
+const MANY_RULES_SPLIT = (() => {
+  const split = splitRules(MANY_RULES, manyRulesScenario.seed, 1)[0]
+  assert.ok(split !== undefined)
+  return split
+})()
+
+/** Canned many-rules outcome: fixed worktree + a round record with the given id split. */
+function manyRulesOutcome(
+  calc: string,
+  record: { a: string[]; b: string[] }
+): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome } {
+  const sandbox = buildSandbox(manyRulesScenario)
+  const wt = addWorktree(sandbox, 'strapped/many-rules/D1-fix-defects')
+  write(join(wt, 'src', 'calc.ts'), calc)
+  commitWorktree(wt, 'fix(many-rules): close the seeded defects')
+  markImplemented(sandbox, 'D1-fix-defects.md', wt)
+  writeFrontmatterFile(
+    join(sandbox.runDir, 'reviews', 'D1-code-round-1.md'),
+    {
+      round: 1,
+      seed_used: manyRulesScenario.seed + 1,
+      reviewer_a_rules: record.a,
+      reviewer_b_rules: record.b,
+      new_confirmed: 0,
+      outcome: 'converged',
+      findings: [],
+    },
+    'no confirmed findings; both rule checklists returned in full\n'
+  )
+  const runResult = runResultFor(manyRulesScenario, { implement: IMPLEMENT_RESULT })
+  return { sandbox, outcome: outcomeFor(manyRulesScenario, sandbox, runResult) }
+}
+
+test('many-rules: the fixture is genuinely 30 rules and the seeded split covers every id exactly once', () => {
+  assert.equal(MANY_RULES.length, 30)
+  assert.equal(new Set(MANY_RULES.map(r => r.id)).size, 30)
+  assert.deepEqual([...MANY_RULES_SPLIT.a, ...MANY_RULES_SPLIT.b].sort(), MANY_RULES.map(r => r.id).sort())
+})
+
+test('many-rules: canned good (fixed defects + full per-id record) grades 1/1', () => {
+  const { sandbox, outcome } = manyRulesOutcome(FIXED_DEFECT_CALC, MANY_RULES_SPLIT)
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('many-rules: a round record missing assigned ids fails rule-ids-recorded and only that grader', () => {
+  const truncated = { a: MANY_RULES_SPLIT.a.slice(0, 3), b: MANY_RULES_SPLIT.b }
+  const { sandbox, outcome } = manyRulesOutcome(FIXED_DEFECT_CALC, truncated)
+  try {
+    const graded = grade(outcome)
+    assert.equal(graded.correctness, 1, describeGrades(graded.correctnessGrades))
+    assert.ok(graded.adherence < 1)
+    assert.equal(byName(graded.adherenceGrades, 'adherence:rule-ids-recorded').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('many-rules: an unfixed defect fails defect-tests-green and only that grader', () => {
+  const { sandbox, outcome } = manyRulesOutcome(PARTIALLY_FIXED_CALC, MANY_RULES_SPLIT)
+  try {
+    const graded = grade(outcome)
+    assert.ok(graded.correctness < 1)
+    assert.equal(byName(graded.correctnessGrades, 'defect-tests-green').pass, false)
+    assert.equal(byName(graded.correctnessGrades, 'converged-within-budget').pass, true)
+    assert.equal(byName(graded.adherenceGrades, 'adherence:rule-ids-recorded').pass, true)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+// --- dirty-branch finding-heavy discrimination -----------------------------------
+
+/** The fixed calc the implementer produces on the seeded branch. */
+const FIXED_CALC = `export function add(a: number, b: number): number {
+  return a + b
+}
+
+export function max(a: number, b: number): number {
+  return a > b ? a : b
+}
+
+export function greet(name: string): string {
+  return \`Hello, \${name}\`
+}
+`
+
+/** All five report flaws fixed: guidelines hold, dead export gone, test kept green. */
+const CLEANED_DIRTY_REPORT = `let reportCount = 0
+
+export function formatReport(name: string, total: number): string {
+  reportCount = reportCount + 1
+  return \`Report for \${name}: \${total}\`
+}
+`
+
+/** Report test green but the guideline flaws (comment, var, …) remain. */
+const HALF_CLEANED_DIRTY_REPORT = `// TODO: tidy before shipping
+var reportCount = 0
+
+export function formatReport(name: string, total: number) {
+  reportCount = reportCount + 1
+  return "Report for " + name + ": " + total
+}
+`
+
+const DIRTY_FINDINGS = [
+  { id: 'r1-a-f1', key: 'DR-1:src/report.ts', severity: 'blocking', verdict: 'confirmed', confidence: 90, status: 'fixed' },
+  { id: 'r1-b-f1', key: 'DR-4:src/report.ts', severity: 'concern', verdict: 'confirmed', confidence: 85, status: 'fixed' },
+]
+
+/** Canned dirty-branch outcome: mutated worktree + a round record with the given findings. */
+function dirtyBranchOutcome(
+  report: string,
+  findings: unknown[]
+): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome } {
+  const sandbox = buildSandbox(dirtyBranchScenario)
+  const wt = addWorktree(sandbox, 'strapped/dirty-branch/D1-green-tests')
+  write(join(wt, 'src', 'calc.ts'), FIXED_CALC)
+  write(join(wt, 'src', 'report.ts'), report)
+  commitWorktree(wt, 'fix(dirty-branch): green the tests and clean the flaws')
+  markImplemented(sandbox, 'D1-green-tests.md', wt)
+  writeFrontmatterFile(
+    join(sandbox.runDir, 'reviews', 'D1-code-round-1.md'),
+    {
+      round: 1,
+      seed_used: dirtyBranchScenario.seed + 1,
+      reviewer_a_rules: ['DR-1', 'DR-2', 'DR-3'],
+      reviewer_b_rules: ['DR-4', 'DR-5', 'DR-6'],
+      new_confirmed: findings.length,
+      outcome: 'revise',
+      findings,
+    },
+    'full finding bodies\n'
+  )
+  const runResult = runResultFor(dirtyBranchScenario, { implement: IMPLEMENT_RESULT })
+  return { sandbox, outcome: outcomeFor(dirtyBranchScenario, sandbox, runResult) }
+}
+
+test('dirty-branch: the seeded repo is genuinely red and every flaw probe fails as seeded', () => {
+  const sandbox = buildSandbox(dirtyBranchScenario)
+  try {
+    const repo = sandbox.repos[0]
+    assert.ok(repo !== undefined)
+    const res = spawnSync('bun', ['test'], { cwd: repo.root, encoding: 'utf8' })
+    assert.notEqual(res.status, 0, 'the seeded fixture tests must fail until the defects are fixed')
+    const shown = spawnSync('git', ['show', 'strapped/dirty-branch/D1-green-tests:src/report.ts'], { cwd: repo.root, encoding: 'utf8' })
+    assert.equal(shown.status, 0, 'the seeded branch must pre-exist with src/report.ts committed')
+    for (const [name, probe] of Object.entries(FLAW_PROBES)) {
+      assert.equal(probe(shown.stdout), false, `flaw probe "${name}" must fail on the seeded branch file`)
+    }
+    for (const [name, probe] of Object.entries(FLAW_PROBES)) {
+      assert.equal(probe(CLEANED_DIRTY_REPORT), true, `flaw probe "${name}" must pass on the cleaned file`)
+    }
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('dirty-branch: canned good (flaws fixed + per-finding verdicts recorded) grades 1/1', () => {
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, DIRTY_FINDINGS)
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('dirty-branch: surviving guideline flaws fail flaws-cleaned and only that grader', () => {
+  const { sandbox, outcome } = dirtyBranchOutcome(HALF_CLEANED_DIRTY_REPORT, DIRTY_FINDINGS)
+  try {
+    const graded = grade(outcome)
+    assert.ok(graded.correctness < 1)
+    assert.equal(byName(graded.correctnessGrades, 'flaws-cleaned').pass, false)
+    assert.equal(byName(graded.correctnessGrades, 'defect-tests-green').pass, true)
+    assert.equal(byName(graded.correctnessGrades, 'churn-within-threshold').pass, true)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('dirty-branch: a findings-free round record fails per-finding-verdicts (review never saw the dirt)', () => {
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, [])
+  try {
+    const graded = grade(outcome)
+    assert.equal(graded.correctness, 1, describeGrades(graded.correctnessGrades))
+    assert.ok(graded.adherence < 1)
+    assert.equal(byName(graded.adherenceGrades, 'adherence:per-finding-verdicts').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('dirty-branch: findings without cast verdicts fail per-finding-verdicts', () => {
+  const voteless = [{ id: 'r1-a-f1', key: 'DR-1:src/report.ts', severity: 'blocking', status: 'open' }]
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, voteless)
+  try {
+    const graded = grade(outcome)
+    assert.equal(byName(graded.adherenceGrades, 'adherence:per-finding-verdicts').pass, false)
   } finally {
     removeSandbox(sandbox)
   }

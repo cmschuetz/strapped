@@ -77,8 +77,9 @@ export function buildArgs(req: EvalRequest): string[] {
     '--print',
     '--output-format',
     'json',
-    '--json-schema',
-    JSON.stringify(req.schema),
+    // A schema-less request is free-text: the API rejects an empty {} schema
+    // (is_error, terminal_reason api_error), so the flag must be omitted.
+    ...(req.schema === undefined ? [] : ['--json-schema', JSON.stringify(req.schema)]),
     '--model',
     req.model,
     '--strict-mcp-config',
@@ -193,6 +194,14 @@ export function parseEnvelope(stdout: string, req: EvalRequest): EvalResult {
     })
   }
 
+  // Free-text request: the result string IS the output, no parsing/validation.
+  if (req.schema === undefined) {
+    if (typeof envelope.result !== 'string') {
+      return gradedResult(envelope, req, { ok: false, error: 'free-text request produced no string result' })
+    }
+    return gradedResult(envelope, req, { ok: true, output: envelope.result })
+  }
+
   // Prefer the parsed, schema-forced object; fall back to parsing stringified
   // `result`, carrying the stop/terminal reasons so the ledger records WHY.
   let output = envelope.structured_output
@@ -296,13 +305,17 @@ function sumMetrics(first: EvalResult, second: EvalResult): EvalResult {
  * usable structured output; claude errors and spawn failures never retry.
  */
 function retryStructured(req: EvalRequest, stdout: string, first: EvalResult, spawn: Spawn, spawnOpts: SpawnOptions): EvalResult {
+  if (req.schema === undefined) return first
   let envelope: Envelope
   try {
     envelope = JSON.parse(stdout) as Envelope
   } catch {
     return first
   }
-  if (envelope.is_error === true || (envelope.subtype !== undefined && envelope.subtype !== 'success')) return first
+  // error_max_structured_output_retries is a FORMATTING failure with a live
+  // session — one --resume turn often lands it; other claude errors never retry.
+  const formattingError = envelope.subtype === 'error_max_structured_output_retries'
+  if (!formattingError && (envelope.is_error === true || (envelope.subtype !== undefined && envelope.subtype !== 'success'))) return first
   const sessionId = envelope.session_id
   if (typeof sessionId !== 'string' || sessionId === '') return first
 

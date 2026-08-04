@@ -19,6 +19,7 @@ import {
   FIXTURE_CONVENTIONS,
   FIXTURE_DIR,
   FIXTURE_REPOS,
+  FIXTURE_RULES_FILE,
   FIXTURE_SEED,
   FIXTURE_SLUG,
   STRAPPED_CONTEXT,
@@ -54,6 +55,8 @@ const VERIFIER_PROMPT = `You are the verify-consolidate agent for round 1 of str
 Plan reviewers claim the following gaps in the implementation plan at ${FIXTURE_DIR} (original ask: ${FIXTURE_SOURCE_PLAN}). Target repos you may explore to check each claim:
 ${FIXTURE_REPOS}
 
+The guideline rules behind rule-keyed findings and the checklists carry only their ids here — the verbatim rule text lives in the rules snapshot at ${FIXTURE_RULES_FILE}; Read it whenever a rule's wording matters to a verdict.
+
 Gating findings to adjudicate:
 ${JSON.stringify([WEAK_GATING_FINDING], null, 2)}
 
@@ -73,7 +76,7 @@ Prior round files live at ${FIXTURE_DIR}/reviews/plan-round-*.md — read them.
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${ROUND_FILE} with frontmatter (round: 1, seed_used: ${FIXTURE_SEED + 1}, reviewer_a_rules: ["R1"], reviewer_b_rules: ["R2"], new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item AC pass/violation/na verdicts).
+2. Write ${ROUND_FILE} with frontmatter (round: 1, seed_used: ${FIXTURE_SEED + 1}, reviewer_a_rules: ["R1"], reviewer_b_rules: ["R2"], new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status: open|refuted|duplicate } per the conventions) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item AC pass/violation/na verdicts).
 3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.
 
 --- Plan under review (inlined for this single-shot eval; the files above are provided here verbatim) ---

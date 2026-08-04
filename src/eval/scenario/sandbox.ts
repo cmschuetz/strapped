@@ -60,6 +60,13 @@ function writeFile(path: string, content: string): void {
   writeFileSync(path, content)
 }
 
+/** The scenario's rules rendered in the conventions' snapshot format. */
+function rulesSnapshot(scenario: Scenario): string {
+  const sources = [...new Set(scenario.rules.map(r => r.source))]
+  const lines = scenario.rules.map(r => `- ${r.id} (${r.source}): ${r.text}`)
+  return `---\nextracted: ${new Date().toISOString()}\nsources: [${sources.join(', ')}]\n---\n${lines.join('\n')}\n`
+}
+
 /**
  * Build a scenario's sandbox: per repo, copy the optional `snapshotPath` tree,
  * materialize the declarative `files` map (as an overlay when both), ensure a
@@ -114,6 +121,14 @@ export function buildSandbox(scenario: Scenario): ScenarioSandbox {
       }
       if (!existsSync(join(paths.root, '.git'))) git(paths.root, 'init', '-q', '-b', 'main')
       commitAll(paths.root, 'scenario: fixture repo')
+      for (const [branch, overlay] of Object.entries(repo.branches ?? {})) {
+        git(paths.root, 'checkout', '-q', '-b', branch)
+        for (const [rel, content] of Object.entries(overlay)) {
+          writeFile(join(paths.root, rel), interpolate(content, tokens, `repo ${repo.name} branch ${branch} file ${rel}`))
+        }
+        commitAll(paths.root, `scenario: seeded branch ${branch}`)
+        git(paths.root, 'checkout', '-q', 'main')
+      }
       mkdirSync(paths.worktreeRoot, { recursive: true })
     }
 
@@ -132,6 +147,11 @@ export function buildSandbox(scenario: Scenario): ScenarioSandbox {
       // therefore a non-empty seed commit) present in the state root's history.
       writeFileSync(join(runDir, sub, '.gitkeep'), '')
     }
+
+    // Materialize the rules snapshot the executor's `rulesFile` arg points at:
+    // workflow args carry rule IDS only, so this file is the single source of
+    // rule TEXT that live review agents Read (conventions snapshot format).
+    writeFile(join(runDir, 'reviews', 'rules-snapshot.md'), rulesSnapshot(scenario))
 
     writeFile(sourcePlan, interpolate(scenario.ask, tokens, 'scenario ask'))
 

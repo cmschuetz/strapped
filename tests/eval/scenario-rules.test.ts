@@ -1,4 +1,5 @@
-// splitRules: deterministic seeded per-round rule partitions.
+// splitRules: deterministic seeded per-round rule-id partitions (ids only —
+// rule text never enters the workflow args).
 
 import assert from 'node:assert/strict'
 import { test } from 'bun:test'
@@ -15,22 +16,31 @@ test('splitRules is deterministic for a fixed (rules, seed, rounds)', () => {
   assert.deepEqual(splitRules(RULES, 42, 3), splitRules(RULES, 42, 3))
 })
 
-test('every rule appears exactly once per round, halves sized evenly and sorted by id', () => {
+test('partitions carry id strings only — no rule text or source objects', () => {
+  const partitions = splitRules(RULES, 42, 2)
+  for (const { a, b } of partitions) {
+    for (const entry of [...a, ...b]) {
+      assert.equal(typeof entry, 'string')
+      assert.ok(RULES.some(r => r.id === entry), `${entry} is a known rule id`)
+    }
+  }
+})
+
+test('every rule id appears exactly once per round, halves sized evenly and sorted', () => {
   const partitions = splitRules(RULES, 42, 4)
   assert.equal(partitions.length, 4)
   const allIds = RULES.map(r => r.id).sort()
   for (const { a, b } of partitions) {
-    const ids = [...a, ...b].map(r => r.id).sort()
-    assert.deepEqual(ids, allIds) // exactly once: union is the full set, sizes match
+    assert.deepEqual([...a, ...b].sort(), allIds) // exactly once: union is the full set, sizes match
     assert.ok(Math.abs(a.length - b.length) <= 1)
-    assert.deepEqual(a.map(r => r.id), [...a.map(r => r.id)].sort())
-    assert.deepEqual(b.map(r => r.id), [...b.map(r => r.id)].sort())
+    assert.deepEqual(a, [...a].sort())
+    assert.deepEqual(b, [...b].sort())
   }
 })
 
 test('the shuffle actually varies across rounds and seeds', () => {
   const partitions = splitRules(RULES, 42, 6)
-  const shapes = new Set(partitions.map(p => JSON.stringify(p.a.map(r => r.id))))
+  const shapes = new Set(partitions.map(p => JSON.stringify(p.a)))
   assert.ok(shapes.size > 1, 'six rounds should not all pick the identical half')
   assert.notDeepEqual(splitRules(RULES, 1, 1), splitRules(RULES, 2, 1))
 })

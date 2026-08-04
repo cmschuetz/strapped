@@ -76,13 +76,13 @@ function parseScripts(value) {
 }
 function parseRules(value, where) {
   if (!Array.isArray(value))
-    throw new Error(`config: ${where} must be an array of rules`);
+    throw new Error(`config: ${where} must be an array of rule ids`);
   const list = value;
   return list.map((rule, i) => {
-    if (!isRecord(rule) || typeof rule.id !== "string" || typeof rule.source !== "string" || typeof rule.text !== "string") {
-      throw new Error(`config: ${where}[${i}] must be a rule { id, source, text }`);
+    if (typeof rule !== "string" || rule.length === 0) {
+      throw new Error(`config: ${where}[${i}] must be a rule id string (rule text lives in rulesFile, never in args)`);
     }
-    return { id: rule.id, source: rule.source, text: rule.text };
+    return rule;
   });
 }
 function parseRulesByRound(value) {
@@ -94,6 +94,16 @@ function parseRulesByRound(value) {
       throw new Error(`config: rulesByRound[${i}] must be a { a, b } rule partition`);
     return { a: parseRules(entry.a, `rulesByRound[${i}].a`), b: parseRules(entry.b, `rulesByRound[${i}].b`) };
   });
+}
+function parseRulesFile(value, rulesByRound) {
+  if (typeof value === "string" && value.length > 0)
+    return value;
+  if (value !== undefined && value !== null)
+    throw new Error('config field "rulesFile" must be a string');
+  if (rulesByRound.length > 0) {
+    throw new Error('config field "rulesFile" (absolute path to reviews/rules-snapshot.md) is required when "rulesByRound" is non-empty — review agents read the rule text from it');
+  }
+  return null;
 }
 function parseRepos(value, where) {
   if (!Array.isArray(value))
@@ -187,6 +197,7 @@ function parseConfig(raw) {
   if (!isRecord(parsed))
     throw new Error("config must be an object or its JSON string");
   const stages = parseStages(parsed.stages);
+  const rulesByRound = parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound);
   return {
     slug: requireString(parsed, "slug"),
     dir: requireString(parsed, "dir"),
@@ -196,7 +207,8 @@ function parseConfig(raw) {
     confidenceMin: requireNumber(parsed, "confidenceMin"),
     planRounds: requireNumber(parsed, "planRounds"),
     codeRounds: requireNumber(parsed, "codeRounds"),
-    rulesByRound: parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound),
+    rulesByRound,
+    rulesFile: parseRulesFile(parsed.rulesFile, rulesByRound),
     stages,
     stageArgs: parseStageArgsMap(parsed.stageArgs)
   };
@@ -209,6 +221,11 @@ function rulesForRound(cfg, round) {
   if (!rules)
     throw new Error(`rulesByRound has no entry for round ${round}`);
   return rules;
+}
+function rulesFileFor(cfg) {
+  if (cfg.rulesFile === null)
+    throw new Error('config field "rulesFile" is required to run review rounds');
+  return cfg.rulesFile;
 }
 function repoList(repos) {
   if (!repos || !repos.length)
@@ -599,6 +616,13 @@ var WAVE_SCHEMA = {
             type: "string"
           }
         },
+        resumable: {
+          type: "array",
+          items: {
+            type: "string"
+          },
+          description: "In-progress node ids from the dag's nodes list — interrupted implementations this pass may resume."
+        },
         remaining: {
           type: "number"
         },
@@ -627,6 +651,7 @@ var WAVE_SCHEMA = {
       },
       required: [
         "ready",
+        "resumable",
         "remaining",
         "blocked"
       ],
@@ -783,10 +808,6 @@ var PLAN_LENSES = {
   a: "completeness: is every element of the original ask covered by some deliverable? Hunt for missing requirements, unhandled edge cases, acceptance criteria without tests, and parts of the ask that silently disappeared",
   b: "soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), planned work that is dead, duplicated, or superseded within the plan (steps or files a later step obviates, two deliverables doing the same work, or acceptance criteria/tests no remaining step produces), and steps that cannot work as written"
 };
-function ruleBlock(rules) {
-  return rules.map((r) => `- ${r.id} (${r.source}): ${r.text}`).join(`
-`);
-}
 function digest(seen) {
   if (!seen.length)
     return "(none — first round)";
@@ -800,6 +821,7 @@ async function runReviewLoop(cfg, opts) {
     return { converged: true, rounds: 0, outstanding: [] };
   }
   const artifactNounCap = opts.artifactNoun.charAt(0).toUpperCase() + opts.artifactNoun.slice(1);
+  const rulesFile = rulesFileFor(cfg);
   function reviewerPrompt(which, rules, seen2, round) {
     return `You are an adversarial plan reviewer with fresh context. Your job is to find real gaps between ${opts.artifactDescription} and the original ask, before any code is written.
 
@@ -815,8 +837,8 @@ Your lens (your main hunting ground beyond the rules): ${PLAN_LENSES[which]}.
 ${which === "b" ? `
 Soundness — multi-repo checks specific to this run: verify each deliverable has a \`repo:\` field naming one of the target repos above; verify each deliverable's \`base:\` obeys the cross-repo base rule (it is a branch in the SAME repo as the deliverable, or that repo's \`main\` for roots and for cross-repo children — a deliverable can never base on a branch in a different repo); and verify that no cross-repo dep is a true code dependency (cross-repo deps are ordering-only — flag any cross-repo child that would need its parent's unmerged code, since it bases on its own repo's \`main\` and does not have that code).
 ` : ""}
-Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
-${ruleBlock(rules)}
+Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?): ${rules.join(", ")}.
+These ids are your whole assignment, but they carry no text here: before reviewing, Read the rules snapshot at ${rulesFile} for each assigned rule's verbatim text (one \`- <id> (<source>): <text>\` line per rule; ignore the ids not assigned to you).
 
 Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
 ${digest(seen2)}
@@ -825,7 +847,7 @@ Enumerated ${opts.enumeratedItemsLabel} checklist — you and the other reviewer
 
 Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map((r) => r.id).join(", ")}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`;
+You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.join(", ")}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`;
   }
   const seen = [];
   let converged = false;
@@ -851,7 +873,7 @@ You MUST return a rule_checklist verdict (pass/violation/na + one line of eviden
     const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`;
     const verification = await agent(gating.length === 0 ? `You are the record-writer for round ${roundLabel} of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review ${opts.verifyArtifactPhrase} and do NOT read the ${opts.artifactNoun} files — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
 
-Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion) and a body carrying the suggestions plus both rule checklists AND both AC/addendum checklists verbatim.
+Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion) and a body carrying the suggestions plus both rule checklists AND both AC/addendum checklists verbatim.
 
 Suggestions (non-gating, record only):
 ${JSON.stringify(suggestions, null, 2)}
@@ -865,6 +887,8 @@ This is a CONFIRMATION pass after the final budgeted round: its findings were al
 
 Plan reviewers claim the following gaps in ${opts.verifyArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check each claim:
 ${repoList(opts.repos)}
+
+The guideline rules behind rule-keyed findings and the checklists carry only their ids here — the verbatim rule text lives in the rules snapshot at ${rulesFile}; Read it whenever a rule's wording matters to a verdict.
 
 Gating findings to adjudicate:
 ${JSON.stringify(gating, null, 2)}
@@ -885,7 +909,7 @@ Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — re
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status: open|refuted|duplicate } per the conventions) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
 3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`, { label: `verify:r${roundLabel}`, phase: phaseLabel, effort: "low", schema: VERIFY_SCHEMA });
     if (!verification) {
       if (gating.length)
@@ -1011,6 +1035,7 @@ var CODE_LENSES = {
 };
 async function runCodeReviewRound(cfg, { item, round, confirmation, seen, recordSuffix }) {
   const rules = rulesForRound(cfg, round);
+  const rulesFile = rulesFileFor(cfg);
   const roundLabel = confirmation ? `${round}-confirm` : `${round}`;
   const seedUsed = cfg.seed + round;
   const seenDigest = seen.length ? digest(seen) : "";
@@ -1023,9 +1048,10 @@ Target repo: ${item.repo}${item.repoRoot ? ` (root ${item.repoRoot})` : ""}` : "
 Branch: ${item.branch}   Base: ${item.base}
 
 Procedure:
-1. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do. Enumerate every item under its \`## Acceptance criteria\` as AC1..ACn — and, if the plan ALSO carries a \`## Feedback addendum\` section, every addendum task under it too, continuing the numbering — and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line pointing at the code/test that satisfies or fails it }). An AC or addendum item the CODE fails to satisfy or leaves untested is a BLOCKING finding. This checks the actual code, not just the plan. A plan with neither section → \`ac_checklist: []\`.
-2. In the worktree, run: git diff ${item.base}...${item.branch}
-3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
+1. Read the rules snapshot at ${rulesFile} for the verbatim text of your assigned guideline rules (${rules[which].join(", ")}) — the workflow args carry only their ids; each rule is a \`- <id> (<source>): <text>\` line, and the ids not assigned to you are the other reviewer's.
+2. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do. Enumerate every item under its \`## Acceptance criteria\` as AC1..ACn — and, if the plan ALSO carries a \`## Feedback addendum\` section, every addendum task under it too, continuing the numbering — and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line pointing at the code/test that satisfies or fails it }). An AC or addendum item the CODE fails to satisfy or leaves untested is a BLOCKING finding. This checks the actual code, not just the plan. A plan with neither section → \`ac_checklist: []\`.
+3. In the worktree, run: git diff ${item.base}...${item.branch}
+4. Read every touched file in full in the worktree, plus any callers or tests you need for context.
 ${item.validations && item.validations.length ? `
 This repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):
 ${item.validations.map((v) => `- ${v}`).join(`
@@ -1033,15 +1059,14 @@ ${item.validations.map((v) => `- ${v}`).join(`
 ` : ""}
 Your lens (your main hunting ground beyond the rules): ${CODE_LENSES[which]}.
 
-Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly:
-${ruleBlock(rules[which])}
+Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly: ${rules[which].join(", ")} (verbatim text in the rules snapshot from step 1).
 
 Known findings from earlier rounds — do NOT re-report these unless the code has regressed:
 ${seenDigest || "(none — first round)"}
 
 Report only real, evidenced issues. Severity: "blocking" = bug or guideline violation that must be fixed; "concern" = likely problem needing a fix or justification; "suggestion" = optional polish (never drives rework). For each finding give a stable key "<rule-id-or-gap>:<file-or-location>". Set confidence honestly — findings under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map((r) => r.id).join(", ")}), the ac_checklist covering every AC (and addendum task) from step 1, plus your findings.`;
+You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].join(", ")}), the ac_checklist covering every AC (and addendum task) from step 2, plus your findings.`;
   }
   const reviews = await parallel([
     () => agent(reviewerPrompt("a"), { label: `review:${item.id}:a:r${roundLabel}`, phase: "Review", schema: FINDINGS_SCHEMA }),
@@ -1057,7 +1082,7 @@ You MUST return a rule_checklist entry with a pass/violation/na verdict and one 
   const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`;
   const verification = await agent(gating.length === 0 ? `You are the record-writer for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review the code and do NOT read the worktree — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
 
-Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
+Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
 
 Suggestions (non-gating, record only):
 ${JSON.stringify(suggestions, null, 2)}
@@ -1070,6 +1095,8 @@ Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.` : `You
 This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW issue remains.` : ""}
 
 Code reviewers claim the following issues in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
+
+The guideline rules behind rule-keyed findings and the checklists carry only their ids here — the verbatim rule text lives in the rules snapshot at ${rulesFile}; Read it whenever a rule's wording matters to a verdict.
 
 Gating findings to adjudicate:
 ${JSON.stringify(gating, null, 2)}
@@ -1090,7 +1117,7 @@ Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-c
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
-2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
+2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status } per the conventions (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
 3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`, { label: `verify:${item.id}:r${roundLabel}`, phase: "Verify", effort: "low", schema: VERIFY_SCHEMA });
   if (!verification) {
     if (gating.length)
@@ -1274,10 +1301,10 @@ ${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from exi
    - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
    - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
    - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`dag\` = an object with EXACTLY three keys — \`ready\`, \`remaining\`, \`blocked\` — copied unchanged from step 1's dag output, NO other dag fields (recorded for auditing; the ledger-derived values below stay authoritative on feedback passes), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`;
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from step 1's dag output plus \`resumable\` = its \`nodes\` ids at status \`in-progress\` ([] when none), NO other dag fields (recorded for auditing; the ledger-derived values below stay authoritative on feedback passes), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`;
   }
   return `${header}
-1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ""}\` — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself.
+1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ""}\` EXACTLY ONCE, FIRST — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself, and NEVER re-run dag after a transition (your paste below is THIS first output). This pass's wave = every node in \`ready\` PLUS every node whose status in the dag's \`nodes\` list is \`in-progress\` with a recorded worktree (an interrupted implementation to resume — compose its resumeNote from its frontmatter).
 2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
 3. For EACH node in \`ready\` (this pass's wave):
    - Look up its repo's { root, validations, worktreeRoot, provisioning } via the node's \`repo\` field.
@@ -1285,7 +1312,7 @@ Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile a
    - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
    - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY three keys — \`ready\`, \`remaining\`, \`blocked\` — each value copied unchanged from the dag command's printed JSON; include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. Also return top-level \`remaining\` and \`blocked\` mirroring those same dag values. When the dag's \`remaining\` is 0, return items: [].`;
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from your FIRST dag run's printed JSON, plus \`resumable\` = the ids from that same output's \`nodes\` list whose status is \`in-progress\` ([] when none); include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. Also return top-level \`remaining\` and \`blocked\` mirroring those same dag values. When the dag's \`remaining\` is 0, return items: [].`;
 }
 function applyPrompt(cfg, pass, results, { addendumMode, roundsField }) {
   const stateScript = cfg.scripts.state;
@@ -1337,9 +1364,9 @@ async function implementStage(cfg) {
       throw new Error(`implement stage: coordinator agent failed on pass ${pass}`);
     if (!addendumMode) {
       const matchesDag = (w) => {
-        const itemIds = [...new Set(w.items.map((i) => i.id))].sort();
-        const readyIds = [...new Set(w.dag.ready)].sort();
-        return itemIds.length === readyIds.length && itemIds.every((id, i) => id === readyIds[i]);
+        const itemIds = new Set(w.items.map((i) => i.id));
+        const dispatchable = new Set([...w.dag.ready, ...w.dag.resumable]);
+        return w.dag.ready.every((id) => itemIds.has(id)) && [...itemIds].every((id) => dispatchable.has(id));
       };
       if (!matchesDag(wave)) {
         log(`pass ${pass}: coordinator wave [${wave.items.map((i) => i.id).join(", ")}] does not match dag ready [${wave.dag.ready.join(", ")}] — re-dispatching once`);
@@ -1392,6 +1419,23 @@ RETRY — your previous wave was REJECTED: its items [${wave.items.map((i) => i.
     if (!waveResults.some((r) => r.outcome === "done")) {
       log(`pass ${pass}: zero newly-done progress — stopping`);
       break;
+    }
+    if (!addendumMode) {
+      const doneResults = waveResults.filter((r) => r.outcome === "done");
+      const remainingAfter = wave.dag.remaining - doneResults.length;
+      if (remainingAfter <= 0) {
+        const appliedStatus = new Map(applied.applied.map((n) => [n.id, n.status]));
+        const unapplied = doneResults.filter((r) => appliedStatus.get(r.item.id) !== "done");
+        if (unapplied.length) {
+          log(`pass ${pass}: wrap-up shortcut skipped — on-disk status disagrees with done outcome for [${unapplied.map((r) => r.item.id).join(", ")}] — dispatching the next coordinator pass`);
+        } else {
+          const doneIds = new Set(doneResults.map((r) => r.item.id));
+          blocked = wave.dag.blocked.filter((b) => !doneIds.has(b.id));
+          allDone = true;
+          log(`pass ${pass}: all ${doneResults.length} remaining node(s) done — skipping wrap-up coordinator`);
+          break;
+        }
+      }
     }
   }
   return { outcomes, allDone, blocked };

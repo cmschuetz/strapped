@@ -225,6 +225,23 @@ test('a missing structured_output failure names the envelope stop/terminal reaso
   assert.match(result.error ?? '', /stop_reason=end_turn/)
 })
 
+// --- schema-less free-text requests ------------------------------------------
+
+test('a schema-less request omits --json-schema and returns the result string verbatim', () => {
+  const req = { ...baseReq() }
+  delete (req as { schema?: unknown }).schema
+  assert.ok(!buildArgs(req).includes('--json-schema'))
+
+  const envelope = successEnvelope({ ignored: true }, { structured: false })
+  envelope.result = 'Revised the plan: closed both findings.'
+  envelope.session_id = 'sess-free'
+  const calls: string[][] = []
+  const result = runClaude(req, { spawn: sequencedSpawn([envelope], calls) })
+  assert.equal(result.ok, true)
+  assert.equal(result.output, 'Revised the plan: closed both findings.')
+  assert.equal(calls.length, 1)
+})
+
 // --- schema-forced --resume retry --------------------------------------------
 
 function sequencedSpawn(envelopes: readonly Envelope[], calls: string[][]): Spawn {
@@ -267,6 +284,18 @@ test('the retry runs at most once; a still-bad result keeps the original error w
   assert.match(result.error ?? '', /unparseable result JSON/)
   assert.equal(calls.length, 2)
   assert.equal(result.cost, 0.75)
+})
+
+test('error_max_structured_output_retries IS retried via --resume — it is a formatting failure with a live session', () => {
+  const first = errorEnvelope('error_max_structured_output_retries')
+  first.session_id = 'sess-fmt'
+  const second = successEnvelope({ answer: 4 })
+  const calls: string[][] = []
+  const result = runClaude(baseReq(), { spawn: sequencedSpawn([first, second], calls) })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.output, { answer: 4 })
+  assert.equal(calls.length, 2)
+  assert.equal((calls[1] ?? [])[((calls[1] ?? []).indexOf('--resume')) + 1], 'sess-fmt')
 })
 
 test('no retry without a session_id, and none on an envelope-level claude error', () => {

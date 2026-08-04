@@ -9,7 +9,6 @@ import type {
   PlanStageArgs,
   PrStageArgs,
   RepoRef,
-  Rule,
   RulePartition,
   RunConfig,
   RunScripts,
@@ -67,14 +66,14 @@ function parseScripts(value: unknown): RunScripts {
   return scripts
 }
 
-function parseRules(value: unknown, where: string): Rule[] {
-  if (!Array.isArray(value)) throw new Error(`config: ${where} must be an array of rules`)
+function parseRules(value: unknown, where: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`config: ${where} must be an array of rule ids`)
   const list: unknown[] = value
   return list.map((rule, i) => {
-    if (!isRecord(rule) || typeof rule.id !== 'string' || typeof rule.source !== 'string' || typeof rule.text !== 'string') {
-      throw new Error(`config: ${where}[${i}] must be a rule { id, source, text }`)
+    if (typeof rule !== 'string' || rule.length === 0) {
+      throw new Error(`config: ${where}[${i}] must be a rule id string (rule text lives in rulesFile, never in args)`)
     }
-    return { id: rule.id, source: rule.source, text: rule.text }
+    return rule
   })
 }
 
@@ -85,6 +84,25 @@ function parseRulesByRound(value: unknown): RulePartition[] {
     if (!isRecord(entry)) throw new Error(`config: rulesByRound[${i}] must be a { a, b } rule partition`)
     return { a: parseRules(entry.a, `rulesByRound[${i}].a`), b: parseRules(entry.b, `rulesByRound[${i}].b`) }
   })
+}
+
+/**
+ * `rulesFile` (abs path to reviews/rules-snapshot.md) is required exactly when
+ * review rounds could run: any dispatch carrying a non-empty `rulesByRound`
+ * intends review rounds, and its reviewer prompts point agents at this file
+ * for the verbatim rule text (args carry ids only). Dispatches that run no
+ * review rounds (pr-only, 0-round budgets with `rulesByRound: []`) may omit
+ * both fields — the lazy absent-→-[] contract is preserved.
+ */
+function parseRulesFile(value: unknown, rulesByRound: readonly RulePartition[]): string | null {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (value !== undefined && value !== null) throw new Error('config field "rulesFile" must be a string')
+  if (rulesByRound.length > 0) {
+    throw new Error(
+      'config field "rulesFile" (absolute path to reviews/rules-snapshot.md) is required when "rulesByRound" is non-empty — review agents read the rule text from it'
+    )
+  }
+  return null
 }
 
 function parseRepos(value: unknown, where: string): RepoRef[] {
@@ -165,6 +183,10 @@ export function parseConfig(raw: unknown): RunConfig {
   const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
   if (!isRecord(parsed)) throw new Error('config must be an object or its JSON string')
   const stages = parseStages(parsed.stages)
+  // rulesByRound is read only lazily inside review rounds (rulesForRound),
+  // so pr-only / plan-less dispatches (e.g. the /strapped:pr singleton) omit
+  // it entirely — treat absent as [] to match the pre-port lazy contract.
+  const rulesByRound = parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound)
   return {
     slug: requireString(parsed, 'slug'),
     dir: requireString(parsed, 'dir'),
@@ -174,10 +196,8 @@ export function parseConfig(raw: unknown): RunConfig {
     confidenceMin: requireNumber(parsed, 'confidenceMin'),
     planRounds: requireNumber(parsed, 'planRounds'),
     codeRounds: requireNumber(parsed, 'codeRounds'),
-    // rulesByRound is read only lazily inside review rounds (rulesForRound),
-    // so pr-only / plan-less dispatches (e.g. the /strapped:pr singleton) omit
-    // it entirely — treat absent as [] to match the pre-port lazy contract.
-    rulesByRound: parsed.rulesByRound === undefined ? [] : parseRulesByRound(parsed.rulesByRound),
+    rulesByRound,
+    rulesFile: parseRulesFile(parsed.rulesFile, rulesByRound),
     stages,
     stageArgs: parseStageArgsMap(parsed.stageArgs),
   }
@@ -194,11 +214,21 @@ export function stageArgsFor(
   return cfg.stageArgs[name] || {}
 }
 
-/** The seeded rule partition for a 1-indexed review round. */
+/** The seeded rule partition (id lists) for a 1-indexed review round. */
 export function rulesForRound(cfg: RunConfig, round: number): RulePartition {
   const rules = cfg.rulesByRound[round - 1]
   if (!rules) throw new Error(`rulesByRound has no entry for round ${round}`)
   return rules
+}
+
+/**
+ * The rules-snapshot path for a running review round. `parseConfig` guarantees
+ * it whenever `rulesByRound` is non-empty, and review rounds cannot start
+ * without a partition — the throw is a belt-and-braces invariant guard.
+ */
+export function rulesFileFor(cfg: RunConfig): string {
+  if (cfg.rulesFile === null) throw new Error('config field "rulesFile" is required to run review rounds')
+  return cfg.rulesFile
 }
 
 export function repoList(repos: readonly RepoRef[] | undefined): string {

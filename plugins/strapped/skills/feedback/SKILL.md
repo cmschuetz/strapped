@@ -51,9 +51,9 @@ Determine the **in-scope deliverable set**: every deliverable with a non-null `p
 As in `/strapped:plan` and `/strapped:implement` (workflows cannot use `Math.random()`, so the split is computed skill-side):
 
 1. Read `reviews/rules-snapshot.md` (re-extract per the conventions' **Rule extraction** if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules).
-2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, a `{"a": [{"id","source","text"}...], "b": [...]}` pair shuffled with `random.Random(seed + round)` (seed from the manifest). Save the JSON — it becomes `rulesByRound`.
+2. Compute the per-round rule split with the conventions' **Seeded rule split** recipe — for each round `1..max_rounds`, an id-only `{"a": ["R1", "R4"], "b": ["R2", "R3"]}` pair shuffled with `random.Random(seed + round)` over the sorted rule-id list (seed from the manifest). Save the JSON — it becomes `rulesByRound`. Ids only: the snapshot stays the single source of rule text, which the workflow's review agents Read via `rulesFile`.
 
-This single `rulesByRound` (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) is threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes it at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes it the same way). Omitting it makes the adversarial reviewers receive `undefined` rule halves.
+This single `rulesByRound` and the `rulesFile` path (plus `seed`, `confidenceMin`, `planRounds`, `codeRounds`) are threaded into BOTH mono-workflow dispatches — the `feedback-synth` stage (the addenda review loop consumes them at `rulesByRound[round-1]`) AND the Step 6 `implement` stage (the code-review/fix loop consumes them the same way). Omitting them makes the adversarial reviewers receive `undefined` rule halves (and a non-empty `rulesByRound` without `rulesFile` fails the config parse).
 
 ## Step 3 — Fetch PR review comments, index them, cross-check (GitHub via `gh`)
 
@@ -115,7 +115,8 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "rulesByRound": [<per-round splits from Step 2>],
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": [<the id-only per-round splits from Step 2>],
   "planRounds": 3,
   "codeRounds": 3,
   "confidenceMin": 70,
@@ -157,14 +158,15 @@ Dispatch the `strapped-run` mono-workflow again — Workflow tool, `scriptPath: 
   "planRounds": 3,
   "confidenceMin": 70,
   "seed": 42,
-  "rulesByRound": [<per-round splits from Step 2>]
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": [<the id-only per-round splits from Step 2>]
 }
 ```
 
 - `addendumMode: true` swaps the implementer's prompt to "apply the `## Feedback addendum` section to the EXISTING code on this branch, staying in scope" — a targeted change, NOT a re-implementation — and switches the coordinator/applier to the feedback re-entry lifecycle: `pr-open → fixing ⇄ in-review → pr-open` (a pre-PR node whose `pr:` is null is dispatched at `done` without the `fixing` flip — there is no `done>fixing` edge — and converges back to `done` in place), never back through `pending`/`ready`/`in-progress`, every flip via the guarded `state.mjs transition`. A node that parks gets `parked` + `parked_reason` and is reported — never forced through.
 - `recordSuffix: "-feedback"` makes feedback code-review rounds write `<Did>-code-round-<N>-feedback.md` (not clobbering the original `<Did>-code-round-<N>.md`); the fix agent's round-record READ path derives from the same suffix — writer and reader agree.
 - The rounds counter is the separate `feedback_rounds_used` field, NOT the original `review_rounds_used`.
-- `rulesByRound`/`seed`/`confidenceMin`/`codeRounds` are threaded exactly as `/strapped:implement` does, because the code-review/fix loop reads `rulesByRound[round-1]` per round.
+- `rulesFile`/`rulesByRound`/`seed`/`confidenceMin`/`codeRounds` are threaded exactly as `/strapped:implement` does, because the code-review/fix loop reads `rulesByRound[round-1]` per round and its reviewers Read the rule text from `rulesFile`.
 
 Read `results.implement` from the return — `{outcomes, allDone, blocked}` — for the per-node report in Step 7.
 

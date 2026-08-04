@@ -60,7 +60,13 @@ export const PLAN_LENSES = {
   b: 'soundness: wrong assumptions about the codebase, DAG dependency errors (missing or backwards deps, undeclared cross-deliverable coupling), deliverables that mix unrelated themes or whose estimated meaningful diff (excluding generated code, dependency bumps, and fixtures) exceeds ~1,000 lines and should be split, deliverables/chains that should be CONSOLIDATED (fragments of one theme, or a linear chain whose combined meaningful diff — excluding generated code, dependency bumps, and fixtures — is under the ~1,000-line threshold and could be a single deliverable/PR), planned work that is dead, duplicated, or superseded within the plan (steps or files a later step obviates, two deliverables doing the same work, or acceptance criteria/tests no remaining step produces), and steps that cannot work as written',
 } as const
 
-/** A fixture assigned-rule block (`ruleBlock(rules)` output) for the reviewer prompt. */
-export const FIXTURE_RULE_BLOCK = '- CM-1 (CLAUDE.md): every new user-facing feature ships with a test that exercises it'
+/**
+ * The rules-snapshot path the reviewer/verifier prompts point agents at.
+ * Workflow args carry rule IDS only; the snapshot file is the single source of
+ * rule text. In a single-shot eval the file is unreadable (no tools), which is
+ * fine: no grader inspects the rule_checklist — the discriminators bite on
+ * findings/ac_checklist (reviewer) and per-finding verdicts (verifier).
+ */
+export const FIXTURE_RULES_FILE = 'plans/runs/eval-fixture/reviews/rules-snapshot.md'
 /** The rule ids the reviewer must return a checklist verdict for. */
 export const FIXTURE_RULE_IDS = 'CM-1'

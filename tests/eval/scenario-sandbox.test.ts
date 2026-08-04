@@ -120,6 +120,28 @@ test('scaffold: config.json content, runDir skeleton, source plan, seedRunState 
   })
 })
 
+test('rules snapshot: reviews/rules-snapshot.md carries every rule line in the conventions format', () => {
+  const scenario = baseScenario({
+    rules: [
+      { id: 'R1', source: 'CLAUDE.md', text: 'first fixture rule' },
+      { id: 'R2', source: 'skills/foo/SKILL.md', text: 'second fixture rule' },
+    ],
+  })
+  withSandbox(scenario, sandbox => {
+    const snapshot = readFileSync(join(sandbox.runDir, 'reviews', 'rules-snapshot.md'), 'utf8')
+    assert.match(snapshot, /^---\nextracted: /)
+    assert.ok(snapshot.includes('sources: [CLAUDE.md, skills/foo/SKILL.md]'))
+    assert.ok(snapshot.includes('- R1 (CLAUDE.md): first fixture rule'))
+    assert.ok(snapshot.includes('- R2 (skills/foo/SKILL.md): second fixture rule'))
+  })
+})
+
+test('rules snapshot: written even for an empty rule set (rulesFile is always dispatchable)', () => {
+  withSandbox(baseScenario(), sandbox => {
+    assert.ok(existsSync(join(sandbox.runDir, 'reviews', 'rules-snapshot.md')))
+  })
+})
+
 test('token interpolation: all four tokens substitute to real absolute paths', () => {
   const scenario = baseScenario({
     repos: [
@@ -167,6 +189,35 @@ test('an unknown token throws at build time', () => {
       ),
     /unknown sandbox token \{\{bogusToken\}\}/
   )
+})
+
+test('branches: overlay committed on a branch cut from main, main stays checked out and unchanged', () => {
+  const sandbox = buildSandbox(
+    baseScenario({
+      repos: [
+        {
+          name: 'alpha',
+          files: { 'src/app.ts': 'export const app = 1\n' },
+          branches: { 'strapped/x/D1-work': { 'src/app.ts': 'export const app = 2\n', 'src/extra.ts': 'export const extra = 3\n' } },
+          validations: [],
+        },
+      ],
+    })
+  )
+  try {
+    const repo = sandbox.repos[0]
+    assert.ok(repo !== undefined)
+    const head = spawnSync('git', ['-C', repo.root, 'branch', '--show-current'], { encoding: 'utf8' })
+    assert.equal(head.stdout.trim(), 'main')
+    assert.equal(readFileSync(join(repo.root, 'src', 'app.ts'), 'utf8'), 'export const app = 1\n')
+    const onBranch = spawnSync('git', ['-C', repo.root, 'show', 'strapped/x/D1-work:src/app.ts'], { encoding: 'utf8' })
+    assert.equal(onBranch.status, 0)
+    assert.equal(onBranch.stdout, 'export const app = 2\n')
+    const extra = spawnSync('git', ['-C', repo.root, 'show', 'strapped/x/D1-work:src/extra.ts'], { encoding: 'utf8' })
+    assert.equal(extra.status, 0)
+  } finally {
+    removeSandbox(sandbox)
+  }
 })
 
 test('a repo with neither files nor snapshotPath throws', () => {

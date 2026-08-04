@@ -115,13 +115,14 @@ const FULL_CHAIN_HANDLERS = {
   'plan-review:b:r1': NO_FINDINGS,
   'verify:r1': EMPTY_VERIFY,
   approve: { changed: true },
-  'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
+  'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
   'implement:D1': IMPLEMENTED,
   'review:D1:a:r1': NO_FINDINGS,
   'review:D1:b:r1': NO_FINDINGS,
   'verify:D1:r1': EMPTY_VERIFY,
   'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-  'coordinate:2': { items: [], dag: { ready: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
+  // No coordinate:2: the deterministic wrap-up computes remaining 0 from the
+  // pass-1 dag paste and dispatches no confirming coordinator.
   'pr-create': PR_RESULT,
 }
 
@@ -269,6 +270,35 @@ test('a workflow throw is captured on the outcome, not propagated', async () => 
   assert.ok(outcome.sandbox.root.length > 0) // paths still returned for grading/cleanup
 })
 
+test('composeArgs threads rulesFile + id-only partitions: reviewer prompts carry the snapshot path and ids, never rule text', async () => {
+  const { outcome, scripted } = await runAndClean(
+    baseScenario(),
+    envelopes({
+      planner: PLAN,
+      'plan-review:a:r1': NO_FINDINGS,
+      'plan-review:b:r1': NO_FINDINGS,
+      'verify:r1': EMPTY_VERIFY,
+    })
+  )
+  assert.deepEqual(scripted.unexpected, [])
+  assert.equal(outcome.error, null)
+  const snapshotPath = `${outcome.sandbox.runDir}/reviews/rules-snapshot.md`
+  const reviewers = outcome.ledger.filter(e => e.label.startsWith('plan-review:'))
+  assert.equal(reviewers.length, 2)
+  const prompts = reviewers.map(e => e.prompt ?? '')
+  // Both reviewer prompts point at the materialized snapshot for rule text…
+  for (const prompt of prompts) assert.ok(prompt.includes(snapshotPath), 'prompt names the sandbox rules snapshot')
+  // …carry the seeded id split between them (A1 + B1 each exactly once)…
+  const carriesA1 = prompts.filter(p => /\bA1\b/.test(p)).length
+  const carriesB1 = prompts.filter(p => /\bB1\b/.test(p)).length
+  assert.equal(carriesA1, 1)
+  assert.equal(carriesB1, 1)
+  // …and never inline the rule TEXT (still present on scenario.rules).
+  for (const prompt of prompts) {
+    assert.ok(!prompt.includes('rule a') && !prompt.includes('rule b'), 'no rule text in the dispatched prompt')
+  }
+})
+
 test('codeRounds > planRounds: rulesByRound covers every code-review round', async () => {
   // planRounds 1, codeRounds 2, and the code review actually reaches round 2.
   // If the executor sized rulesByRound by planRounds alone, round 2's lookup
@@ -277,7 +307,7 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
   const { outcome, scripted } = await runAndClean(
     scenario,
     envelopes({
-      'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
+      'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
       'implement:D1': IMPLEMENTED,
       'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
@@ -287,7 +317,7 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
       'review:D1:b:r2': NO_FINDINGS,
       'verify:D1:r2': EMPTY_VERIFY,
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [], dag: { ready: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
+      'coordinate:2': { items: [], dag: { ready: [], resumable: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
     })
   )
   assert.deepEqual(scripted.unexpected, [])

@@ -3,8 +3,8 @@
 // every gating finding + dedup-vs-seen consolidation) writing
 // reviews/<id>-code-round-<N><suffix>.md.
 
-import { rulesForRound } from '../config.ts'
-import { digest, ruleBlock } from '../review-loop.ts'
+import { rulesFileFor, rulesForRound } from '../config.ts'
+import { digest } from '../review-loop.ts'
 import { FINDINGS_SCHEMA, VERIFY_SCHEMA } from '../schemas.generated.ts'
 import type {
   CodeFinding,
@@ -41,6 +41,7 @@ export async function runCodeReviewRound(
   { item, round, confirmation, seen, recordSuffix }: CodeReviewRoundOpts
 ): Promise<CodeReviewRoundResult> {
   const rules = rulesForRound(cfg, round)
+  const rulesFile = rulesFileFor(cfg)
   const roundLabel = confirmation ? `${round}-confirm` : `${round}`
   const seedUsed = cfg.seed + round
   const seenDigest = seen.length ? digest(seen) : ''
@@ -53,21 +54,21 @@ Worktree (the code under review lives here): ${item.worktree}${item.repo ? `\nTa
 Branch: ${item.branch}   Base: ${item.base}
 
 Procedure:
-1. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do. Enumerate every item under its \`## Acceptance criteria\` as AC1..ACn — and, if the plan ALSO carries a \`## Feedback addendum\` section, every addendum task under it too, continuing the numbering — and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line pointing at the code/test that satisfies or fails it }). An AC or addendum item the CODE fails to satisfy or leaves untested is a BLOCKING finding. This checks the actual code, not just the plan. A plan with neither section → \`ac_checklist: []\`.
-2. In the worktree, run: git diff ${item.base}...${item.branch}
-3. Read every touched file in full in the worktree, plus any callers or tests you need for context.
+1. Read the rules snapshot at ${rulesFile} for the verbatim text of your assigned guideline rules (${rules[which].join(', ')}) — the workflow args carry only their ids; each rule is a \`- <id> (<source>): <text>\` line, and the ids not assigned to you are the other reviewer's.
+2. Read the deliverable plan at ${item.planFile} — its acceptance criteria define what the code must do. Enumerate every item under its \`## Acceptance criteria\` as AC1..ACn — and, if the plan ALSO carries a \`## Feedback addendum\` section, every addendum task under it too, continuing the numbering — and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line pointing at the code/test that satisfies or fails it }). An AC or addendum item the CODE fails to satisfy or leaves untested is a BLOCKING finding. This checks the actual code, not just the plan. A plan with neither section → \`ac_checklist: []\`.
+3. In the worktree, run: git diff ${item.base}...${item.branch}
+4. Read every touched file in full in the worktree, plus any callers or tests you need for context.
 ${item.validations && item.validations.length ? `\nThis repo's validations (must be green for the deliverable — assume the implementer ran them; flag any code that would break one):\n${item.validations.map(v => `- ${v}`).join('\n')}\n` : ''}
 Your lens (your main hunting ground beyond the rules): ${CODE_LENSES[which]}.
 
-Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly:
-${ruleBlock(rules[which])}
+Your assigned guideline rules — you are the ONLY reviewer checking these, so check every one explicitly: ${rules[which].join(', ')} (verbatim text in the rules snapshot from step 1).
 
 Known findings from earlier rounds — do NOT re-report these unless the code has regressed:
 ${seenDigest || '(none — first round)'}
 
 Report only real, evidenced issues. Severity: "blocking" = bug or guideline violation that must be fixed; "concern" = likely problem needing a fix or justification; "suggestion" = optional polish (never drives rework). For each finding give a stable key "<rule-id-or-gap>:<file-or-location>". Set confidence honestly — findings under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map(r => r.id).join(', ')}), the ac_checklist covering every AC (and addendum task) from step 1, plus your findings.`
+You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].join(', ')}), the ac_checklist covering every AC (and addendum task) from step 2, plus your findings.`
   }
 
   const reviews = await parallel([
@@ -94,7 +95,7 @@ You MUST return a rule_checklist entry with a pass/violation/na verdict and one 
     gating.length === 0
       ? `You are the record-writer for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review the code and do NOT read the worktree — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
 
-Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
+Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
 
 Suggestions (non-gating, record only):
 ${JSON.stringify(suggestions, null, 2)}
@@ -107,6 +108,8 @@ Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.`
       : `You are the verify-consolidate agent for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW issue remains.' : ''}
 
 Code reviewers claim the following issues in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
+
+The guideline rules behind rule-keyed findings and the checklists carry only their ids here — the verbatim rule text lives in the rules snapshot at ${rulesFile}; Read it whenever a rule's wording matters to a verdict.
 
 Gating findings to adjudicate:
 ${JSON.stringify(gating, null, 2)}
@@ -127,7 +130,7 @@ Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-c
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
-2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
+2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status } per the conventions (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
 3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`,
     { label: `verify:${item.id}:r${roundLabel}`, phase: 'Verify', effort: 'low', schema: VERIFY_SCHEMA }
   )

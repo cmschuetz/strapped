@@ -28,8 +28,8 @@ export interface EvalRequest {
   appendSystemPrompt?: string
   /** Model id, e.g. `claude-haiku-4-5` (`--model`). */
   model: string
-  /** Schema forced via `--json-schema` and validated against `structured_output`. */
-  schema: JsonSchema
+  /** Schema forced via `--json-schema` and validated against `structured_output`. Omitted = free-text request: no flag, the result string is the output. */
+  schema?: JsonSchema
   /** Opt into a bounded toolset (`--allowedTools`); omit for a single-shot, tool-free run. */
   tools?: string[]
   /** Inline settings JSON (`--settings`); defaults to `'{}'` to isolate from ambient config. */

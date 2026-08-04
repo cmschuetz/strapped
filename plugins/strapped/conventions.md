@@ -171,7 +171,7 @@ sources: [CLAUDE.md]
 
 ## Seeded rule split
 
-Deterministic, reshuffled each round with `seed + round`. Each rule is owned by exactly one reviewer. Computed in the skill (workflow scripts cannot use `Math.random()`), passed into workflow args as `rulesByRound`.
+Deterministic, reshuffled each round with `seed + round`. Each rule is owned by exactly one reviewer. Computed in the skill (workflow scripts cannot use `Math.random()`), passed into workflow args as `rulesByRound` — **rule ids only**: the split shuffles and partitions the snapshot's sorted rule-id list, and the verbatim rule text never enters the args or the prompts. `reviews/rules-snapshot.md` stays the single source of rule text; the args also carry `rulesFile` (its absolute path), and the review agents Read it to resolve their assigned ids. This keeps the dispatch-command size bounded no matter how many rules extraction finds.
 
 ```bash
 python3 - <<'EOF'
@@ -360,9 +360,12 @@ All orchestration lives in ONE mono-workflow, `workflows/strapped-run.js` (meta.
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "seed": 42, "confidenceMin": 70, "planRounds": 3, "codeRounds": 3,
-  "rulesByRound": ["<per-round {a, b} rule splits, computed skill-side>"]
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": ["<per-round {a, b} rule-ID splits, computed skill-side — e.g. {\"a\": [\"R1\", \"R4\"], \"b\": [\"R2\", \"R3\"]}>"]
 }
 ```
+
+`rulesByRound` carries rule ids only; `rulesFile` (required whenever `rulesByRound` is non-empty) names the snapshot the review agents Read for the rule text. Dispatches that run no review rounds (e.g. pr-only) may omit both.
 
 Returns `{ slug, stages, completed, stoppedAt, results }` — `results` keyed by stage name, `completed` the stages whose gate passed, `stoppedAt` the gate-failing stage (its result still lands in `results`; parked/blocked details surface there — the dispatch never proceeds silently).
 
