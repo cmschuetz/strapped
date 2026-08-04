@@ -121,6 +121,14 @@ export function buildSandbox(scenario: Scenario): ScenarioSandbox {
       }
       if (!existsSync(join(paths.root, '.git'))) git(paths.root, 'init', '-q', '-b', 'main')
       commitAll(paths.root, 'scenario: fixture repo')
+      for (const [branch, overlay] of Object.entries(repo.branches ?? {})) {
+        git(paths.root, 'checkout', '-q', '-b', branch)
+        for (const [rel, content] of Object.entries(overlay)) {
+          writeFile(join(paths.root, rel), interpolate(content, tokens, `repo ${repo.name} branch ${branch} file ${rel}`))
+        }
+        commitAll(paths.root, `scenario: seeded branch ${branch}`)
+        git(paths.root, 'checkout', '-q', 'main')
+      }
       mkdirSync(paths.worktreeRoot, { recursive: true })
     }
 

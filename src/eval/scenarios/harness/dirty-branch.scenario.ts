@@ -2,14 +2,15 @@
 // row has its defects fixed by the implementer BEFORE review, so review always
 // sees F≈0 — the regime where D1's constant-cost verify-consolidate agent
 // cannot show its win over the retired per-finding refuter fan-out. Here the
-// deliverable branch is cut from a main that already carries ~6 committed
-// flaws in src/calc.ts (fixtures/dirty-repo.ts): 2 functional defects the
-// narrowly-scoped deliverable tells the implementer to fix, plus 4 guideline
-// violations the plan deliberately does NOT mention — so the code-review
-// rounds run against genuinely dirty work, the reviewers' rule checklists
-// produce real findings AT REVIEW TIME, and one batch verifier adjudicates
-// them. This is the live measurement of the linear-refute-vs-batch-verify
-// claim that D1 could only prove by hermetic call-count test.
+// deliverable's branch is PRE-COMMITTED (fixtures/dirty-repo.ts): it carries
+// the 2 functional defects the narrowly-scoped deliverable tells the
+// implementer to fix in src/calc.ts, plus 5 guideline violations in
+// src/report.ts that the deliverable's Out of scope FORBIDS the implementer
+// from touching — so the flaws deterministically survive to review, the
+// reviewers' rule checklists produce real findings AT REVIEW TIME, and one
+// batch verifier adjudicates them. This is the live measurement of the
+// linear-refute-vs-batch-verify claim that D1 could only prove by hermetic
+// call-count test.
 //
 // Why the graders discriminate:
 //   (a) defect-tests-green      — the functional defects are fixed;
@@ -41,10 +42,10 @@ const raise: Die = msg => {
   throw new Error(msg)
 }
 
-/** Every guideline-flaw probe holds on the final src/calc.ts. */
+/** Every guideline-flaw probe holds on the final src/report.ts. */
 function flawsCleaned(o: ScenarioOutcome): boolean {
-  const calc = readFileSync(join(worktreeOf(o, 'D1'), 'src', 'calc.ts'), 'utf8')
-  return Object.values(FLAW_PROBES).every(probe => probe(calc))
+  const report = readFileSync(join(worktreeOf(o, 'D1'), 'src', 'report.ts'), 'utf8')
+  return Object.values(FLAW_PROBES).every(probe => probe(report))
 }
 
 /**

@@ -191,6 +191,35 @@ test('an unknown token throws at build time', () => {
   )
 })
 
+test('branches: overlay committed on a branch cut from main, main stays checked out and unchanged', () => {
+  const sandbox = buildSandbox(
+    baseScenario({
+      repos: [
+        {
+          name: 'alpha',
+          files: { 'src/app.ts': 'export const app = 1\n' },
+          branches: { 'strapped/x/D1-work': { 'src/app.ts': 'export const app = 2\n', 'src/extra.ts': 'export const extra = 3\n' } },
+          validations: [],
+        },
+      ],
+    })
+  )
+  try {
+    const repo = sandbox.repos[0]
+    assert.ok(repo !== undefined)
+    const head = spawnSync('git', ['-C', repo.root, 'branch', '--show-current'], { encoding: 'utf8' })
+    assert.equal(head.stdout.trim(), 'main')
+    assert.equal(readFileSync(join(repo.root, 'src', 'app.ts'), 'utf8'), 'export const app = 1\n')
+    const onBranch = spawnSync('git', ['-C', repo.root, 'show', 'strapped/x/D1-work:src/app.ts'], { encoding: 'utf8' })
+    assert.equal(onBranch.status, 0)
+    assert.equal(onBranch.stdout, 'export const app = 2\n')
+    const extra = spawnSync('git', ['-C', repo.root, 'show', 'strapped/x/D1-work:src/extra.ts'], { encoding: 'utf8' })
+    assert.equal(extra.status, 0)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
 test('a repo with neither files nor snapshotPath throws', () => {
   assert.throws(
     () => buildSandbox(baseScenario({ repos: [{ name: 'alpha', validations: [] }] })),

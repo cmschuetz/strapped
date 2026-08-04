@@ -155,7 +155,9 @@ function addWorktree(sandbox: ScenarioSandbox, branch: string): string {
   assert.ok(repo !== undefined, 'sandbox has a repo')
   const wt = join(repo.worktreeRoot, sandbox.slug, 'D1')
   mkdirSync(dirname(wt), { recursive: true })
-  git(repo.root, 'worktree', 'add', '-q', wt, '-b', branch, 'main')
+  const exists = spawnSync('git', ['rev-parse', '--verify', '-q', branch], { cwd: repo.root }).status === 0
+  if (exists) git(repo.root, 'worktree', 'add', '-q', wt, branch)
+  else git(repo.root, 'worktree', 'add', '-q', wt, '-b', branch, 'main')
   return wt
 }
 
@@ -759,8 +761,8 @@ test('many-rules: an unfixed defect fails defect-tests-green and only that grade
 
 // --- dirty-branch finding-heavy discrimination -----------------------------------
 
-/** All six dirty flaws fixed: tests green, guidelines hold, dead export gone. */
-const CLEANED_DIRTY_CALC = `export function add(a: number, b: number): number {
+/** The fixed calc the implementer produces on the seeded branch. */
+const FIXED_CALC = `export function add(a: number, b: number): number {
   return a + b
 }
 
@@ -773,41 +775,43 @@ export function greet(name: string): string {
 }
 `
 
-/** Tests green but the guideline flaws (comment, var, dead export, …) remain. */
-const HALF_CLEANED_DIRTY_CALC = `// TODO: clean this file up before shipping
-var callCount = 0
+/** All five report flaws fixed: guidelines hold, dead export gone, test kept green. */
+const CLEANED_DIRTY_REPORT = `let reportCount = 0
 
-export function add(a: number, b: number): number {
-  callCount = callCount + 1
-  return a + b
+export function formatReport(name: string, total: number): string {
+  reportCount = reportCount + 1
+  return \`Report for \${name}: \${total}\`
+}
+`
+
+/** Report test green but the guideline flaws (comment, var, dead export, …) remain. */
+const HALF_CLEANED_DIRTY_REPORT = `// TODO: tidy before shipping
+var reportCount = 0
+
+export function formatReport(name: string, total: number) {
+  reportCount = reportCount + 1
+  return "Report for " + name + ": " + total
 }
 
-export function max(a: number, b: number): number {
-  return a > b ? a : b
-}
-
-export function greet(name: string): string {
-  return \`Hello, \${name}\`
-}
-
-export function legacyHelper(): number {
-  return callCount
+export function legacyFormat(): number {
+  return reportCount
 }
 `
 
 const DIRTY_FINDINGS = [
-  { id: 'r1-a-f1', key: 'DR-1:src/calc.ts', severity: 'blocking', verdict: 'confirmed', confidence: 90, status: 'fixed' },
-  { id: 'r1-b-f1', key: 'DR-4:src/calc.ts', severity: 'concern', verdict: 'confirmed', confidence: 85, status: 'fixed' },
+  { id: 'r1-a-f1', key: 'DR-1:src/report.ts', severity: 'blocking', verdict: 'confirmed', confidence: 90, status: 'fixed' },
+  { id: 'r1-b-f1', key: 'DR-4:src/report.ts', severity: 'concern', verdict: 'confirmed', confidence: 85, status: 'fixed' },
 ]
 
 /** Canned dirty-branch outcome: mutated worktree + a round record with the given findings. */
 function dirtyBranchOutcome(
-  calc: string,
+  report: string,
   findings: unknown[]
 ): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome } {
   const sandbox = buildSandbox(dirtyBranchScenario)
   const wt = addWorktree(sandbox, 'strapped/dirty-branch/D1-green-tests')
-  write(join(wt, 'src', 'calc.ts'), calc)
+  write(join(wt, 'src', 'calc.ts'), FIXED_CALC)
+  write(join(wt, 'src', 'report.ts'), report)
   commitWorktree(wt, 'fix(dirty-branch): green the tests and clean the flaws')
   markImplemented(sandbox, 'D1-green-tests.md', wt)
   writeFrontmatterFile(
@@ -834,12 +838,13 @@ test('dirty-branch: the seeded repo is genuinely red and every flaw probe fails 
     assert.ok(repo !== undefined)
     const res = spawnSync('bun', ['test'], { cwd: repo.root, encoding: 'utf8' })
     assert.notEqual(res.status, 0, 'the seeded fixture tests must fail until the defects are fixed')
-    const seeded = readFileSync(join(repo.root, 'src', 'calc.ts'), 'utf8')
+    const shown = spawnSync('git', ['show', 'strapped/dirty-branch/D1-green-tests:src/report.ts'], { cwd: repo.root, encoding: 'utf8' })
+    assert.equal(shown.status, 0, 'the seeded branch must pre-exist with src/report.ts committed')
     for (const [name, probe] of Object.entries(FLAW_PROBES)) {
-      assert.equal(probe(seeded), false, `flaw probe "${name}" must fail on the seeded file`)
+      assert.equal(probe(shown.stdout), false, `flaw probe "${name}" must fail on the seeded branch file`)
     }
     for (const [name, probe] of Object.entries(FLAW_PROBES)) {
-      assert.equal(probe(CLEANED_DIRTY_CALC), true, `flaw probe "${name}" must pass on the cleaned file`)
+      assert.equal(probe(CLEANED_DIRTY_REPORT), true, `flaw probe "${name}" must pass on the cleaned file`)
     }
   } finally {
     removeSandbox(sandbox)
@@ -847,7 +852,7 @@ test('dirty-branch: the seeded repo is genuinely red and every flaw probe fails 
 })
 
 test('dirty-branch: canned good (flaws fixed + per-finding verdicts recorded) grades 1/1', () => {
-  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_CALC, DIRTY_FINDINGS)
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, DIRTY_FINDINGS)
   try {
     const good = grade(outcome)
     assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
@@ -858,7 +863,7 @@ test('dirty-branch: canned good (flaws fixed + per-finding verdicts recorded) gr
 })
 
 test('dirty-branch: surviving guideline flaws fail flaws-cleaned and only that grader', () => {
-  const { sandbox, outcome } = dirtyBranchOutcome(HALF_CLEANED_DIRTY_CALC, DIRTY_FINDINGS)
+  const { sandbox, outcome } = dirtyBranchOutcome(HALF_CLEANED_DIRTY_REPORT, DIRTY_FINDINGS)
   try {
     const graded = grade(outcome)
     assert.ok(graded.correctness < 1)
@@ -871,7 +876,7 @@ test('dirty-branch: surviving guideline flaws fail flaws-cleaned and only that g
 })
 
 test('dirty-branch: a findings-free round record fails per-finding-verdicts (review never saw the dirt)', () => {
-  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_CALC, [])
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, [])
   try {
     const graded = grade(outcome)
     assert.equal(graded.correctness, 1, describeGrades(graded.correctnessGrades))
@@ -883,8 +888,8 @@ test('dirty-branch: a findings-free round record fails per-finding-verdicts (rev
 })
 
 test('dirty-branch: findings without cast verdicts fail per-finding-verdicts', () => {
-  const voteless = [{ id: 'r1-a-f1', key: 'DR-1:src/calc.ts', severity: 'blocking', status: 'open' }]
-  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_CALC, voteless)
+  const voteless = [{ id: 'r1-a-f1', key: 'DR-1:src/report.ts', severity: 'blocking', status: 'open' }]
+  const { sandbox, outcome } = dirtyBranchOutcome(CLEANED_DIRTY_REPORT, voteless)
   try {
     const graded = grade(outcome)
     assert.equal(byName(graded.adherenceGrades, 'adherence:per-finding-verdicts').pass, false)

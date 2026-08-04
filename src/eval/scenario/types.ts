@@ -28,6 +28,8 @@ export interface ScenarioRepo {
   snapshotPath?: string
   /** Validation commands recorded in the repo's state config.json. */
   validations: string[]
+  /** Pre-committed branches: branch name → file overlay committed on a branch cut from main (main stays checked out). */
+  branches?: Record<string, Record<string, string>>
 }
 
 /**
