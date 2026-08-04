@@ -172,7 +172,7 @@ function makeAgent(
     const req: EvalRequest = {
       prompt,
       model,
-      schema: (opts.schema ?? {}) as JsonSchema,
+      ...(opts.schema === undefined ? {} : { schema: opts.schema as JsonSchema }),
       tools: [...SCENARIO_AGENT_TOOLS],
       cwd: sandbox.root,
       addDirs: [sandbox.root],

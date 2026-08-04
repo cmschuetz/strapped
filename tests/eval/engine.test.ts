@@ -225,6 +225,23 @@ test('a missing structured_output failure names the envelope stop/terminal reaso
   assert.match(result.error ?? '', /stop_reason=end_turn/)
 })
 
+// --- schema-less free-text requests ------------------------------------------
+
+test('a schema-less request omits --json-schema and returns the result string verbatim', () => {
+  const req = { ...baseReq() }
+  delete (req as { schema?: unknown }).schema
+  assert.ok(!buildArgs(req).includes('--json-schema'))
+
+  const envelope = successEnvelope({ ignored: true }, { structured: false })
+  envelope.result = 'Revised the plan: closed both findings.'
+  envelope.session_id = 'sess-free'
+  const calls: string[][] = []
+  const result = runClaude(req, { spawn: sequencedSpawn([envelope], calls) })
+  assert.equal(result.ok, true)
+  assert.equal(result.output, 'Revised the plan: closed both findings.')
+  assert.equal(calls.length, 1)
+})
+
 // --- schema-forced --resume retry --------------------------------------------
 
 function sequencedSpawn(envelopes: readonly Envelope[], calls: string[][]): Spawn {
