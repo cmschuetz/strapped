@@ -31,6 +31,7 @@ import { fullPipelineScenario } from './full-pipeline.scenario.ts'
 import { implementOnlyScenario } from './implement-only.scenario.ts'
 import { manyRulesScenario } from './many-rules.scenario.ts'
 import { planOnlyScenario } from './plan-only.scenario.ts'
+import { preconditionParkScenario } from './precondition-park.scenario.ts'
 import { reviewLoopScenario } from './review-loop.scenario.ts'
 import { zeroRoundsScenario } from './zero-rounds.scenario.ts'
 
@@ -43,4 +44,5 @@ export const scenarios: Scenario[] = [
   zeroRoundsScenario,
   manyRulesScenario,
   dirtyBranchScenario,
+  preconditionParkScenario,
 ]

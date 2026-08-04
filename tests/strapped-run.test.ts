@@ -257,6 +257,65 @@ test('reviewer prompts reference rulesFile and assigned ids, not rule text', asy
   assert.ok(codeVerify.includes('reviewer_a_rules: ["A1"]'))
 })
 
+test('planner prompt carries the preconditions/parking rule, not reject-or-restructure', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel(planConverges()),
+  })
+  const planner = callWithLabel(calls, 'planner').prompt
+  assert.ok(planner.includes('## Preconditions'), 'planner must instruct the Preconditions section')
+  assert.ok(planner.includes('Plan such work IN the DAG'), 'externally-landing prerequisites stay in the DAG')
+  assert.ok(planner.includes('parks the node'), 'unmet preconditions park at implement time')
+  assert.ok(!planner.includes('Reject or restructure'), 'the reject-or-restructure rule is retired')
+  assert.ok(!planner.includes('ordering-only'), 'the ordering-only framing is retired')
+})
+
+test('reviewer b checks precondition declarations instead of flagging cross-repo code deps', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel(planConverges()),
+  })
+  const planB = callWithLabel(calls, 'plan-review:b:r1').prompt
+  assert.ok(planB.includes('cross-repo base rule'), 'base-rule verification stays')
+  assert.ok(planB.includes('## Preconditions'), 'reviewer b checks for the declared precondition')
+  assert.ok(planB.includes('flag a MISSING declaration, never the dependency itself'))
+  assert.ok(!planB.includes('ordering-only'), 'the ordering-only check is retired')
+  assert.ok(!planB.includes('no cross-repo dep is a true code dependency'))
+})
+
+test('implement prompt instructs blocking on an unmet declared precondition', async () => {
+  const cfg = baseCfg({ stages: ['implement'], stageArgs: { implement: {} } })
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': wave([], 0),
+    }),
+  })
+  const implement = callWithLabel(calls, 'implement:D1').prompt
+  assert.ok(implement.includes('## Preconditions'))
+  assert.ok(implement.includes('do NOT improvise around it'))
+  assert.ok(implement.includes('return status "blocked" with the blocker naming the unmet precondition'))
+})
+
+test('pr prompt has no wrap instruction and keeps short-title guidance', async () => {
+  const cfg = baseCfg({ stages: ['pr'], stageArgs: { pr: { dryRun: true } } })
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'pr-gate': { remaining: 0, notDone: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  const pr = callWithLabel(calls, 'pr-create').prompt
+  assert.ok(!/\bwrapped\b/.test(pr), 'no column-wrapping instruction survives')
+  assert.ok(!pr.includes('~72 cols'), 'no column-wrapping instruction survives')
+  assert.ok(pr.includes('aim ~50'), 'short-title guidance stays')
+  assert.ok(pr.includes('natural unwrapped paragraphs'), 'the body is natural unwrapped prose')
+})
+
 test('missing rulesFile with non-empty rulesByRound throws at config parse', async () => {
   await assert.rejects(
     runWorkflow(WORKFLOW, { args: baseCfg({ rulesFile: undefined }) }),

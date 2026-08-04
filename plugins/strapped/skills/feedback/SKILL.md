@@ -26,7 +26,7 @@ Drive PR review comments back into the plan→implement lifecycle for one strapp
 - `--pr <url>` — **repeatable**; narrows to the given PR URL(s).
 - When neither narrowing flag is given, the in-scope set is every deliverable with a `pr:` URL that has at least one review comment or a request-changes/comment review.
 - `--dry-run` — fetch, synthesize, review, print the plan and the commands that WOULD run, then stop; mutate nothing (no addenda written, no implementation, no branch changes).
-- `--max-rounds N` — overrides both the plan-review budget (for the addenda review) and the code-review budget (for the fix path); defaults to the manifest's `plan_rounds`/`code_rounds` (3).
+- `--max-rounds N` — overrides both the plan-review budget (for the addenda review) and the code-review budget (for the fix path); defaults to the manifest's `plan_rounds`/`code_rounds` (1). `0` is legal and skips the adversarial rounds entirely.
 
 ## Step 0 — Locate the run root (cwd-independent)
 
@@ -117,10 +117,10 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
   "rulesByRound": [<the id-only per-round splits from Step 2>],
-  "planRounds": 3,
-  "codeRounds": 3,
+  "planRounds": "<--max-rounds or the manifest plan_rounds>",
+  "codeRounds": "<--max-rounds or the manifest code_rounds>",
   "confidenceMin": 70,
-  "seed": 42
+  "seed": "<the manifest seed>"
 }
 ```
 
@@ -154,10 +154,10 @@ Dispatch the `strapped-run` mono-workflow again — Workflow tool, `scriptPath: 
   },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "codeRounds": 3,
-  "planRounds": 3,
+  "codeRounds": "<--max-rounds or the manifest code_rounds>",
+  "planRounds": "<--max-rounds or the manifest plan_rounds>",
   "confidenceMin": 70,
-  "seed": 42,
+  "seed": "<the manifest seed>",
   "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
   "rulesByRound": [<the id-only per-round splits from Step 2>]
 }
