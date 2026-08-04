@@ -18,10 +18,9 @@ const WORKFLOW = fileURLToPath(new URL('../plugins/strapped/workflows/strapped-r
 
 const REPOS = [{ name: 'alpha', root: '/repos/alpha' }]
 
-const RULES = {
-  a: [{ id: 'A1', source: 'CLAUDE.md', text: 'rule a' }],
-  b: [{ id: 'B1', source: 'CLAUDE.md', text: 'rule b' }],
-}
+const RULES = { a: ['A1'], b: ['B1'] }
+
+const RULES_FILE = '/state/runs/test-run/reviews/rules-snapshot.md'
 
 function baseCfg(overrides: Record<string, unknown> = {}) {
   return {
@@ -34,6 +33,7 @@ function baseCfg(overrides: Record<string, unknown> = {}) {
     planRounds: 3,
     codeRounds: 2,
     rulesByRound: [RULES, RULES, RULES],
+    rulesFile: RULES_FILE,
     stages: ['plan'],
     stageArgs: { plan: { sourcePlan: '/plans/test-run.md', repos: REPOS } },
     ...overrides,
@@ -211,8 +211,72 @@ test('zero gating findings → record-writer fast path; findings → full skepti
   const dirtyVerify = callWithLabel(dirty.calls, 'verify:r1')
   assert.ok(dirtyVerify.prompt.includes('skeptical verifier'))
   assert.ok(!dirtyVerify.prompt.includes('record-writer'))
+  // The skeptical verifier is pointed at the rules snapshot for rule text.
+  assert.ok(dirtyVerify.prompt.includes(RULES_FILE))
   const confirmVerify = callWithLabel(dirty.calls, 'verify:r1-confirm')
   assert.ok(confirmVerify.prompt.includes('record-writer'))
+})
+
+test('reviewer prompts reference rulesFile and assigned ids, not rule text', async () => {
+  const cfg = baseCfg({ stages: ['plan', 'implement'] })
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      ...planConverges(),
+      approve: { changed: true },
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': wave([], 0),
+    }),
+  })
+
+  // Plan reviewers: assigned ids + a Read-the-snapshot instruction, zero inlined rule text.
+  const planA = callWithLabel(calls, 'plan-review:a:r1').prompt
+  const planB = callWithLabel(calls, 'plan-review:b:r1').prompt
+  assert.ok(planA.includes(RULES_FILE))
+  assert.ok(planA.includes('A1'))
+  assert.ok(!planA.includes('B1'), 'reviewer a never sees reviewer b\'s ids')
+  assert.ok(planB.includes(RULES_FILE))
+  assert.ok(planB.includes('B1'))
+  assert.ok(planA.includes('Read the rules snapshot'))
+  assert.ok(!planA.includes('(CLAUDE.md):'), 'no inlined `- <id> (<source>): <text>` rule lines')
+
+  // Code reviewers: same contract.
+  const codeA = callWithLabel(calls, 'review:D1:a:r1').prompt
+  assert.ok(codeA.includes(RULES_FILE))
+  assert.ok(codeA.includes('A1'))
+  assert.ok(codeA.includes('Read the rules snapshot'))
+  assert.ok(!codeA.includes('(CLAUDE.md):'))
+
+  // Record-writer frontmatter instructions carry the id arrays directly.
+  const planVerify = callWithLabel(calls, 'verify:r1').prompt
+  assert.ok(planVerify.includes('reviewer_a_rules: ["A1"]'))
+  assert.ok(planVerify.includes('reviewer_b_rules: ["B1"]'))
+  const codeVerify = callWithLabel(calls, 'verify:D1:r1').prompt
+  assert.ok(codeVerify.includes('reviewer_a_rules: ["A1"]'))
+})
+
+test('missing rulesFile with non-empty rulesByRound throws at config parse', async () => {
+  await assert.rejects(
+    runWorkflow(WORKFLOW, { args: baseCfg({ rulesFile: undefined }) }),
+    /config field "rulesFile" .* is required when "rulesByRound" is non-empty/
+  )
+  await assert.rejects(runWorkflow(WORKFLOW, { args: baseCfg({ rulesFile: 42 }) }), /"rulesFile" must be a string/)
+})
+
+test('pr-only dispatch omitting rulesByRound AND rulesFile still runs (lazy contract)', async () => {
+  const cfg = baseCfg({ stages: ['pr'], stageArgs: { pr: { dryRun: true } } }) as Record<string, unknown>
+  delete cfg.rulesByRound
+  delete cfg.rulesFile
+  const { result } = await runWorkflow(WORKFLOW, {
+    args: cfg,
+    agent: agentByLabel({
+      'pr-gate': { remaining: 0, notDone: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  assert.deepEqual(result.results.pr, { prs: PR_RESULT.prs, summary: PR_RESULT.summary, dryRun: true })
 })
 
 test('singleton ["plan"]: converges with NO approve agent dispatched', async () => {

@@ -26,8 +26,10 @@
 // discriminate canned good from bad outcomes — fully hermetic, no `claude`.
 
 import type { Scenario } from '../../scenario/types.ts'
+import { dirtyBranchScenario } from './dirty-branch.scenario.ts'
 import { fullPipelineScenario } from './full-pipeline.scenario.ts'
 import { implementOnlyScenario } from './implement-only.scenario.ts'
+import { manyRulesScenario } from './many-rules.scenario.ts'
 import { planOnlyScenario } from './plan-only.scenario.ts'
 import { reviewLoopScenario } from './review-loop.scenario.ts'
 import { zeroRoundsScenario } from './zero-rounds.scenario.ts'
@@ -39,4 +41,6 @@ export const scenarios: Scenario[] = [
   implementOnlyScenario,
   reviewLoopScenario,
   zeroRoundsScenario,
+  manyRulesScenario,
+  dirtyBranchScenario,
 ]

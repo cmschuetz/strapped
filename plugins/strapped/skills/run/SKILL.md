@@ -43,7 +43,7 @@ It prints `{ name, stages, source: "builtin" | "anchor" }`. On a non-zero exit (
 - plan entry: list the target-repo candidates (from `--repo`, or inferred from the plan text) WITHOUT any AskUserQuestion confirmation;
 - NOTE — never perform — each write Step 1 would do: the `<runRoot>/<slug>/` scaffold, per-repo config generation for any repo whose config is missing, and the `reviews/rules-snapshot.md` write. This includes the slug path's re-extract-if-missing fallback: when the snapshot is missing, REPORT it as missing instead of writing it.
 
-Then print: the resolved chain (name, stages, source), the entry path, every would-be-created path, and the full args JSON Step 3 would dispatch to `strapped-run.js` — fields that depend on not-yet-performed writes shown as placeholders (e.g. `rulesByRound: "<computed from the unwritten reviews/rules-snapshot.md>"`). Then STOP.
+Then print: the resolved chain (name, stages, source), the entry path, every would-be-created path, and the full args JSON Step 3 would dispatch to `strapped-run.js` — fields that depend on not-yet-performed writes shown as placeholders (e.g. `rulesByRound: "<id splits computed from the unwritten reviews/rules-snapshot.md>"`, `rulesFile: "<the unwritten reviews/rules-snapshot.md's absolute path>"`). Then STOP.
 
 `--dry-run` mutates NOTHING: no scaffold, no config write, no snapshot write, no manifest/deliverable/branch mutation, and no workflow dispatch — the same promise `/strapped:pr --dry-run` makes.
 
@@ -57,7 +57,7 @@ Perform the plan skill's Steps 1–2 exactly (`$PLUGIN_ROOT/skills/plan/SKILL.md
 2. Resolve the target repos from `--repo`, or infer candidates from the plan text and confirm via AskUserQuestion — this confirmation (plus Step 2's consent gate) is the ONLY interaction before the autonomous stretch. Never from the cwd.
 3. Resolve stateRoot and the run root per the conventions' **Config resolution**, and run the **unconditional resume probe** on `<runRoot>/<slug>/manifest.md` exactly as the plan skill's 1c specifies — on every path, including `--repo` given.
 4. Generate/confirm missing per-repo configs (plan skill 1d); scaffold `<runRoot>/<slug>/` (fresh runs only); extract the guideline rules and write `reviews/rules-snapshot.md` per the conventions' **Rule extraction**.
-5. Compute `rulesByRound` (full rule objects) with the conventions' **Seeded rule split** recipe for **`max(plan_rounds, code_rounds)` rounds — NOT the plan skill's `1..plan_rounds` default**: Step 3 threads this ONE array into both the plan and implement stage args, and the implement stage indexes it up to `code_rounds`, so a plan-length array under-runs the implement stage whenever `code_rounds > plan_rounds`.
+5. Compute `rulesByRound` (id-only `{"a": [...], "b": [...]}` pairs — rule text stays in the snapshot, which the workflow's review agents Read via `rulesFile`) with the conventions' **Seeded rule split** recipe for **`max(plan_rounds, code_rounds)` rounds — NOT the plan skill's `1..plan_rounds` default**: Step 3 threads this ONE array into both the plan and implement stage args, and the implement stage indexes it up to `code_rounds`, so a plan-length array under-runs the implement stage whenever `code_rounds > plan_rounds`.
 
 **Chain-specific resume rule (overrides the plan skill's 1c/1e stop-on-approved):**
 
@@ -71,7 +71,7 @@ Perform the plan skill's Steps 1–2 exactly (`$PLUGIN_ROOT/skills/plan/SKILL.md
 2. Preconditions on the manifest status: the chain starts at `implement` → require `approved` or `implementing`; the chain starts at `pr` → require `done` nodes present (via `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>`). Otherwise stop and say why.
 3. Reject `--seed`/`--plan-rounds`/`--code-rounds` (see Arguments) — seed and both budgets come from the existing manifest (`resolve`'s `seed`/`budgets`).
 4. Read `reviews/rules-snapshot.md` for the rule set. If it is missing, re-extract it per the conventions' **Rule extraction** and write the snapshot — the same fallback as the implement skill's Step 2; never improvise rule ids.
-5. Compute `rulesByRound` from the snapshot's rule objects with the seeded recipe for **`max(plan_rounds, code_rounds)` rounds** — mirroring the implement skill's Step 2, extended to cover both loops.
+5. Compute `rulesByRound` from the snapshot's rule ids with the seeded recipe (id-only pairs) for **`max(plan_rounds, code_rounds)` rounds** — mirroring the implement skill's Step 2, extended to cover both loops.
 
 ## Step 2 — Consent gate
 
@@ -105,11 +105,12 @@ Invoke the Workflow tool EXACTLY ONCE with `scriptPath: $PLUGIN_ROOT/workflows/s
   "confidenceMin": 70,
   "planRounds": "<effective plan_rounds>",
   "codeRounds": "<effective code_rounds>",
-  "rulesByRound": ["<the max(plan_rounds, code_rounds) per-round splits from Step 1>"]
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": ["<the max(plan_rounds, code_rounds) id-only per-round splits from Step 1>"]
 }
 ```
 
-Include a `stageArgs.plan` entry only when the `plan` stage is actually dispatched. `rulesByRound` threads ONCE and serves BOTH the plan and implement stages. The workflow owns every gate in between: auto-approve after a converged plan (chained dispatch only), the `implementing` manifest flip, the park-don't-spin wave loop, and the done-or-later pr gate.
+Include a `stageArgs.plan` entry only when the `plan` stage is actually dispatched. `rulesByRound` (ids only) and `rulesFile` thread ONCE and serve BOTH the plan and implement stages. The workflow owns every gate in between: auto-approve after a converged plan (chained dispatch only), the `implementing` manifest flip, the park-don't-spin wave loop, and the done-or-later pr gate.
 
 ## Step 4 — Report
 

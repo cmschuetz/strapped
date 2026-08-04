@@ -113,11 +113,14 @@ export async function runScenario(scenario: Scenario, opts: RunScenarioOptions =
 }
 
 /**
- * Compose the mono-workflow's `args` for a scenario. `rulesByRound` gets an
- * entry per round up to Math.max(planRounds, codeRounds) — BOTH review loops
- * index it by round number, so a scenario with `codeRounds > planRounds` must
- * still find an entry for every code-review round. The pr stage is ALWAYS
- * forced `dryRun: true` — a scenario can never push or open real PRs.
+ * Compose the mono-workflow's `args` for a scenario, mirroring the skills'
+ * dispatch shape: `rulesByRound` carries id-only partitions with an entry per
+ * round up to Math.max(planRounds, codeRounds) — BOTH review loops index it by
+ * round number, so a scenario with `codeRounds > planRounds` must still find
+ * an entry for every code-review round — and `rulesFile` names the sandbox's
+ * materialized rules snapshot (the single source of rule TEXT, which review
+ * agents Read). The pr stage is ALWAYS forced `dryRun: true` — a scenario can
+ * never push or open real PRs.
  */
 function composeArgs(scenario: Scenario, sandbox: ScenarioSandbox, pluginDir: string): Record<string, unknown> {
   const maxRounds = Math.max(scenario.planRounds, scenario.codeRounds)
@@ -134,6 +137,7 @@ function composeArgs(scenario: Scenario, sandbox: ScenarioSandbox, pluginDir: st
     planRounds: scenario.planRounds,
     codeRounds: scenario.codeRounds,
     rulesByRound: splitRules(scenario.rules, scenario.seed, maxRounds),
+    rulesFile: join(sandbox.runDir, 'reviews', 'rules-snapshot.md'),
     stages: scenario.stages,
     stageArgs: {
       plan: {

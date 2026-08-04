@@ -1,16 +1,18 @@
-// Deterministic seeded rule split for scenario runs: one {a, b} partition per
-// review round, computed with a mulberry32 PRNG shuffle seeded by
+// Deterministic seeded rule split for scenario runs: one {a, b} partition of
+// rule IDS per review round, computed with a mulberry32 PRNG shuffle seeded by
 // `seed + round`. Pure — the same (rules, seed, rounds) always yields the same
 // partitions, which is what makes before/after workflow comparisons stable.
 // It need not match the python split documented in conventions.md; determinism
-// is the contract.
+// is the contract. The partitions carry ids ONLY — the rule text reaches
+// agents through the sandbox's `reviews/rules-snapshot.md` (see sandbox.ts),
+// mirroring the skills' rulesFile dispatch shape.
 
 import type { ScenarioRule } from './types.ts'
 
-/** One review round's reviewer split. */
+/** One review round's reviewer split — rule ids only. */
 export interface RulePartition {
-  a: ScenarioRule[]
-  b: ScenarioRule[]
+  a: string[]
+  b: string[]
 }
 
 /** Classic mulberry32: a tiny deterministic PRNG over a 32-bit state. */
@@ -40,22 +42,21 @@ function shuffle<T>(items: readonly T[], rng: () => number): T[] {
   return out
 }
 
-const byId = (x: ScenarioRule, y: ScenarioRule): number => (x.id < y.id ? -1 : x.id > y.id ? 1 : 0)
-
 /**
- * Deterministic per-round rule partitions: for each 1-indexed round up to
- * `rounds`, shuffle the rules with a PRNG seeded by `seed + round`, give
+ * Deterministic per-round rule-id partitions: for each 1-indexed round up to
+ * `rounds`, shuffle the rule ids with a PRNG seeded by `seed + round`, give
  * reviewer `a` the first half (rounded up) and reviewer `b` the rest, then
- * sort each half by id. Every rule appears exactly once per round.
+ * sort each half. Every rule id appears exactly once per round.
  */
 export function splitRules(rules: readonly ScenarioRule[], seed: number, rounds: number): RulePartition[] {
+  const ids = rules.map(r => r.id)
   const partitions: RulePartition[] = []
   for (let round = 1; round <= rounds; round++) {
-    const shuffled = shuffle(rules, mulberry32(seed + round))
+    const shuffled = shuffle(ids, mulberry32(seed + round))
     const half = Math.ceil(shuffled.length / 2)
     partitions.push({
-      a: shuffled.slice(0, half).sort(byId),
-      b: shuffled.slice(half).sort(byId),
+      a: shuffled.slice(0, half).sort(),
+      b: shuffled.slice(half).sort(),
     })
   }
   return partitions

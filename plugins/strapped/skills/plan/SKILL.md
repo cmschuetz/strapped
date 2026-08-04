@@ -87,7 +87,7 @@ The manifest (written by the planner agent in step 3) must carry the `repos:` ma
 ## Step 2 — Rule snapshot and per-round assignments
 
 1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per **Rule extraction**; one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
-2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions, adapted to emit full rule objects — for each round `1..max_rounds`, a `{"a": [{"id", "source", "text"}...], "b": [...]}` pair, shuffled with `random.Random(seed + round)` and split in half. Save the JSON output; it goes into the workflow args verbatim. Never use ad-hoc randomness — the seed is the only entropy source.
+2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions' **Seeded rule split** — for each round `1..max_rounds`, an id-only `{"a": ["R1", "R4"], "b": ["R2", "R3"]}` pair, shuffled with `random.Random(seed + round)` over the sorted rule-id list and split in half. Save the JSON output; it goes into the workflow args verbatim — ids ONLY, never rule text: the snapshot written in step 1 is the single source of rule text, and the workflow's review agents Read it via the `rulesFile` arg. Never use ad-hoc randomness — the seed is the only entropy source.
 
 ## Step 3 — Run the plan stage of the mono-workflow
 
@@ -109,7 +109,8 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "rulesByRound": [<the per-round splits from step 2>],
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": [<the id-only per-round splits from step 2>],
   "planRounds": 3,
   "codeRounds": 3,
   "confidenceMin": 70,

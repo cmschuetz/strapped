@@ -120,6 +120,28 @@ test('scaffold: config.json content, runDir skeleton, source plan, seedRunState 
   })
 })
 
+test('rules snapshot: reviews/rules-snapshot.md carries every rule line in the conventions format', () => {
+  const scenario = baseScenario({
+    rules: [
+      { id: 'R1', source: 'CLAUDE.md', text: 'first fixture rule' },
+      { id: 'R2', source: 'skills/foo/SKILL.md', text: 'second fixture rule' },
+    ],
+  })
+  withSandbox(scenario, sandbox => {
+    const snapshot = readFileSync(join(sandbox.runDir, 'reviews', 'rules-snapshot.md'), 'utf8')
+    assert.match(snapshot, /^---\nextracted: /)
+    assert.ok(snapshot.includes('sources: [CLAUDE.md, skills/foo/SKILL.md]'))
+    assert.ok(snapshot.includes('- R1 (CLAUDE.md): first fixture rule'))
+    assert.ok(snapshot.includes('- R2 (skills/foo/SKILL.md): second fixture rule'))
+  })
+})
+
+test('rules snapshot: written even for an empty rule set (rulesFile is always dispatchable)', () => {
+  withSandbox(baseScenario(), sandbox => {
+    assert.ok(existsSync(join(sandbox.runDir, 'reviews', 'rules-snapshot.md')))
+  })
+})
+
 test('token interpolation: all four tokens substitute to real absolute paths', () => {
   const scenario = baseScenario({
     repos: [

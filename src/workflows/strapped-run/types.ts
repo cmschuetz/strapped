@@ -7,16 +7,14 @@
 
 export type StageName = 'plan' | 'feedback-synth' | 'implement' | 'pr'
 
-export interface Rule {
-  id: string
-  source: string
-  text: string
-}
-
-/** One round's seeded rule split between the two reviewers. */
+/**
+ * One round's seeded rule split between the two reviewers — rule IDS only.
+ * The verbatim rule text never travels in workflow args: it lives in the
+ * on-disk snapshot named by `RunConfig.rulesFile`, which review agents Read.
+ */
 export interface RulePartition {
-  a: Rule[]
-  b: Rule[]
+  a: string[]
+  b: string[]
 }
 
 export interface RepoRef {
@@ -73,6 +71,12 @@ export interface RunConfig {
   planRounds: number
   codeRounds: number
   rulesByRound: RulePartition[]
+  /**
+   * Absolute path to `reviews/rules-snapshot.md` — the single source of rule
+   * TEXT. Required whenever `rulesByRound` is non-empty; null on dispatches
+   * that run no review rounds (e.g. the pr-only singleton).
+   */
+  rulesFile: string | null
   stages: StageName[]
   stageArgs: StageArgsMap
 }

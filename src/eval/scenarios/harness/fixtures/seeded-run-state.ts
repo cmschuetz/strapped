@@ -73,13 +73,14 @@ comments, explicit return types on exports, every export tested.
 - Anything beyond the subtract function and its test.
 `
 
-const REVIEW_LOOP_DELIVERABLE = `---
+/** The fix-defects deliverable, parameterized by run slug (branch prefix). */
+const fixDefectsDeliverable = (slug: string): string => `---
 id: D1
 title: Fix the three seeded calculator defects
 deps: []
 repo: calc
 status: pending
-branch: strapped/review-loop/D1-fix-defects
+branch: strapped/${slug}/D1-fix-defects
 base: main
 worktree: null
 pr: null
@@ -113,6 +114,45 @@ must not be touched.
 
 ## Out of scope
 - Style cleanup of any kind — the quirk files are intentional and permitted.
+`
+
+const DIRTY_BRANCH_DELIVERABLE = `---
+id: D1
+title: Make the calc fixture tests green
+deps: []
+repo: calc
+status: pending
+branch: strapped/dirty-branch/D1-green-tests
+base: main
+worktree: null
+pr: null
+review_rounds_used: 0
+feedback_rounds_used: 0
+parked_reason: null
+estimated_diff_lines: 8
+---
+## Context
+src/calc.ts is mid-flight work committed by an earlier session: \`add\` subtracts
+and \`max\` returns the smaller argument, each exposed by a failing test in
+tests/calc.test.ts. The file carries other leftovers from that session too —
+the repo CLAUDE.md guidelines apply to it as committed.
+
+## Files to touch
+- src/calc.ts — fix the two defective lines
+
+## Implementation steps
+1. Make \`add\` return \`a + b\`.
+2. Make \`max\` return the larger argument.
+
+## Acceptance criteria
+- AC1: every test in tests/calc.test.ts passes (\`bun test\` green).
+- AC2: only src/calc.ts changes.
+
+## Tests
+- tests/calc.test.ts — the existing failing tests cover AC1.
+
+## Out of scope
+- New features and new files.
 `
 
 const ZERO_ROUNDS_DELIVERABLE = `---
@@ -188,10 +228,38 @@ export function reviewLoopSeed(): SeedRunState {
   return {
     files: {
       'manifest.md': manifest('review-loop', 14, 1, 2, 'deliverables/D1-fix-defects.md'),
-      'deliverables/D1-fix-defects.md': REVIEW_LOOP_DELIVERABLE,
+      'deliverables/D1-fix-defects.md': fixDefectsDeliverable('review-loop'),
       'research.md': research(
         'review-loop',
         'The only work is D1: fix the three seeded defects while leaving the permitted style quirks untouched.'
+      ),
+    },
+  }
+}
+
+/** Approved manifest + pending D1 (+ research stub) for the many-rules scenario (30-rule snapshot). */
+export function manyRulesSeed(): SeedRunState {
+  return {
+    files: {
+      'manifest.md': manifest('many-rules', 16, 1, 1, 'deliverables/D1-fix-defects.md'),
+      'deliverables/D1-fix-defects.md': fixDefectsDeliverable('many-rules'),
+      'research.md': research(
+        'many-rules',
+        'The only work is D1: fix the three seeded defects while leaving the permitted style quirks untouched. The repo guideline set is large (~30 rules) — the review rounds read it from reviews/rules-snapshot.md.'
+      ),
+    },
+  }
+}
+
+/** Approved manifest + pending D1 (+ research stub) for the dirty-branch scenario. */
+export function dirtyBranchSeed(): SeedRunState {
+  return {
+    files: {
+      'manifest.md': manifest('dirty-branch', 17, 1, 2, 'deliverables/D1-green-tests.md'),
+      'deliverables/D1-green-tests.md': DIRTY_BRANCH_DELIVERABLE,
+      'research.md': research(
+        'dirty-branch',
+        'The only work is D1: make the failing tests green. src/calc.ts is committed mid-flight work carrying other guideline leftovers.'
       ),
     },
   }

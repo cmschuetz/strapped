@@ -45,7 +45,7 @@ Each deliverable's `repo:` field is **required** and names one of the `repos:` e
 
 ## Step 2 — Rule assignments
 
-As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per the conventions' **Rule extraction**), compute the per-round rule splits (full rule objects) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed.
+As in /strapped:plan: read `reviews/rules-snapshot.md` (re-extract if missing — discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per the conventions' **Rule extraction**), compute the per-round rule splits (id-only `{"a": ["R1", "R4"], "b": ["R2", "R3"]}` pairs over the snapshot's sorted rule-id list) for rounds `1..code_rounds` using `random.Random(seed + round)` from the manifest seed. The args carry ids only — the snapshot stays the single source of rule text, which the workflow's review agents Read via `rulesFile`.
 
 ## Step 3 — Dispatch the implement stage of the mono-workflow
 
@@ -67,7 +67,8 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   "planRounds": 3,
   "confidenceMin": 70,
   "seed": 42,
-  "rulesByRound": [<per-round splits from step 2>]
+  "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
+  "rulesByRound": [<the id-only per-round splits from step 2>]
 }
 ```
 

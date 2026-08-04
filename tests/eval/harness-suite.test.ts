@@ -152,6 +152,22 @@ for (const fx of FIXTURES) {
   })
 }
 
+// --- baseline prompts mirror the rulesFile shape ------------------------------
+
+test('reviewer case prompt carries the rules-file instruction and assigned ids, not inlined rule text', () => {
+  assert.ok(reviewerCase.prompt.includes('Read the rules snapshot at'))
+  assert.ok(reviewerCase.prompt.includes('reviews/rules-snapshot.md'))
+  assert.ok(reviewerCase.prompt.includes('CM-1'))
+  assert.ok(
+    !reviewerCase.prompt.includes('- CM-1 (CLAUDE.md):'),
+    'the old inlined `- <id> (<source>): <text>` rule block must not survive'
+  )
+})
+
+test('verifier case prompt references the rules snapshot for rule text', () => {
+  assert.ok(verifierCase.prompt.includes('reviews/rules-snapshot.md'))
+})
+
 // --- acceptance criterion 3/4: the suite loads through the D2 CLI loader ------
 
 test('loadSuite loads exactly the four harness cases from the suite directory', async () => {

@@ -19,6 +19,7 @@ import {
   FIXTURE_CONVENTIONS,
   FIXTURE_DIR,
   FIXTURE_REPOS,
+  FIXTURE_RULES_FILE,
   FIXTURE_SEED,
   FIXTURE_SLUG,
   STRAPPED_CONTEXT,
@@ -53,6 +54,8 @@ const VERIFIER_PROMPT = `You are the verify-consolidate agent for round 1 of str
 
 Plan reviewers claim the following gaps in the implementation plan at ${FIXTURE_DIR} (original ask: ${FIXTURE_SOURCE_PLAN}). Target repos you may explore to check each claim:
 ${FIXTURE_REPOS}
+
+The guideline rules behind rule-keyed findings and the checklists carry only their ids here — the verbatim rule text lives in the rules snapshot at ${FIXTURE_RULES_FILE}; Read it whenever a rule's wording matters to a verdict.
 
 Gating findings to adjudicate:
 ${JSON.stringify([WEAK_GATING_FINDING], null, 2)}

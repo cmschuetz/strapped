@@ -5,7 +5,10 @@
 // the one that catches an acceptance-criterion with no test), with the runtime
 // `${...}` holes filled by fixture constants. Both `PLAN_LENSES` are snapshotted
 // in `fixtures/context.ts`. The fixture plan under review is embedded inline
-// because a single-shot eval has no filesystem to read the artifact files from.
+// because a single-shot eval has no filesystem to read the artifact files from;
+// the rules snapshot at FIXTURE_RULES_FILE is likewise unreadable here, which is
+// deliberate — the prompt carries only the assigned rule IDS plus the read
+// instruction (the live shape), and no grader inspects the rule_checklist.
 // D4 may compact this text and A/B the candidate against this baseline.
 
 import { defineCase } from '../../case.ts'
@@ -17,7 +20,7 @@ import {
   FIXTURE_CONFIDENCE_MIN,
   FIXTURE_DIR,
   FIXTURE_REPOS,
-  FIXTURE_RULE_BLOCK,
+  FIXTURE_RULES_FILE,
   FIXTURE_RULE_IDS,
   PLAN_LENSES,
   STRAPPED_CONTEXT,
@@ -42,8 +45,8 @@ ${FIXTURE_REPOS}
 Read the original ask first, then the whole plan, then verify claims against the actual codebase(s) where they matter.
 
 Your lens (your main hunting ground beyond the rules): ${PLAN_LENSES.a}.
-Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?):
-${FIXTURE_RULE_BLOCK}
+Your assigned guideline rules — you are the ONLY reviewer checking the plan against these, so check every one explicitly (does the plan instruct or imply work that would violate the rule?): ${FIXTURE_RULE_IDS}.
+These ids are your whole assignment, but they carry no text here: before reviewing, Read the rules snapshot at ${FIXTURE_RULES_FILE} for each assigned rule's verbatim text (one \`- <id> (<source>): <text>\` line per rule; ignore the ids not assigned to you).
 
 Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
 (none — first round)
