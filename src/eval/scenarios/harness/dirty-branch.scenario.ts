@@ -4,9 +4,10 @@
 // cannot show its win over the retired per-finding refuter fan-out. Here the
 // deliverable's branch is PRE-COMMITTED (fixtures/dirty-repo.ts): it carries
 // the 2 functional defects the narrowly-scoped deliverable tells the
-// implementer to fix in src/calc.ts, plus 5 guideline violations in
-// src/report.ts that the deliverable's Out of scope FORBIDS the implementer
-// from touching — so the flaws deterministically survive to review, the
+// implementer to fix in src/calc.ts, plus 4 guideline violations in
+// src/report.ts — a file the deliverable's Files to touch / AC2 ("changes
+// only src/calc.ts") fence the implementer out of — so the flaws
+// deterministically survive to review, the
 // reviewers' rule checklists produce real findings AT REVIEW TIME, and one
 // batch verifier adjudicates them. This is the live measurement of the
 // linear-refute-vs-batch-verify claim that D1 could only prove by hermetic

@@ -6,14 +6,15 @@
 //   - src/calc.ts (branch): 2 functional defects exposed by failing fixture
 //     tests (`add` subtracts, `max` returns the smaller argument) — the
 //     implementer's narrow job per the seeded deliverable;
-//   - src/report.ts (branch): 5 guideline violations of the fixture CLAUDE.md
+//   - src/report.ts (branch): 4 guideline violations of the fixture CLAUDE.md
 //     that tests do NOT catch — a comment (DR-1), `var` (DR-3), a missing
 //     return type (DR-2), string concatenation (DR-5) — and DR-4 (smallest
-//     diff, never delete files) exists to bar the fixer from "cleaning" by
-//     deleting the module and its test, which a dead-code rule once invited.
-//     The deliverable's Out of scope FORBIDS the implementer from touching
-//     this file, so the flaws survive to review; formatReport is test-covered
-//     so the fixer cannot simply delete the file.
+//     diff, never delete files) is a constraint, not a planted flaw: it bars
+//     the fixer from "cleaning" by deleting the module and its test.
+//     The seeded deliverable's Files to touch / AC2 ("changes only
+//     src/calc.ts") fence the implementer OUT of this file, so the flaws
+//     survive to review; formatReport is test-covered so the fixer cannot
+//     simply delete the file.
 // FLAW_PROBES maps each flaw to a predicate over the final src/report.ts so a
 // grader can assert the review-fix rounds actually cleaned them.
 
@@ -71,10 +72,10 @@ export function greet(name: string): string {
 
 /**
  * The seeded BRANCH's flawed side file — every guideline flaw lives here, and
- * the deliverable's Out of scope forbids the implementer from touching it, so
- * the flaws deterministically survive to review. formatReport is covered by a
- * test (the file is not deletable as dead code); legacyFormat is the planted
- * dead export.
+ * the seeded deliverable's Files to touch / AC2 ("changes only src/calc.ts")
+ * fence the implementer out of it, so the flaws deterministically survive to
+ * review. formatReport is covered by a test (the file is not deletable as
+ * dead code).
  */
 const DIRTY_REPORT = `// TODO: tidy before shipping
 var reportCount = 0

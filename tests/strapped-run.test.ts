@@ -464,6 +464,23 @@ test('implement: two waves then allDone; manifest-status implementing in first c
   assert.ok(!callWithLabel(calls, 'coordinate:2').prompt.includes(flip))
 })
 
+test('implement: wrap-up shortcut cross-checks on-disk apply statuses — a failed done-transition defers to the next coordinator pass', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      // The applier reports the done transition did NOT land on disk: the
+      // deterministic wrap-up must not declare allDone from the wave outcome
+      // alone — it falls through to a real coordinator pass instead.
+      'apply:1': { applied: [{ id: 'D1', status: 'parked' }] },
+      'coordinate:2': wave([], 1),
+    }),
+  })
+  assert.equal(result.results.implement.allDone, false)
+  assert.equal(callsWithLabelPrefix(calls, 'coordinate:').length, 2)
+})
+
 test('implement: node already pr-open at entry → allDone true with no implementer dispatched', async () => {
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),

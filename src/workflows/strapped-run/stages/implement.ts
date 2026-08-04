@@ -323,14 +323,24 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
     // Deterministic wrap-up: the pasted dag makes remaining computable, so a
     // pass that finishes everything needs no confirming coordinator dispatch.
     if (!addendumMode) {
-      const doneNow = waveResults.filter(r => r.outcome === 'done').length
-      const remainingAfter = wave.dag.remaining - doneNow
+      const doneResults = waveResults.filter(r => r.outcome === 'done')
+      const remainingAfter = wave.dag.remaining - doneResults.length
       if (remainingAfter <= 0) {
-        const doneIds = new Set(waveResults.filter(r => r.outcome === 'done').map(r => r.item.id))
-        blocked = wave.dag.blocked.filter(b => !doneIds.has(b.id))
-        allDone = true
-        log(`pass ${pass}: all ${doneNow} remaining node(s) done — skipping wrap-up coordinator`)
-        break
+        // Safety net: the shortcut trusts wave outcomes, so first cross-check
+        // the applier's returned per-node ON-DISK statuses. A done outcome
+        // whose transition silently failed must not yield allDone — defer to
+        // the next coordinator pass, which re-reads the real dag.
+        const appliedStatus = new Map(applied.applied.map(n => [n.id, n.status]))
+        const unapplied = doneResults.filter(r => appliedStatus.get(r.item.id) !== 'done')
+        if (unapplied.length) {
+          log(`pass ${pass}: wrap-up shortcut skipped — on-disk status disagrees with done outcome for [${unapplied.map(r => r.item.id).join(', ')}] — dispatching the next coordinator pass`)
+        } else {
+          const doneIds = new Set(doneResults.map(r => r.item.id))
+          blocked = wave.dag.blocked.filter(b => !doneIds.has(b.id))
+          allDone = true
+          log(`pass ${pass}: all ${doneResults.length} remaining node(s) done — skipping wrap-up coordinator`)
+          break
+        }
       }
     }
   }

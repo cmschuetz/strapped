@@ -1421,14 +1421,20 @@ RETRY — your previous wave was REJECTED: its items [${wave.items.map((i) => i.
       break;
     }
     if (!addendumMode) {
-      const doneNow = waveResults.filter((r) => r.outcome === "done").length;
-      const remainingAfter = wave.dag.remaining - doneNow;
+      const doneResults = waveResults.filter((r) => r.outcome === "done");
+      const remainingAfter = wave.dag.remaining - doneResults.length;
       if (remainingAfter <= 0) {
-        const doneIds = new Set(waveResults.filter((r) => r.outcome === "done").map((r) => r.item.id));
-        blocked = wave.dag.blocked.filter((b) => !doneIds.has(b.id));
-        allDone = true;
-        log(`pass ${pass}: all ${doneNow} remaining node(s) done — skipping wrap-up coordinator`);
-        break;
+        const appliedStatus = new Map(applied.applied.map((n) => [n.id, n.status]));
+        const unapplied = doneResults.filter((r) => appliedStatus.get(r.item.id) !== "done");
+        if (unapplied.length) {
+          log(`pass ${pass}: wrap-up shortcut skipped — on-disk status disagrees with done outcome for [${unapplied.map((r) => r.item.id).join(", ")}] — dispatching the next coordinator pass`);
+        } else {
+          const doneIds = new Set(doneResults.map((r) => r.item.id));
+          blocked = wave.dag.blocked.filter((b) => !doneIds.has(b.id));
+          allDone = true;
+          log(`pass ${pass}: all ${doneResults.length} remaining node(s) done — skipping wrap-up coordinator`);
+          break;
+        }
       }
     }
   }
