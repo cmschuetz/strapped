@@ -139,9 +139,11 @@ export interface FindingsResult {
   ac_checklist: AcCheck[]
 }
 
-/** REFUTE_SCHEMA */
-export interface RefuteResult {
-  verdict: 'confirmed' | 'refuted' | 'uncertain'
+/** One per-finding verdict cast by the verify-consolidate agent. */
+export interface FindingVerdict {
+  /** The adjudicated finding's id. */
+  id: string
+  verdict: 'confirmed' | 'plausible' | 'refuted'
   /**
    * @minimum 0
    * @maximum 100
@@ -150,8 +152,10 @@ export interface RefuteResult {
   evidence: string
 }
 
-/** CONSOLIDATE_SCHEMA */
-export interface ConsolidateResult {
+/** VERIFY_SCHEMA */
+export interface VerifyResult {
+  /** One verdict per gating finding adjudicated this round. */
+  verdicts: FindingVerdict[]
   new_confirmed_ids: string[]
   duplicate_ids: string[]
 }
@@ -197,8 +201,17 @@ export interface BlockedNode {
 }
 
 /** WAVE_SCHEMA */
+/** `ready`/`remaining`/`blocked` copied verbatim from `state.mjs dag` output. */
+export interface DagSnapshot {
+  ready: string[]
+  remaining: number
+  blocked: BlockedNode[]
+}
+
 export interface WaveResult {
   items: WaveItem[]
+  /** Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes. */
+  dag: DagSnapshot
   remaining: number
   blocked: BlockedNode[]
 }
@@ -235,9 +248,6 @@ export interface PrResult {
 // --- review-loop shapes ---------------------------------------------------------
 
 export type ReviewerId = 'a' | 'b'
-
-/** A finding annotated with the refuter's vote — null when the vote was not cast. */
-export type Refuted<F extends Finding> = F & { refute: RefuteResult | null }
 
 /** A code-review finding tagged with the reviewer that raised it. */
 export interface CodeFinding extends Finding {

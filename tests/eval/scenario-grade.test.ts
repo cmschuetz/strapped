@@ -349,6 +349,58 @@ test('no commit beyond the seed after a transitioning stage fails the cadence ch
   })
 })
 
+test('the deliverable end-state check: status + parked_reason pattern pass, mismatches fail, omitted is neutral', () => {
+  const scenario = baseScenario({
+    expect: { manifestStatus: 'implementing', deliverables: [{ id: 'D1', status: 'done' }] },
+  })
+  withSandbox(scenario, sandbox => {
+    commitBeyondSeed(sandbox)
+    const file = join(sandbox.runDir, 'deliverables', 'D1-thing.md')
+
+    // PASS: the seeded D1 is `done`, matching the expectation.
+    const ok = byName(runAdherence(outcomeFor(scenario, sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(ok.pass, true, ok.detail)
+
+    // PASS: parked status + parked_reason matching the declared pattern.
+    const parkedScenario = baseScenario({
+      expect: {
+        deliverables: [{ id: 'D1', status: 'parked', parkedReasonPattern: 'missing dep(endency)?' }],
+      },
+    })
+    writeFileSync(
+      file,
+      deliverable({ status: 'parked', parked_reason: '"blocked on a missing dependency"' }).replace('{{repoRoot:alpha}}', '/tmp/x')
+    )
+    const parkedOk = byName(runAdherence(outcomeFor(parkedScenario, sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(parkedOk.pass, true, parkedOk.detail)
+
+    // FAIL: parked_reason does not match the pattern.
+    const wrongPattern = baseScenario({
+      expect: { deliverables: [{ id: 'D1', status: 'parked', parkedReasonPattern: 'budget exhausted' }] },
+    })
+    const patternFail = byName(runAdherence(outcomeFor(wrongPattern, sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(patternFail.pass, false)
+    assert.match(patternFail.detail, /does not match \/budget exhausted\//)
+
+    // FAIL: status mismatch, with both statuses named.
+    const statusFail = byName(runAdherence(outcomeFor(scenario, sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(statusFail.pass, false)
+    assert.match(statusFail.detail, /status "parked" ≠ expected "done"/)
+
+    // FAIL: an expected deliverable with no file at all.
+    const missing = baseScenario({ expect: { deliverables: [{ id: 'D9', status: 'done' }] } })
+    const missingFail = byName(runAdherence(outcomeFor(missing, sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(missingFail.pass, false)
+    assert.match(missingFail.detail, /no deliverable file D9-\*\.md/)
+
+    // NEUTRAL: no deliverables expectation declared → n/a with weight 0.
+    const neutral = byName(runAdherence(outcomeFor(baseScenario(), sandbox)), 'adherence:deliverable-end-state')
+    assert.equal(neutral.pass, true)
+    assert.equal(neutral.weight, 0)
+    assert.match(neutral.detail, /^n\/a/)
+  })
+})
+
 test('a completed/stoppedAt mismatch fails the run-result check', () => {
   const scenario = baseScenario()
   withSandbox(scenario, sandbox => {

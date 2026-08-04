@@ -193,16 +193,18 @@ export function parseEnvelope(stdout: string, req: EvalRequest): EvalResult {
     })
   }
 
-  // Prefer the parsed, schema-forced object; fall back to parsing stringified `result`.
+  // Prefer the parsed, schema-forced object; fall back to parsing stringified
+  // `result`, carrying the stop/terminal reasons so the ledger records WHY.
   let output = envelope.structured_output
   if (output === undefined || output === null) {
+    const why = `stop_reason=${String(envelope.stop_reason)} terminal_reason=${String(envelope.terminal_reason)}`
     if (typeof envelope.result !== 'string') {
-      return gradedResult(envelope, req, { ok: false, error: 'no structured_output and no string result to parse' })
+      return gradedResult(envelope, req, { ok: false, error: `no structured_output and no string result to parse (${why})` })
     }
     try {
       output = JSON.parse(envelope.result)
     } catch {
-      return gradedResult(envelope, req, { ok: false, error: 'unparseable result JSON' })
+      return gradedResult(envelope, req, { ok: false, error: `unparseable result JSON (${why})` })
     }
   }
 
@@ -261,9 +263,60 @@ export function runClaude(req: EvalRequest, { spawn = defaultSpawn, cache }: Run
     return { ...failureNoMetrics(req, 'claude CLI unavailable'), skipped: true }
   }
 
-  const result = parseEnvelope(res.stdout, req)
+  let result = parseEnvelope(res.stdout, req)
+  if (!result.ok && result.skipped === undefined) {
+    result = retryStructured(req, res.stdout, result, spawn, spawnOpts)
+  }
   if (cache && key && result.ok) cache.set(key, result)
   return result
+}
+
+const RETRY_PROMPT =
+  'Your previous turn ended without emitting the required structured output. Evaluate the work you already completed in this session and emit the structured output now, conforming exactly to the required schema. Take no further actions.'
+
+/** Sum both calls' metrics so the retry cost is never hidden from the ledger. */
+function sumMetrics(first: EvalResult, second: EvalResult): EvalResult {
+  return {
+    ...second,
+    cost: first.cost + second.cost,
+    usage: {
+      inputTokens: first.usage.inputTokens + second.usage.inputTokens,
+      outputTokens: first.usage.outputTokens + second.usage.outputTokens,
+      cacheReadInputTokens: first.usage.cacheReadInputTokens + second.usage.cacheReadInputTokens,
+      cacheCreationInputTokens: first.usage.cacheCreationInputTokens + second.usage.cacheCreationInputTokens,
+    },
+    durationMs: first.durationMs + second.durationMs,
+    apiDurationMs: first.apiDurationMs + second.apiDurationMs,
+    numTurns: first.numTurns + second.numTurns,
+  }
+}
+
+/**
+ * One schema-forced `--resume` follow-up when a success envelope ends without
+ * usable structured output; claude errors and spawn failures never retry.
+ */
+function retryStructured(req: EvalRequest, stdout: string, first: EvalResult, spawn: Spawn, spawnOpts: SpawnOptions): EvalResult {
+  let envelope: Envelope
+  try {
+    envelope = JSON.parse(stdout) as Envelope
+  } catch {
+    return first
+  }
+  if (envelope.is_error === true || (envelope.subtype !== undefined && envelope.subtype !== 'success')) return first
+  const sessionId = envelope.session_id
+  if (typeof sessionId !== 'string' || sessionId === '') return first
+
+  let res: SpawnResult
+  try {
+    res = spawn('claude', [...buildArgs(req), '--resume', sessionId], RETRY_PROMPT, spawnOpts)
+  } catch {
+    return first
+  }
+  if (res.errorCode !== undefined || (res.signal !== undefined && res.signal !== null) || res.stdout.trim() === '') return first
+
+  const second = parseEnvelope(res.stdout, req)
+  if (!second.ok) return sumMetrics(first, { ...first, cost: second.cost, usage: second.usage, durationMs: second.durationMs, apiDurationMs: second.apiDurationMs, numTurns: second.numTurns })
+  return sumMetrics(first, second)
 }
 
 /** Probe whether the `claude` CLI is invokable via `claude --version`. */

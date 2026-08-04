@@ -1,23 +1,11 @@
 {
   "PLAN_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "deliverables",
-      "summary"
-    ],
     "properties": {
       "deliverables": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "file",
-            "title",
-            "deps"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -34,13 +22,25 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "required": [
+            "id",
+            "file",
+            "title",
+            "deps"
+          ],
+          "additionalProperties": false
         }
       },
       "summary": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "deliverables",
+      "summary"
+    ],
+    "additionalProperties": false
   },
   "FINDINGS_SCHEMA": {
     "type": "object",
@@ -173,41 +173,46 @@
     ],
     "additionalProperties": false
   },
-  "REFUTE_SCHEMA": {
+  "VERIFY_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "verdict",
-      "confidence",
-      "evidence"
-    ],
     "properties": {
-      "verdict": {
-        "type": "string",
-        "enum": [
-          "confirmed",
-          "refuted",
-          "uncertain"
-        ]
+      "verdicts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The adjudicated finding's id."
+            },
+            "verdict": {
+              "type": "string",
+              "enum": [
+                "confirmed",
+                "plausible",
+                "refuted"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "evidence": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "verdict",
+            "confidence",
+            "evidence"
+          ],
+          "additionalProperties": false,
+          "description": "One per-finding verdict cast by the verify-consolidate agent."
+        },
+        "description": "One verdict per gating finding adjudicated this round."
       },
-      "confidence": {
-        "type": "number",
-        "minimum": 0,
-        "maximum": 100
-      },
-      "evidence": {
-        "type": "string"
-      }
-    }
-  },
-  "CONSOLIDATE_SCHEMA": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "new_confirmed_ids",
-      "duplicate_ids"
-    ],
-    "properties": {
       "new_confirmed_ids": {
         "type": "array",
         "items": {
@@ -220,27 +225,21 @@
           "type": "string"
         }
       }
-    }
+    },
+    "required": [
+      "verdicts",
+      "new_confirmed_ids",
+      "duplicate_ids"
+    ],
+    "additionalProperties": false
   },
   "SYNTH_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "addenda",
-      "summary"
-    ],
     "properties": {
       "addenda": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "deliverableId",
-            "sourcePr",
-            "crossDeliverable",
-            "tasks"
-          ],
           "properties": {
             "deliverableId": {
               "type": "string"
@@ -257,23 +256,28 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "required": [
+            "deliverableId",
+            "sourcePr",
+            "crossDeliverable",
+            "tasks"
+          ],
+          "additionalProperties": false
         }
       },
       "summary": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "addenda",
+      "summary"
+    ],
+    "additionalProperties": false
   },
   "IMPLEMENT_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "status",
-      "summary",
-      "validations_green",
-      "blocker"
-    ],
     "properties": {
       "status": {
         "type": "string",
@@ -294,34 +298,22 @@
           "null"
         ]
       }
-    }
+    },
+    "required": [
+      "status",
+      "summary",
+      "validations_green",
+      "blocker"
+    ],
+    "additionalProperties": false
   },
   "WAVE_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "items",
-      "remaining",
-      "blocked"
-    ],
     "properties": {
       "items": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "repo",
-            "repoRoot",
-            "validations",
-            "planFile",
-            "worktree",
-            "branch",
-            "base",
-            "resumeNote",
-            "pr"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -363,8 +355,64 @@
               ],
               "description": "the node's `pr:` frontmatter URL, null for a pre-PR node"
             }
-          }
+          },
+          "required": [
+            "id",
+            "repo",
+            "repoRoot",
+            "validations",
+            "planFile",
+            "worktree",
+            "branch",
+            "base",
+            "resumeNote",
+            "pr"
+          ],
+          "additionalProperties": false
         }
+      },
+      "dag": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remaining": {
+            "type": "number"
+          },
+          "blocked": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "blockedOn": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "blockedOn"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ready",
+          "remaining",
+          "blocked"
+        ],
+        "additionalProperties": false,
+        "description": "Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes."
       },
       "remaining": {
         "type": "number"
@@ -373,11 +421,6 @@
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "blockedOn"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -388,27 +431,30 @@
                 "type": "string"
               }
             }
-          }
+          },
+          "required": [
+            "id",
+            "blockedOn"
+          ],
+          "additionalProperties": false
         }
       }
-    }
+    },
+    "required": [
+      "items",
+      "dag",
+      "remaining",
+      "blocked"
+    ],
+    "additionalProperties": false
   },
   "APPLY_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "applied"
-    ],
     "properties": {
       "applied": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "status"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -421,30 +467,34 @@
                 "pr-open"
               ]
             }
-          }
+          },
+          "required": [
+            "id",
+            "status"
+          ],
+          "additionalProperties": false
         }
       }
-    }
+    },
+    "required": [
+      "applied"
+    ],
+    "additionalProperties": false
   },
   "APPROVE_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "changed"
-    ],
     "properties": {
       "changed": {
         "type": "boolean"
       }
-    }
+    },
+    "required": [
+      "changed"
+    ],
+    "additionalProperties": false
   },
   "PROBE_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "remaining",
-      "notDone"
-    ],
     "properties": {
       "remaining": {
         "type": "number"
@@ -455,27 +505,20 @@
           "type": "string"
         }
       }
-    }
+    },
+    "required": [
+      "remaining",
+      "notDone"
+    ],
+    "additionalProperties": false
   },
   "PR_SCHEMA": {
     "type": "object",
-    "additionalProperties": false,
-    "required": [
-      "prs",
-      "summary"
-    ],
     "properties": {
       "prs": {
         "type": "array",
         "items": {
           "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "id",
-            "url",
-            "skipped",
-            "reason"
-          ],
           "properties": {
             "id": {
               "type": "string"
@@ -495,12 +538,24 @@
                 "null"
               ]
             }
-          }
+          },
+          "required": [
+            "id",
+            "url",
+            "skipped",
+            "reason"
+          ],
+          "additionalProperties": false
         }
       },
       "summary": {
         "type": "string"
       }
-    }
+    },
+    "required": [
+      "prs",
+      "summary"
+    ],
+    "additionalProperties": false
   }
 }

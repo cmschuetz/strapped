@@ -18,8 +18,8 @@
 import type { EvalCase } from '../../case.ts'
 import { plannerCase } from './planner.case.ts'
 import { reviewerCase } from './reviewer.case.ts'
-import { refuterCase } from './refuter.case.ts'
+import { verifierCase } from './verifier.case.ts'
 import { implementerCase } from './implementer.case.ts'
 
 /** The suite the CLI `--suite` loads (`cases` is the magic export name). */
-export const cases: EvalCase[] = [plannerCase, reviewerCase, refuterCase, implementerCase]
+export const cases: EvalCase[] = [plannerCase, reviewerCase, verifierCase, implementerCase]

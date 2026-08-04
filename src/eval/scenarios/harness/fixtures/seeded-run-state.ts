@@ -12,7 +12,7 @@ export interface SeedRunState {
   files: Record<string, string>
 }
 
-function manifest(slug: string, seed: number, codeRounds: number, deliverableFile: string): string {
+function manifest(slug: string, seed: number, planRounds: number, codeRounds: number, deliverableFile: string): string {
   return `---
 slug: ${slug}
 source_plan: plans/${slug}.md
@@ -20,7 +20,7 @@ created: 2026-07-29
 status: approved
 seed: ${seed}
 budgets:
-  plan_rounds: 1
+  plan_rounds: ${planRounds}
   code_rounds: ${codeRounds}
   confidence_min: 70
 repos:
@@ -115,6 +115,45 @@ must not be touched.
 - Style cleanup of any kind — the quirk files are intentional and permitted.
 `
 
+const ZERO_ROUNDS_DELIVERABLE = `---
+id: D1
+title: Add a subtract function to the calc fixture
+deps: []
+repo: calc
+status: pending
+branch: strapped/zero-rounds/D1-subtract
+base: main
+worktree: null
+pr: null
+review_rounds_used: 0
+feedback_rounds_used: 0
+parked_reason: null
+estimated_diff_lines: 10
+---
+## Context
+The calc fixture is a tiny bun project: src/calc.ts exports \`add\`, covered by
+tests/calc.test.ts (\`bun test\`). The repo CLAUDE.md rules apply: no code
+comments, explicit return types on exports, every export tested.
+
+## Files to touch
+- src/calc.ts — add the subtract function
+- tests/calc.test.ts — add its covering test
+
+## Implementation steps
+1. Export \`subtract(a: number, b: number): number\` returning \`a - b\` from src/calc.ts.
+2. Add a test asserting \`subtract(5, 3)\` returns 2.
+
+## Acceptance criteria
+- AC1: the exported \`subtract(5, 3)\` returns 2.
+- AC2: \`bun test\` passes in the worktree.
+
+## Tests
+- tests/calc.test.ts — "subtract subtracts" covering AC1/AC2.
+
+## Out of scope
+- Anything beyond the subtract function and its test.
+`
+
 function research(slug: string, focus: string): string {
   return `# Research digest — ${slug}
 
@@ -126,9 +165,20 @@ The calc fixture is a tiny bun project; validations are \`bun test\`. ${focus}
 export function implementOnlySeed(): SeedRunState {
   return {
     files: {
-      'manifest.md': manifest('implement-only', 13, 1, 'deliverables/D1-subtract.md'),
+      'manifest.md': manifest('implement-only', 13, 1, 1, 'deliverables/D1-subtract.md'),
       'deliverables/D1-subtract.md': IMPLEMENT_ONLY_DELIVERABLE,
       'research.md': research('implement-only', 'The only work is D1: add a subtract function plus its test.'),
+    },
+  }
+}
+
+/** Approved manifest + pending D1 (+ research stub) for the zero-rounds scenario (code_rounds 0). */
+export function zeroRoundsSeed(): SeedRunState {
+  return {
+    files: {
+      'manifest.md': manifest('zero-rounds', 15, 0, 0, 'deliverables/D1-subtract.md'),
+      'deliverables/D1-subtract.md': ZERO_ROUNDS_DELIVERABLE,
+      'research.md': research('zero-rounds', 'The only work is D1: add a subtract function plus its test. The review budget is 0 — no adversarial review runs.'),
     },
   }
 }
@@ -137,7 +187,7 @@ export function implementOnlySeed(): SeedRunState {
 export function reviewLoopSeed(): SeedRunState {
   return {
     files: {
-      'manifest.md': manifest('review-loop', 14, 2, 'deliverables/D1-fix-defects.md'),
+      'manifest.md': manifest('review-loop', 14, 1, 2, 'deliverables/D1-fix-defects.md'),
       'deliverables/D1-fix-defects.md': REVIEW_LOOP_DELIVERABLE,
       'research.md': research(
         'review-loop',

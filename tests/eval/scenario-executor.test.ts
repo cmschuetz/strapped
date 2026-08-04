@@ -17,8 +17,12 @@ const NO_FINDINGS = {
   rule_checklist: [{ rule: 'A1', verdict: 'pass', evidence: 'ok' }],
   ac_checklist: [],
 }
-const EMPTY_CONSOLIDATION = { new_confirmed_ids: [], duplicate_ids: [] }
-const CONFIRMED = { verdict: 'confirmed', confidence: 95, evidence: 'real' }
+const EMPTY_VERIFY = { verdicts: [], new_confirmed_ids: [], duplicate_ids: [] }
+const CONFIRMED_VERIFY = {
+  verdicts: [{ id: 'r1-a-f1', verdict: 'confirmed', confidence: 95, evidence: 'real' }],
+  new_confirmed_ids: ['r1-a-f1'],
+  duplicate_ids: [],
+}
 const PLAN = {
   deliverables: [{ id: 'D1', file: 'deliverables/D1-thing.md', title: 'Thing', deps: [] }],
   summary: 'one deliverable covering the thing',
@@ -109,15 +113,15 @@ const FULL_CHAIN_HANDLERS = {
   planner: PLAN,
   'plan-review:a:r1': NO_FINDINGS,
   'plan-review:b:r1': NO_FINDINGS,
-  'consolidate:r1': EMPTY_CONSOLIDATION,
+  'verify:r1': EMPTY_VERIFY,
   approve: { changed: true },
-  'coordinate:1': { items: [waveItem('D1')], remaining: 1, blocked: [] },
+  'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
   'implement:D1': IMPLEMENTED,
   'review:D1:a:r1': NO_FINDINGS,
   'review:D1:b:r1': NO_FINDINGS,
-  'consolidate:D1:r1': EMPTY_CONSOLIDATION,
+  'verify:D1:r1': EMPTY_VERIFY,
   'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-  'coordinate:2': { items: [], remaining: 0, blocked: [] },
+  'coordinate:2': { items: [], dag: { ready: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
   'pr-create': PR_RESULT,
 }
 
@@ -200,7 +204,7 @@ test('stage subset: stages ["plan"] dispatches only the plan stage', async () =>
       planner: PLAN,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
-      'consolidate:r1': EMPTY_CONSOLIDATION,
+      'verify:r1': EMPTY_VERIFY,
     })
   )
   assert.deepEqual(scripted.unexpected, [])
@@ -237,8 +241,7 @@ test('a failed agent returns null into the workflow and still lands in the ledge
       planner: PLAN,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
-      'refute:r1-a-f1': CONFIRMED,
-      'consolidate:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
+      'verify:r1': CONFIRMED_VERIFY,
     }),
     'revise:r1': errorEnvelope('error_during_execution'),
   })
@@ -274,18 +277,17 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
   const { outcome, scripted } = await runAndClean(
     scenario,
     envelopes({
-      'coordinate:1': { items: [waveItem('D1')], remaining: 1, blocked: [] },
+      'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
       'implement:D1': IMPLEMENTED,
       'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
-      'refute:D1:r1-a-f1': CONFIRMED,
-      'consolidate:D1:r1': { new_confirmed_ids: ['r1-a-f1'], duplicate_ids: [] },
+      'verify:D1:r1': CONFIRMED_VERIFY,
       'fix:D1:r1': IMPLEMENTED,
       'review:D1:a:r2': NO_FINDINGS,
       'review:D1:b:r2': NO_FINDINGS,
-      'consolidate:D1:r2': EMPTY_CONSOLIDATION,
+      'verify:D1:r2': EMPTY_VERIFY,
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [], remaining: 0, blocked: [] },
+      'coordinate:2': { items: [], dag: { ready: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
     })
   )
   assert.deepEqual(scripted.unexpected, [])
@@ -302,7 +304,7 @@ test('modelByLabel overrides the scenario model per agent label', async () => {
       planner: PLAN,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
-      'consolidate:r1': EMPTY_CONSOLIDATION,
+      'verify:r1': EMPTY_VERIFY,
     })
   )
   assert.deepEqual(scripted.unexpected, [])
@@ -327,9 +329,9 @@ test('the agent label travels on the spawn env for scripted dispatch', async () 
       planner: PLAN,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
-      'consolidate:r1': EMPTY_CONSOLIDATION,
+      'verify:r1': EMPTY_VERIFY,
     })
   )
   const labels = scripted.calls.map(c => c.opts?.env?.[AGENT_LABEL_ENV])
-  assert.deepEqual(labels, ['planner', 'plan-review:a:r1', 'plan-review:b:r1', 'consolidate:r1'])
+  assert.deepEqual(labels, ['planner', 'plan-review:a:r1', 'plan-review:b:r1', 'verify:r1'])
 })

@@ -30,6 +30,7 @@ import { fullPipelineScenario } from './full-pipeline.scenario.ts'
 import { implementOnlyScenario } from './implement-only.scenario.ts'
 import { planOnlyScenario } from './plan-only.scenario.ts'
 import { reviewLoopScenario } from './review-loop.scenario.ts'
+import { zeroRoundsScenario } from './zero-rounds.scenario.ts'
 
 /** The suite the CLI `--scenarios` loads (`scenarios` is the magic export name). */
 export const scenarios: Scenario[] = [
@@ -37,4 +38,5 @@ export const scenarios: Scenario[] = [
   planOnlyScenario,
   implementOnlyScenario,
   reviewLoopScenario,
+  zeroRoundsScenario,
 ]

@@ -1,5 +1,5 @@
 // A compact but realistic source-plan ask used by the planner case (and reused
-// as the "original ask" the reviewer/refuter check the fixture plan against).
+// as the "original ask" the reviewer/verifier check the fixture plan against).
 // Small enough to run fast and cache well; concrete enough that a planner must
 // split it into more than one deliverable.
 

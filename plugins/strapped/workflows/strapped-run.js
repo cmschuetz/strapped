@@ -392,36 +392,46 @@ var FINDINGS_SCHEMA = {
   ],
   additionalProperties: false
 };
-var REFUTE_SCHEMA = {
+var VERIFY_SCHEMA = {
   type: "object",
   properties: {
-    verdict: {
-      type: "string",
-      enum: [
-        "confirmed",
-        "refuted",
-        "uncertain"
-      ]
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string",
+            description: "The adjudicated finding's id."
+          },
+          verdict: {
+            type: "string",
+            enum: [
+              "confirmed",
+              "plausible",
+              "refuted"
+            ]
+          },
+          confidence: {
+            type: "number",
+            minimum: 0,
+            maximum: 100
+          },
+          evidence: {
+            type: "string"
+          }
+        },
+        required: [
+          "id",
+          "verdict",
+          "confidence",
+          "evidence"
+        ],
+        additionalProperties: false,
+        description: "One per-finding verdict cast by the verify-consolidate agent."
+      },
+      description: "One verdict per gating finding adjudicated this round."
     },
-    confidence: {
-      type: "number",
-      minimum: 0,
-      maximum: 100
-    },
-    evidence: {
-      type: "string"
-    }
-  },
-  required: [
-    "verdict",
-    "confidence",
-    "evidence"
-  ],
-  additionalProperties: false
-};
-var CONSOLIDATE_SCHEMA = {
-  type: "object",
-  properties: {
     new_confirmed_ids: {
       type: "array",
       items: {
@@ -436,6 +446,7 @@ var CONSOLIDATE_SCHEMA = {
     }
   },
   required: [
+    "verdicts",
     "new_confirmed_ids",
     "duplicate_ids"
   ],
@@ -579,6 +590,49 @@ var WAVE_SCHEMA = {
         additionalProperties: false
       }
     },
+    dag: {
+      type: "object",
+      properties: {
+        ready: {
+          type: "array",
+          items: {
+            type: "string"
+          }
+        },
+        remaining: {
+          type: "number"
+        },
+        blocked: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string"
+              },
+              blockedOn: {
+                type: "array",
+                items: {
+                  type: "string"
+                }
+              }
+            },
+            required: [
+              "id",
+              "blockedOn"
+            ],
+            additionalProperties: false
+          }
+        }
+      },
+      required: [
+        "ready",
+        "remaining",
+        "blocked"
+      ],
+      additionalProperties: false,
+      description: "Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes."
+    },
     remaining: {
       type: "number"
     },
@@ -607,6 +661,7 @@ var WAVE_SCHEMA = {
   },
   required: [
     "items",
+    "dag",
     "remaining",
     "blocked"
   ],
@@ -740,6 +795,10 @@ function digest(seen) {
 }
 async function runReviewLoop(cfg, opts) {
   const maxRounds = opts.maxRounds;
+  if (maxRounds === 0) {
+    log("review budget 0 — skipping adversarial review");
+    return { converged: true, rounds: 0, outstanding: [] };
+  }
   const artifactNounCap = opts.artifactNoun.charAt(0).toUpperCase() + opts.artifactNoun.slice(1);
   function reviewerPrompt(which, rules, seen2, round) {
     return `You are an adversarial plan reviewer with fresh context. Your job is to find real gaps between ${opts.artifactDescription} and the original ask, before any code is written.
@@ -768,16 +827,6 @@ Severity: "blocking" = the plan as written produces wrong or missing work; "conc
 
 You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.map((r) => r.id).join(", ")}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`;
   }
-  function refutePrompt(f) {
-    return `You are a skeptical verifier with fresh context. A plan reviewer claims the following gap in ${opts.refuteArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check the claim:
-${repoList(opts.repos)}
-
-Claim [${f.severity}] at ${f.location}: ${f.what}
-Why: ${f.why}
-Evidence: ${f.evidence}
-
-Your stance: this is NOT a real gap unless the documents prove otherwise. Read the ask and the ${opts.artifactNoun} files yourself — the claimed-missing item may be covered elsewhere in the ${opts.artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Return your verdict, a corrected confidence (0-100) that the gap is real, and one line of evidence.`;
-  }
   const seen = [];
   let converged = false;
   let roundsUsed = 0;
@@ -799,19 +848,30 @@ Your stance: this is NOT a real gap unless the documents prove otherwise. Read t
     const gating = allFindings.filter((f) => f.severity !== "suggestion");
     const suggestions = allFindings.filter((f) => f.severity === "suggestion");
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`);
-    const verified = await parallel(gating.map((f) => () => agent(refutePrompt(f), { label: `refute:${f.id}`, phase: "Verify", effort: "low", schema: REFUTE_SCHEMA }).then((v) => ({ ...f, refute: v }))));
-    const noVote = verified.filter((f) => f && !f.refute);
-    if (noVote.length)
-      log(`round ${roundLabel}: refuter cast no vote on ${noVote.length} finding(s) — excluded`);
-    const surviving = verified.filter(Boolean).filter((f) => f.refute && f.refute.verdict !== "refuted" && f.refute.confidence >= cfg.confidenceMin);
     const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`;
-    const consolidation = await agent(`You are consolidating verified plan-review findings for round ${roundLabel} of strapped run "${cfg.slug}". Round-record format: ${cfg.conventionsFile}.${confirmation ? `
-This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.` : ""}
+    const verification = await agent(gating.length === 0 ? `You are the record-writer for round ${roundLabel} of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review ${opts.verifyArtifactPhrase} and do NOT read the ${opts.artifactNoun} files — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
 
-Surviving verified findings:
-${JSON.stringify(surviving, null, 2)}
+Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion) and a body carrying the suggestions plus both rule checklists AND both AC/addendum checklists verbatim.
 
 Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+AC/addendum checklists: ${JSON.stringify(acChecklists, null, 2)}
+
+Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.` : `You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
+This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.` : ""}
+
+Plan reviewers claim the following gaps in ${opts.verifyArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check each claim:
+${repoList(opts.repos)}
+
+Gating findings to adjudicate:
+${JSON.stringify(gating, null, 2)}
+
+Verification stance, applied to each finding independently: it is NOT a real gap unless the documents prove otherwise. Read the ask and the ${opts.artifactNoun} files yourself — a claimed-missing item may be covered elsewhere in the ${opts.artifactNoun}, the assumption may actually hold in the codebase, or the claim may misread the ask. Cast one verdict per finding id — "confirmed" (the gap is proven real), "plausible" (credible but unproven), or "refuted" (not a real gap) — with a corrected confidence (0-100) that the gap is real and one line of evidence. A finding with verdict refuted, or confidence below ${cfg.confidenceMin}, does not survive.
+
+Suggestions (non-gating, never verified, record only):
 ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
@@ -823,14 +883,27 @@ ${digest(seen)}
 
 Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — read them.
 
-Tasks:
+Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
 2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
-3. Return the ids of truly-NEW confirmed findings and the duplicate ids.`, { label: `consolidate:r${roundLabel}`, phase: phaseLabel, effort: "low", schema: CONSOLIDATE_SCHEMA });
-    const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map((f) => f.id));
+3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`, { label: `verify:r${roundLabel}`, phase: phaseLabel, effort: "low", schema: VERIFY_SCHEMA });
+    if (!verification) {
+      if (gating.length)
+        log(`round ${roundLabel}: verifier cast no vote — ${gating.length} gating finding(s) excluded`);
+      return { newConfirmed: [], newIds: new Set, roundFile };
+    }
+    const verdictById = new Map(verification.verdicts.map((v) => [v.id, v]));
+    const noVote = gating.filter((f) => !verdictById.has(f.id));
+    if (noVote.length)
+      log(`round ${roundLabel}: verifier cast no vote on ${noVote.length} finding(s) — excluded`);
+    const surviving = gating.filter((f) => {
+      const v = verdictById.get(f.id);
+      return v !== undefined && v.verdict !== "refuted" && v.confidence >= cfg.confidenceMin;
+    });
+    const newIds = new Set(verification.new_confirmed_ids);
     const newConfirmed = surviving.filter((f) => newIds.has(f.id));
     log(`round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`);
-    return { newConfirmed, newIds, roundFile };
+    return { newConfirmed, newIds: new Set(newConfirmed.map((f) => f.id)), roundFile };
   }
   let lastRoundFixedAll = false;
   let revisionFailed = false;
@@ -910,7 +983,7 @@ ${JSON.stringify(a.comments, null, 2)}`,
     artifactDescription: "the amended deliverable set — every file in deliverables/ including the newly-added `## Feedback addendum` sections synthesized from the PR review comments",
     artifactLocation: "every file in deliverables/ including the newly-added `## Feedback addendum` sections synthesized from the PR review comments",
     artifactNoun: "deliverable set",
-    refuteArtifactPhrase: "the amended deliverable set",
+    verifyArtifactPhrase: "the amended deliverable set",
     roundFilePrefix: "feedback-round",
     maxRounds: cfg.planRounds,
     enumeratedItemsLabel: "FA",
@@ -970,15 +1043,6 @@ Report only real, evidenced issues. Severity: "blocking" = bug or guideline viol
 
 You MUST return a rule_checklist entry with a pass/violation/na verdict and one line of evidence for every assigned rule (${rules[which].map((r) => r.id).join(", ")}), the ac_checklist covering every AC (and addendum task) from step 1, plus your findings.`;
   }
-  function refutePrompt(f) {
-    return `You are a skeptical verifier with fresh context. A code reviewer claims the following issue in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
-
-Claim [${f.severity}] at ${f.location}: ${f.what}
-Why the reviewer thinks so: ${f.why}
-Their evidence: ${f.evidence}
-
-Your stance: this is NOT a real issue unless the code proves otherwise. Read the actual code in the worktree and try to refute the claim — look for handling the reviewer missed, misread control flow, or a claim about code that does not exist. Return your verdict, a corrected confidence (0-100) that the issue is real, and one line of evidence.`;
-  }
   const reviews = await parallel([
     () => agent(reviewerPrompt("a"), { label: `review:${item.id}:a:r${roundLabel}`, phase: "Review", schema: FINDINGS_SCHEMA }),
     () => agent(reviewerPrompt("b"), { label: `review:${item.id}:b:r${roundLabel}`, phase: "Review", schema: FINDINGS_SCHEMA })
@@ -990,18 +1054,29 @@ Your stance: this is NOT a real issue unless the code proves otherwise. Read the
   const gating = allFindings.filter((f) => f.severity !== "suggestion");
   const suggestions = allFindings.filter((f) => f.severity === "suggestion");
   log(`${item.id} round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`);
-  const verified = await parallel(gating.map((f) => () => agent(refutePrompt(f), { label: `refute:${item.id}:${f.id}`, phase: "Verify", effort: "low", schema: REFUTE_SCHEMA }).then((v) => ({ ...f, refute: v }))));
-  const surviving = verified.filter(Boolean).filter((f) => f.refute && f.refute.verdict !== "refuted" && f.refute.confidence >= cfg.confidenceMin);
-  const dropped = gating.length - surviving.length;
-  if (dropped > 0)
-    log(`${item.id} round ${roundLabel}: refute pass dropped ${dropped} finding(s)`);
   const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`;
-  const consolidation = await agent(`You are consolidating verified code-review findings for deliverable ${item.id}, round ${roundLabel}, of strapped run "${cfg.slug}". Follow the round-record format in ${cfg.conventionsFile}.
+  const verification = await agent(gating.length === 0 ? `You are the record-writer for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review the code and do NOT read the worktree — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
 
-Surviving verified findings (already passed the refute filter):
-${JSON.stringify(surviving, null, 2)}
+Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
 
 Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+AC/addendum checklists: ${JSON.stringify(acChecklists, null, 2)}
+
+Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.` : `You are the verify-consolidate agent for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
+This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW issue remains.` : ""}
+
+Code reviewers claim the following issues in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
+
+Gating findings to adjudicate:
+${JSON.stringify(gating, null, 2)}
+
+Verification stance, applied to each finding independently: it is NOT a real issue unless the code proves otherwise. Read the actual code in the worktree and try to refute each claim — look for handling the reviewer missed, misread control flow, or a claim about code that does not exist. Cast one verdict per finding id — "confirmed" (the issue is proven real), "plausible" (credible but unproven), or "refuted" (not a real issue) — with a corrected confidence (0-100) that the issue is real and one line of evidence. A finding with verdict refuted, or confidence below ${cfg.confidenceMin}, does not survive.
+
+Suggestions (non-gating, never verified, record only):
 ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
@@ -1013,11 +1088,24 @@ ${seenDigest || "(none — first round)"}
 
 Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-code-round-*${recordSuffix}.md — read them.
 
-Tasks:
+Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.
 2. Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, and the findings list (status: open for new confirmed, duplicate for duplicates). Body: full finding bodies (what/why/evidence/recommendation) plus the two rule checklists AND the two AC/addendum checklists (the per-item AC/addendum pass/violation/na verdicts).
-3. Return the ids of truly-NEW confirmed findings and the ids of duplicates.`, { label: `consolidate:${item.id}:r${roundLabel}`, phase: "Consolidate", effort: "low", schema: CONSOLIDATE_SCHEMA });
-  const newIds = new Set(consolidation ? consolidation.new_confirmed_ids : surviving.map((f) => f.id));
+3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`, { label: `verify:${item.id}:r${roundLabel}`, phase: "Verify", effort: "low", schema: VERIFY_SCHEMA });
+  if (!verification) {
+    if (gating.length)
+      log(`${item.id} round ${roundLabel}: verifier cast no vote — ${gating.length} gating finding(s) excluded`);
+    return { newConfirmed: [], suggestions, roundFile, converged: true };
+  }
+  const verdictById = new Map(verification.verdicts.map((v) => [v.id, v]));
+  const surviving = gating.filter((f) => {
+    const v = verdictById.get(f.id);
+    return v !== undefined && v.verdict !== "refuted" && v.confidence >= cfg.confidenceMin;
+  });
+  const dropped = gating.length - surviving.length;
+  if (dropped > 0)
+    log(`${item.id} round ${roundLabel}: verify pass dropped ${dropped} finding(s)`);
+  const newIds = new Set(verification.new_confirmed_ids);
   const newConfirmed = surviving.filter((f) => newIds.has(f.id));
   log(`${item.id} round ${roundLabel}: ${newConfirmed.length} NEW confirmed finding(s)`);
   return { newConfirmed, suggestions, roundFile, converged: newConfirmed.length === 0 };
@@ -1099,6 +1187,10 @@ async function reviewFixLoop(cfg, state, recordSuffix) {
   if (state.outcome === "parked")
     return { ...state, suggestions: [] };
   const item = state.item;
+  if (cfg.codeRounds === 0) {
+    log(`${item.id}: code-review budget 0 — skipping adversarial review`);
+    return { item, outcome: "done", roundsUsed: 0, summary: state.summary, suggestions: [] };
+  }
   const seen = [];
   const suggestions = [];
   let converged = false;
@@ -1182,7 +1274,7 @@ ${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from exi
    - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
    - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
    - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`;
+Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`dag\` = an object with EXACTLY three keys — \`ready\`, \`remaining\`, \`blocked\` — copied unchanged from step 1's dag output, NO other dag fields (recorded for auditing; the ledger-derived values below stay authoritative on feedback passes), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`;
   }
   return `${header}
 1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ""}\` — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself.
@@ -1193,7 +1285,7 @@ Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile a
    - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
    - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), the dag's \`remaining\` verbatim, and its \`blocked\` list verbatim. When \`remaining\` is 0, return items: [].`;
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY three keys — \`ready\`, \`remaining\`, \`blocked\` — each value copied unchanged from the dag command's printed JSON; include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. Also return top-level \`remaining\` and \`blocked\` mirroring those same dag values. When the dag's \`remaining\` is 0, return items: [].`;
 }
 function applyPrompt(cfg, pass, results, { addendumMode, roundsField }) {
   const stateScript = cfg.scripts.state;
@@ -1236,22 +1328,46 @@ async function implementStage(cfg) {
   let maxPasses = Infinity;
   while (pass < maxPasses) {
     pass++;
-    const wave = await agent(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
+    let wave = await agent(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
       label: `coordinate:${pass}`,
       phase: "Implement",
       schema: WAVE_SCHEMA
     });
     if (!wave)
       throw new Error(`implement stage: coordinator agent failed on pass ${pass}`);
+    if (!addendumMode) {
+      const matchesDag = (w) => {
+        const itemIds = [...new Set(w.items.map((i) => i.id))].sort();
+        const readyIds = [...new Set(w.dag.ready)].sort();
+        return itemIds.length === readyIds.length && itemIds.every((id, i) => id === readyIds[i]);
+      };
+      if (!matchesDag(wave)) {
+        log(`pass ${pass}: coordinator wave [${wave.items.map((i) => i.id).join(", ")}] does not match dag ready [${wave.dag.ready.join(", ")}] — re-dispatching once`);
+        const mismatchNote = `
+
+RETRY — your previous wave was REJECTED: its items [${wave.items.map((i) => i.id).join(", ")}] did not match its own dag paste's ready [${wave.dag.ready.join(", ")}]. Return EXACTLY one items entry per node in the dag command's ready list — no omissions, no extras.`;
+        wave = await agent(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes) + mismatchNote, {
+          label: `coordinate:${pass}:retry`,
+          phase: "Implement",
+          schema: WAVE_SCHEMA
+        });
+        if (!wave)
+          throw new Error(`implement stage: coordinator agent failed on pass ${pass} retry`);
+        if (!matchesDag(wave)) {
+          throw new Error(`implement stage: coordinator wave [${wave.items.map((i) => i.id).join(", ")}] does not match its own dag ready [${wave.dag.ready.join(", ")}] after a retry on pass ${pass}`);
+        }
+      }
+    }
+    const remaining = addendumMode ? wave.remaining : wave.dag.remaining;
     if (pass === 1)
-      maxPasses = wave.remaining + 1;
-    blocked = wave.blocked;
-    if (wave.remaining === 0) {
+      maxPasses = remaining + 1;
+    blocked = addendumMode ? wave.blocked : wave.dag.blocked;
+    if (remaining === 0) {
       allDone = true;
       break;
     }
     if (!wave.items.length) {
-      log(`pass ${pass}: no dispatchable node with ${wave.remaining} remaining — stopping`);
+      log(`pass ${pass}: no dispatchable node with ${remaining} remaining — stopping`);
       break;
     }
     log(`pass ${pass} wave: ${wave.items.map((i) => i.id).join(", ")}`);
@@ -1297,7 +1413,7 @@ Procedure:
 1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
 2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
 3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
-4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body: Context slice from your research, Files to touch, Implementation steps, Acceptance criteria, Tests, Out of scope). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
+4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (ids are EXACTLY D1, D2, D3, ... — capital D then the ordinal, in filenames, frontmatter, branches, and deps alike) (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body sections under these EXACT verbatim headers — \`## Context\`, \`## Files to touch\`, \`## Implementation steps\`, \`## Acceptance criteria\`, \`## Tests\`, \`## Out of scope\` — the review machinery keys on the \`## Acceptance criteria\` header literally, so no case or wording variation). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
 5. Cross-repo deps are ordering-only, NEVER a code dependency: a cross-repo child bases on its own repo's main and does not have its parent's unmerged code. Reject or restructure any plan where a cross-repo child has a true code dependency on its parent — either require the shared change to merge to the parent repo's main first, or keep both sides in the same repo/chain.
 6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, budgets — record the EFFECTIVE budgets of this run: plan_rounds: ${cfg.planRounds}, code_rounds: ${cfg.codeRounds}, confidence_min: ${cfg.confidenceMin} — the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
 7. After all plan artifacts are written, run \`node ${stateScript} commit ${cfg.dir}\` via Bash so the run's state root is git-backed from birth (it git-inits the state root if absent and commits the artifacts). Best-effort: proceed even if it reports an error.
@@ -1312,7 +1428,7 @@ Return the deliverable list and a one-paragraph summary.`, { label: "planner", s
     artifactDescription: "a produced implementation plan",
     artifactLocation: "manifest.md, research.md, and every file in deliverables/",
     artifactNoun: "plan",
-    refuteArtifactPhrase: "the implementation plan",
+    verifyArtifactPhrase: "the implementation plan",
     roundFilePrefix: "plan-round",
     maxRounds: cfg.planRounds,
     enumeratedItemsLabel: "AC",

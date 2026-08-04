@@ -179,39 +179,47 @@ export const FINDINGS_SCHEMA = {
   "additionalProperties": false
 }
 
-/** Derived from the `RefuteResult` interface in types.ts. */
-export const REFUTE_SCHEMA = {
+/** Derived from the `VerifyResult` interface in types.ts. */
+export const VERIFY_SCHEMA = {
   "type": "object",
   "properties": {
-    "verdict": {
-      "type": "string",
-      "enum": [
-        "confirmed",
-        "refuted",
-        "uncertain"
-      ]
+    "verdicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The adjudicated finding's id."
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "plausible",
+              "refuted"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "evidence": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "verdict",
+          "confidence",
+          "evidence"
+        ],
+        "additionalProperties": false,
+        "description": "One per-finding verdict cast by the verify-consolidate agent."
+      },
+      "description": "One verdict per gating finding adjudicated this round."
     },
-    "confidence": {
-      "type": "number",
-      "minimum": 0,
-      "maximum": 100
-    },
-    "evidence": {
-      "type": "string"
-    }
-  },
-  "required": [
-    "verdict",
-    "confidence",
-    "evidence"
-  ],
-  "additionalProperties": false
-}
-
-/** Derived from the `ConsolidateResult` interface in types.ts. */
-export const CONSOLIDATE_SCHEMA = {
-  "type": "object",
-  "properties": {
     "new_confirmed_ids": {
       "type": "array",
       "items": {
@@ -226,6 +234,7 @@ export const CONSOLIDATE_SCHEMA = {
     }
   },
   "required": [
+    "verdicts",
     "new_confirmed_ids",
     "duplicate_ids"
   ],
@@ -375,6 +384,49 @@ export const WAVE_SCHEMA = {
         "additionalProperties": false
       }
     },
+    "dag": {
+      "type": "object",
+      "properties": {
+        "ready": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "remaining": {
+          "type": "number"
+        },
+        "blocked": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "blockedOn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "blockedOn"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "ready",
+        "remaining",
+        "blocked"
+      ],
+      "additionalProperties": false,
+      "description": "Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes."
+    },
     "remaining": {
       "type": "number"
     },
@@ -403,6 +455,7 @@ export const WAVE_SCHEMA = {
   },
   "required": [
     "items",
+    "dag",
     "remaining",
     "blocked"
   ],

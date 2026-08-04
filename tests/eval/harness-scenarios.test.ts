@@ -34,6 +34,7 @@ import { fullPipelineScenario } from '../../src/eval/scenarios/harness/full-pipe
 import { planOnlyScenario } from '../../src/eval/scenarios/harness/plan-only.scenario.ts'
 import { implementOnlyScenario } from '../../src/eval/scenarios/harness/implement-only.scenario.ts'
 import { reviewLoopScenario } from '../../src/eval/scenarios/harness/review-loop.scenario.ts'
+import { zeroRoundsScenario } from '../../src/eval/scenarios/harness/zero-rounds.scenario.ts'
 import { CHURN_THRESHOLD_LINES, NIT_SITES } from '../../src/eval/scenarios/harness/fixtures/defect-repo.ts'
 import { readFrontmatterFile, writeFrontmatterFile, type Die } from '../../src/lib/frontmatter.ts'
 import type { GradeResult } from '../../src/eval/grade.ts'
@@ -50,7 +51,7 @@ const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
-const ALL_IDS = ['full-pipeline', 'implement-only', 'plan-only', 'review-loop']
+const ALL_IDS = ['full-pipeline', 'implement-only', 'plan-only', 'review-loop', 'zero-rounds']
 
 const raise: Die = msg => {
   throw new Error(msg)
@@ -349,7 +350,7 @@ function stubSpawn(): Spawn {
 // --- scenario well-formedness ---------------------------------------------------
 
 test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
-  assert.equal(scenarios.length, 4)
+  assert.equal(scenarios.length, 5)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   for (const s of scenarios) {
@@ -392,11 +393,12 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.equal(planOnlyScenario.seedRunState, undefined)
   assert.ok(implementOnlyScenario.seedRunState !== undefined)
   assert.ok(reviewLoopScenario.seedRunState !== undefined)
+  assert.ok(zeroRoundsScenario.seedRunState !== undefined)
 })
 
 // --- loader + filter through the CLI --------------------------------------------
 
-test('loadScenarios loads exactly the four harness scenarios from the suite directory', async () => {
+test('loadScenarios loads exactly the five harness scenarios from the suite directory', async () => {
   const loaded = await loadScenarios(SCENARIOS_DIR)
   assert.deepEqual(loaded.map(s => s.id).sort(), ALL_IDS)
 })
@@ -406,6 +408,7 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(planOnlyScenario))
   assert.ok(scenarios.includes(implementOnlyScenario))
   assert.ok(scenarios.includes(reviewLoopScenario))
+  assert.ok(scenarios.includes(zeroRoundsScenario))
 })
 
 test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
@@ -420,7 +423,7 @@ test('the CLI loads the suite directory and --filter narrows by id and by tag', 
   assert.deepEqual(rowsOf(byId.output), ['plan-only'])
 
   const byTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'implement', '--json'], { spawn: stubSpawn() })
-  assert.deepEqual(rowsOf(byTag.output), ['implement-only', 'review-loop'])
+  assert.deepEqual(rowsOf(byTag.output), ['implement-only', 'review-loop', 'zero-rounds'])
 
   const byLoopTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'review-loop', '--json'], {
     spawn: stubSpawn(),
@@ -499,9 +502,66 @@ test('implement-only: canned good grades 1/1; a not-done deliverable grades belo
   }
 })
 
+/** Build the canned GOOD zero-rounds outcome: done, zero rounds, NO round record. */
+function goodZeroRounds(): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome } {
+  const sandbox = buildSandbox(zeroRoundsScenario)
+  const wt = addWorktree(sandbox, 'strapped/zero-rounds/D1-subtract')
+  write(join(wt, 'src', 'calc.ts'), GOOD_CALC)
+  write(join(wt, 'tests', 'calc.test.ts'), GOOD_CALC_TEST)
+  commitWorktree(wt, 'feat(zero-rounds): add subtract')
+  patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D1-subtract.md'), {
+    status: 'done',
+    worktree: wt,
+    review_rounds_used: 0,
+  })
+  patchFrontmatter(join(sandbox.runDir, 'manifest.md'), { status: 'implementing' })
+  commitState(sandbox)
+  const runResult = runResultFor(zeroRoundsScenario, { implement: IMPLEMENT_RESULT })
+  return { sandbox, outcome: outcomeFor(zeroRoundsScenario, sandbox, runResult) }
+}
+
+test('zero-rounds: canned good grades 1/1; a round record, or a non-done status, fails its grader', () => {
+  const { sandbox, outcome } = goodZeroRounds()
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+
+    // Any round record at budget 0 means review ran — the cost floor is broken.
+    write(join(sandbox.runDir, 'reviews', 'D1-code-round-1.md'), ROUND_RECORD)
+    const withRecord = grade(outcome)
+    assert.ok(withRecord.adherence < 1, 'a round record at budget 0 must dent adherence')
+    assert.equal(byName(withRecord.adherenceGrades, 'adherence:no-round-records').pass, false)
+    unlinkSync(join(sandbox.runDir, 'reviews', 'D1-code-round-1.md'))
+
+    // A green node the harness failed to send to done (e.g. the old
+    // budget-exhausted park path) fails both axes.
+    patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D1-subtract.md'), { status: 'parked' })
+    const notDone = grade(outcome)
+    assert.ok(notDone.correctness < 1)
+    assert.equal(byName(notDone.correctnessGrades, 'done-with-zero-rounds').pass, false)
+    assert.ok(notDone.adherence < 1)
+    assert.equal(byName(notDone.adherenceGrades, 'adherence:deliverable-end-state').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('zero-rounds: a non-zero review_rounds_used fails done-with-zero-rounds', () => {
+  const { sandbox, outcome } = goodZeroRounds()
+  try {
+    patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D1-subtract.md'), { review_rounds_used: 1 })
+    const graded = grade(outcome)
+    assert.ok(graded.correctness < 1)
+    assert.equal(byName(graded.correctnessGrades, 'done-with-zero-rounds').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
 // --- seeded state stands on the real state.mjs -----------------------------------
 
-for (const scenario of [implementOnlyScenario, reviewLoopScenario]) {
+for (const scenario of [implementOnlyScenario, reviewLoopScenario, zeroRoundsScenario]) {
   test(`${scenario.id}: the seeded runDir is accepted by the real state.mjs dag with D1 ready`, () => {
     const sandbox = buildSandbox(scenario)
     try {
@@ -643,6 +703,16 @@ test('CONTRIBUTING.md documents the eval layers and no longer claims only --ab g
   assert.match(contributing, /--scenarios src\/eval\/scenarios\/harness/)
   assert.match(contributing, /SERIALIZED sum of agent calls/)
   assert.match(contributing, /Workflow nesting limit/)
+})
+
+test('CONTRIBUTING.md documents the per-node baseline-vs-candidate runbook with --deployable scoped', () => {
+  const contributing = readFileSync(CONTRIBUTING_MD, 'utf8')
+  assert.match(contributing, /Per-node baseline-vs-candidate runbook/)
+  assert.match(contributing, /git worktree add .*baseline/)
+  assert.match(contributing, /self-consistent/)
+  assert.match(contributing, /--compare .*--tolerance/)
+  assert.match(contributing, /--deployable/)
+  assert.match(contributing, /contract-compatible/)
 })
 
 test('CLAUDE.md documents the scenario layer, the compare workflow, and the cost warning', () => {
