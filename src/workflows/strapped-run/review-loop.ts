@@ -123,8 +123,24 @@ You MUST return a rule_checklist verdict (pass/violation/na + one line of eviden
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
 
     const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`
+    // Zero gating findings → nothing to adjudicate or dedup: a record-writer
+    // fast path replaces the skeptical-verifier procedure (clean rounds are the
+    // common case and were paying ~3x the consolidation turns).
     const verification = await agent<VerifyResult>(
-      `You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
+      gating.length === 0
+        ? `You are the record-writer for round ${roundLabel} of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review ${opts.verifyArtifactPhrase} and do NOT read the ${opts.artifactNoun} files — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
+
+Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map(r => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map(r => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion) and a body carrying the suggestions plus both rule checklists AND both AC/addendum checklists verbatim.
+
+Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+AC/addendum checklists: ${JSON.stringify(acChecklists, null, 2)}
+
+Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.`
+        : `You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? '\nThis is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.' : ''}
 
 Plan reviewers claim the following gaps in ${opts.verifyArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check each claim:
 ${repoList(opts.repos)}

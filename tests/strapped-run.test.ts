@@ -185,6 +185,36 @@ test('full chain [plan, implement, pr]: stage order, approve exactly once betwee
   assert.equal(callsWithLabelPrefix(calls, 'pr-gate').length, 0)
 })
 
+test('zero gating findings → record-writer fast path; findings → full skeptical verifier', async () => {
+  const clean = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel(planConverges()),
+  })
+  const cleanVerify = callWithLabel(clean.calls, 'verify:r1')
+  assert.ok(cleanVerify.prompt.includes('record-writer'))
+  assert.ok(cleanVerify.prompt.includes('Do NOT re-review'))
+  assert.ok(!cleanVerify.prompt.includes('skeptical verifier'))
+
+  const dirty = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ planRounds: 1 }),
+    agent: agentByLabel({
+      planner: PLAN,
+      'plan-review:a:r1': { ...NO_FINDINGS, findings: [finding('f1')] },
+      'plan-review:b:r1': NO_FINDINGS,
+      'verify:r1': confirmedVerify('r1-a-f1'),
+      'revise:r1': { revised: ['r1-a-f1'] },
+      'plan-review:a:r1-confirm': NO_FINDINGS,
+      'plan-review:b:r1-confirm': NO_FINDINGS,
+      'verify:r1-confirm': EMPTY_VERIFY,
+    }),
+  })
+  const dirtyVerify = callWithLabel(dirty.calls, 'verify:r1')
+  assert.ok(dirtyVerify.prompt.includes('skeptical verifier'))
+  assert.ok(!dirtyVerify.prompt.includes('record-writer'))
+  const confirmVerify = callWithLabel(dirty.calls, 'verify:r1-confirm')
+  assert.ok(confirmVerify.prompt.includes('record-writer'))
+})
+
 test('singleton ["plan"]: converges with NO approve agent dispatched', async () => {
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg(),

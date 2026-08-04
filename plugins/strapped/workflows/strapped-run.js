@@ -849,7 +849,18 @@ You MUST return a rule_checklist verdict (pass/violation/na + one line of eviden
     const suggestions = allFindings.filter((f) => f.severity === "suggestion");
     log(`round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`);
     const roundFile = `${cfg.dir}/reviews/${opts.roundFilePrefix}-${roundLabel}.md`;
-    const verification = await agent(`You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
+    const verification = await agent(gating.length === 0 ? `You are the record-writer for round ${roundLabel} of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review ${opts.verifyArtifactPhrase} and do NOT read the ${opts.artifactNoun} files — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
+
+Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion) and a body carrying the suggestions plus both rule checklists AND both AC/addendum checklists verbatim.
+
+Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+AC/addendum checklists: ${JSON.stringify(acChecklists, null, 2)}
+
+Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.` : `You are the verify-consolidate agent for round ${roundLabel} of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
 This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW gap remains.` : ""}
 
 Plan reviewers claim the following gaps in ${opts.verifyArtifactPhrase} at ${cfg.dir} (original ask: ${opts.ask}). Target repos you may explore to check each claim:
@@ -1044,7 +1055,18 @@ You MUST return a rule_checklist entry with a pass/violation/na verdict and one 
   const suggestions = allFindings.filter((f) => f.severity === "suggestion");
   log(`${item.id} round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`);
   const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`;
-  const verification = await agent(`You are the verify-consolidate agent for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
+  const verification = await agent(gating.length === 0 ? `You are the record-writer for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}". This round is CLEAN: the reviewers returned zero gating findings, so there is nothing to adjudicate and nothing to dedup. Do NOT re-review the code and do NOT read the worktree — your only job is the round record. Round-record format: ${cfg.conventionsFile}.
+
+Write the round record to ${roundFile} with frontmatter: round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a.map((r) => r.id))}, reviewer_b_rules: ${JSON.stringify(rules.b.map((r) => r.id))}, new_confirmed: 0, outcome: converged, findings list = the suggestions below with status suggestion. Body: the suggestions plus the two rule checklists AND the two AC/addendum checklists verbatim.
+
+Suggestions (non-gating, record only):
+${JSON.stringify(suggestions, null, 2)}
+
+Rule checklists: ${JSON.stringify(checklists, null, 2)}
+
+AC/addendum checklists: ${JSON.stringify(acChecklists, null, 2)}
+
+Return empty verdicts, empty new-confirmed ids, and empty duplicate ids.` : `You are the verify-consolidate agent for deliverable ${item.id}, code-review round ${roundLabel}, of strapped run "${cfg.slug}": a skeptical verifier adjudicating EVERY gating finding in one batch pass, then the round's consolidator writing its record. Round-record format: ${cfg.conventionsFile}.${confirmation ? `
 This is a CONFIRMATION pass after the final budgeted round: its findings were all fixed, and this pass re-checks whether any NEW issue remains.` : ""}
 
 Code reviewers claim the following issues in deliverable ${item.id} (worktree: ${item.worktree}, diff: git diff ${item.base}...${item.branch}).
