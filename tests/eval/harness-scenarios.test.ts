@@ -1,7 +1,7 @@
 // Harness SCENARIO suite smoke test — fully hermetic (no real `claude`).
 //
 // Proves the scenario CONTENT is sound without spending a cent:
-//   - the CLI loads exactly the seven scenarios from the suite directory and
+//   - the CLI loads exactly the eight scenarios from the suite directory and
 //     `--filter` narrows by id and by tag (agent calls answered by a stub
 //     spawn returning error envelopes — the REAL deployable still executes);
 //   - every scenario is well-formed (unique ids, canonical stage order,
@@ -34,6 +34,7 @@ import { dirtyBranchScenario } from '../../src/eval/scenarios/harness/dirty-bran
 import { fullPipelineScenario } from '../../src/eval/scenarios/harness/full-pipeline.scenario.ts'
 import { manyRulesScenario } from '../../src/eval/scenarios/harness/many-rules.scenario.ts'
 import { planOnlyScenario } from '../../src/eval/scenarios/harness/plan-only.scenario.ts'
+import { preconditionParkScenario } from '../../src/eval/scenarios/harness/precondition-park.scenario.ts'
 import { implementOnlyScenario } from '../../src/eval/scenarios/harness/implement-only.scenario.ts'
 import { reviewLoopScenario } from '../../src/eval/scenarios/harness/review-loop.scenario.ts'
 import { zeroRoundsScenario } from '../../src/eval/scenarios/harness/zero-rounds.scenario.ts'
@@ -56,7 +57,7 @@ const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
-const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'review-loop', 'zero-rounds']
+const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'review-loop', 'zero-rounds']
 
 const raise: Die = msg => {
   throw new Error(msg)
@@ -357,7 +358,7 @@ function stubSpawn(): Spawn {
 // --- scenario well-formedness ---------------------------------------------------
 
 test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
-  assert.equal(scenarios.length, 7)
+  assert.equal(scenarios.length, 8)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   for (const s of scenarios) {
@@ -403,6 +404,7 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.ok(zeroRoundsScenario.seedRunState !== undefined)
   assert.ok(manyRulesScenario.seedRunState !== undefined)
   assert.ok(dirtyBranchScenario.seedRunState !== undefined)
+  assert.ok(preconditionParkScenario.seedRunState !== undefined)
 })
 
 // --- loader + filter through the CLI --------------------------------------------
@@ -420,6 +422,7 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(zeroRoundsScenario))
   assert.ok(scenarios.includes(manyRulesScenario))
   assert.ok(scenarios.includes(dirtyBranchScenario))
+  assert.ok(scenarios.includes(preconditionParkScenario))
 })
 
 test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
@@ -434,7 +437,7 @@ test('the CLI loads the suite directory and --filter narrows by id and by tag', 
   assert.deepEqual(rowsOf(byId.output), ['plan-only'])
 
   const byTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'implement', '--json'], { spawn: stubSpawn() })
-  assert.deepEqual(rowsOf(byTag.output), ['dirty-branch', 'implement-only', 'many-rules', 'review-loop', 'zero-rounds'])
+  assert.deepEqual(rowsOf(byTag.output), ['dirty-branch', 'implement-only', 'many-rules', 'precondition-park', 'review-loop', 'zero-rounds'])
 
   const byLoopTag = await main(['--scenarios', SCENARIOS_DIR, '--filter', 'review-loop', '--json'], {
     spawn: stubSpawn(),
@@ -889,6 +892,141 @@ test('dirty-branch: findings without cast verdicts fail per-finding-verdicts', (
   try {
     const graded = grade(outcome)
     assert.equal(byName(graded.adherenceGrades, 'adherence:per-finding-verdicts').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+// --- precondition-park park-don't-improvise discrimination -----------------------
+
+/** Create a real git worktree for a node in a NAMED repo and return its path. */
+function addWorktreeIn(sandbox: ScenarioSandbox, repoName: string, id: string, branch: string): string {
+  const repo = sandbox.repos.find(r => r.name === repoName)
+  assert.ok(repo !== undefined, `sandbox has repo ${repoName}`)
+  const wt = join(repo.worktreeRoot, sandbox.slug, id)
+  mkdirSync(dirname(wt), { recursive: true })
+  const exists = spawnSync('git', ['rev-parse', '--verify', '-q', branch], { cwd: repo.root }).status === 0
+  if (exists) git(repo.root, 'worktree', 'add', '-q', wt, branch)
+  else git(repo.root, 'worktree', 'add', '-q', wt, '-b', branch, 'main')
+  return wt
+}
+
+const PARKED_REASON =
+  'unmet precondition: vendor/helper.ts has not landed on svc-b main via the external landing step'
+
+/** Canned GOOD precondition-park outcome: D2 parked naming the precondition, tree untouched. */
+function goodPreconditionPark(): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome; worktree: string } {
+  const sandbox = buildSandbox(preconditionParkScenario)
+  const wt = addWorktreeIn(sandbox, 'svc-b', 'D2', 'strapped/precondition-park/D2-consume-helper')
+  patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D2-consume-helper.md'), {
+    status: 'parked',
+    worktree: wt,
+    parked_reason: PARKED_REASON,
+  })
+  patchFrontmatter(join(sandbox.runDir, 'manifest.md'), { status: 'implementing' })
+  commitState(sandbox)
+  const runResult = {
+    slug: 'precondition-park',
+    stages: ['implement'],
+    completed: [],
+    stoppedAt: 'implement',
+    results: {
+      implement: {
+        allDone: false,
+        outcomes: [{ id: 'D2', outcome: 'parked', roundsUsed: 0, parkedReason: PARKED_REASON }],
+        blocked: [],
+      },
+    },
+  }
+  return { sandbox, outcome: outcomeFor(preconditionParkScenario, sandbox, runResult), worktree: wt }
+}
+
+test('precondition-park: the seeded two-repo runDir is accepted by the real state.mjs dag with D2 ready', () => {
+  const sandbox = buildSandbox(preconditionParkScenario)
+  try {
+    const res = spawnSync(NODE, [STATE_MJS, 'dag', sandbox.runDir], { encoding: 'utf8' })
+    assert.equal(res.status, 0, res.stderr)
+    const dag = JSON.parse(res.stdout) as {
+      manifest: { status: string }
+      ready: unknown[]
+      remaining: number
+      nodes: Array<{ id: string; status: string }>
+    }
+    assert.deepEqual(dag.ready, ['D2'], 'the child must be ready — its parent is done')
+    assert.equal(dag.remaining, 1, 'the done parent counts complete')
+    assert.equal(dag.manifest.status, 'approved')
+    assert.equal(dag.nodes.find(n => n.id === 'D1')?.status, 'done')
+
+    // The materialized manifest carries BOTH repos as existing absolute paths.
+    const { data } = readFrontmatterFile(join(sandbox.runDir, 'manifest.md'), raise)
+    const repos = data.repos as Array<{ name?: unknown; root?: unknown; config?: unknown }>
+    assert.ok(Array.isArray(repos) && repos.length === 2)
+    for (const entry of repos) {
+      assert.ok(typeof entry.root === 'string' && isAbsolute(entry.root) && existsSync(entry.root))
+      assert.ok(typeof entry.config === 'string' && isAbsolute(entry.config) && existsSync(entry.config))
+    }
+
+    // D1's branch pre-exists in svc-a with the helper committed.
+    const svcA = sandbox.repos.find(r => r.name === 'svc-a')
+    assert.ok(svcA !== undefined)
+    const shown = spawnSync('git', ['show', 'strapped/precondition-park/D1-shared-helper:src/helper.ts'], {
+      cwd: svcA.root,
+      encoding: 'utf8',
+    })
+    assert.equal(shown.status, 0, 'the seeded D1 branch must carry src/helper.ts')
+
+    // The declared precondition is genuinely UNMET in the sandbox.
+    const svcB = sandbox.repos.find(r => r.name === 'svc-b')
+    assert.ok(svcB !== undefined)
+    assert.ok(!existsSync(join(svcB.root, 'vendor', 'helper.ts')), 'vendor/helper.ts must be absent on svc-b main')
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('precondition-park: canned good (parked child naming the precondition, untouched tree) grades 1/1', () => {
+  const { sandbox, outcome } = goodPreconditionPark()
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('precondition-park: an implemented child (improvised around the precondition) fails its graders', () => {
+  const { sandbox, outcome, worktree } = goodPreconditionPark()
+  try {
+    write(
+      join(worktree, 'vendor', 'helper.ts'),
+      'export function describeSum(a: number, b: number): string {\n  return `sum: ${a + b}`\n}\n'
+    )
+    commitWorktree(worktree, 'feat(precondition-park): vendor the helper and implement anyway')
+    patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D2-consume-helper.md'), {
+      status: 'done',
+      parked_reason: null,
+    })
+    const bad = grade(outcome)
+    assert.ok(bad.correctness < 1)
+    assert.equal(byName(bad.correctnessGrades, 'child-tree-untouched').pass, false)
+    assert.ok(bad.adherence < 1)
+    assert.equal(byName(bad.adherenceGrades, 'adherence:deliverable-end-state').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('precondition-park: a parked child with an EMPTY parked_reason fails the reason-naming graders', () => {
+  const { sandbox, outcome } = goodPreconditionPark()
+  try {
+    patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D2-consume-helper.md'), { parked_reason: '' })
+    const bad = grade(outcome)
+    assert.ok(bad.correctness < 1)
+    assert.equal(byName(bad.correctnessGrades, 'child-parked-naming-precondition').pass, false)
+    assert.equal(byName(bad.correctnessGrades, 'child-tree-untouched').pass, true)
+    assert.ok(bad.adherence < 1)
+    assert.equal(byName(bad.adherenceGrades, 'adherence:deliverable-end-state').pass, false)
   } finally {
     removeSandbox(sandbox)
   }

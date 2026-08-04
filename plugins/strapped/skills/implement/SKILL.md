@@ -21,7 +21,7 @@ Implement an approved strapped plan.
 `$ARGUMENTS`: `<slug> [--only <Did>] [--max-rounds N]`
 
 - `--only` restricts execution to one deliverable (used to resume a parked node after the user unblocks it).
-- `--max-rounds` overrides the `code_rounds` budget (default from the manifest, 3).
+- `--max-rounds` overrides the `code_rounds` budget (default from the manifest, 1). `0` is legal and skips the adversarial code-review loop entirely (a validations-green node goes straight to done).
 
 ## Step 0 — Locate the run root (cwd-independent)
 
@@ -63,10 +63,10 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "codeRounds": 3,
-  "planRounds": 3,
+  "codeRounds": "<the --max-rounds override or the manifest code_rounds>",
+  "planRounds": "<the manifest plan_rounds>",
   "confidenceMin": 70,
-  "seed": 42,
+  "seed": "<the manifest seed>",
   "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
   "rulesByRound": [<the id-only per-round splits from step 2>]
 }

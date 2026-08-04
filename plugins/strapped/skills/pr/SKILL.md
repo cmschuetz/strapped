@@ -50,7 +50,7 @@ Dispatch the mono-workflow with a singleton stage list — invoke the Workflow t
   "stageArgs": { "pr": { "dryRun": false } },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
-  "seed": 42, "confidenceMin": 70, "planRounds": 3, "codeRounds": 3
+  "seed": "<the manifest seed>", "confidenceMin": 70, "planRounds": 1, "codeRounds": 1
 }
 ```
 

@@ -21,8 +21,8 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 `$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]`
 
 - `--repo <path-or-name>` — **repeatable**; names the target repo(s) the work will change (an unordered set — no repo is special). Each value is either an absolute/relative path to a repo, or a bare name resolved under the user's repo-parent convention (e.g. `$WORK_DIR_PATH/<name>`, `~/chime/<name>`). When **omitted**, the skill first checks for an existing run to resume, and only if none exists infers candidate repos from the source plan text and confirms them with the user (see Step 1). Repo identity is **never** taken from the cwd.
-- `--seed` defaults to 42; recorded in the manifest so reviews are reproducible.
-- `--max-rounds` defaults to the `plan_rounds` budget (3).
+- `--seed` forces the run seed. When omitted on a FRESH run, generate a truly random seed once — e.g. `python3 -c 'import random; print(random.randrange(2**32))'` — and use that; either way the planner records the effective seed in the manifest, and resumes/later stages always read the manifest value, so reviews stay reproducible.
+- `--max-rounds` defaults to the `plan_rounds` budget (1). `0` is legal and skips adversarial plan review entirely.
 
 ## Step 1 — Resolve repos, config, then scaffold or resume
 
@@ -87,7 +87,7 @@ The manifest (written by the planner agent in step 3) must carry the `repos:` ma
 ## Step 2 — Rule snapshot and per-round assignments
 
 1. Extract the guideline rules per the conventions (discover every applicable CLAUDE.md AND recurse into any skills/files it loads for additional rules, per **Rule extraction**; one numbered rule per normative imperative, skip validation-command boilerplate) and write `reviews/rules-snapshot.md`.
-2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions' **Seeded rule split** — for each round `1..max_rounds`, an id-only `{"a": ["R1", "R4"], "b": ["R2", "R3"]}` pair, shuffled with `random.Random(seed + round)` over the sorted rule-id list and split in half. Save the JSON output; it goes into the workflow args verbatim — ids ONLY, never rule text: the snapshot written in step 1 is the single source of rule text, and the workflow's review agents Read it via the `rulesFile` arg. Never use ad-hoc randomness — the seed is the only entropy source.
+2. Compute the per-round rule split with the seeded-shuffle recipe from the conventions' **Seeded rule split** — for each round `1..max_rounds`, an id-only `{"a": ["R1", "R4"], "b": ["R2", "R3"]}` pair, shuffled with `random.Random(seed + round)` over the sorted rule-id list and split in half. The seed is the run's EFFECTIVE seed: an explicit `--seed`, else the existing manifest's seed on resume, else the fresh-run random seed generated per the Arguments section. Save the JSON output; it goes into the workflow args verbatim — ids ONLY, never rule text: the snapshot written in step 1 is the single source of rule text, and the workflow's review agents Read it via the `rulesFile` arg. Never use ad-hoc randomness beyond that one generated seed — the effective seed is the only entropy source for the splits.
 
 ## Step 3 — Run the plan stage of the mono-workflow
 
@@ -111,16 +111,16 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
   "rulesByRound": [<the id-only per-round splits from step 2>],
-  "planRounds": 3,
-  "codeRounds": 3,
+  "planRounds": 1,
+  "codeRounds": 1,
   "confidenceMin": 70,
-  "seed": 42
+  "seed": "<the effective seed — random per fresh run unless --seed forced it>"
 }
 ```
 
-`planRounds` is the `--max-rounds` value (default 3); `codeRounds` is the run's code-review budget — the planner records BOTH (plus the seed) in the manifest's `budgets:`, so overridden budgets persist on disk without skill-side patching.
+`planRounds` is the `--max-rounds` value (default 1; `0` skips adversarial review); `codeRounds` is the run's code-review budget (default 1) — the planner records BOTH (plus the seed) in the manifest's `budgets:`, so overridden budgets persist on disk without skill-side patching.
 
-`stageArgs.plan.repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses it to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main` (cross-repo deps are ordering-only, never a code dependency).
+`stageArgs.plan.repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses it to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main`. A child that depends on work which must first land through some external step outside the run's control still belongs IN the DAG — it declares the prerequisite under a `## Preconditions` section and parks at implement time if unmet (the conventions' **Cross-repo deps and external preconditions** section).
 
 The plan stage runs the planner (which writes `research.md`, `manifest.md`, and the deliverable files), then up to `planRounds` adversarial review rounds. The workflow returns `{slug, stages, completed, stoppedAt, results}` — read `results.plan` for `{converged, rounds, deliverables, outstanding, summary}`. A singleton `["plan"]` dispatch NEVER auto-approves the manifest — approval is this skill's interactive gate (steps 5–6).
 

@@ -171,6 +171,7 @@ const PROSE_CITED_SECTIONS = [
   'Rule extraction',
   'Seeded rule split',
   'Cross-repo base rule',
+  'Cross-repo deps and external preconditions',
   'Cleanup recipe',
   'Composable chains',
   'Chain configs',
@@ -186,6 +187,24 @@ test('every conventions section cited by name in SKILL.md prose still exists as 
       headings.some(h => h.startsWith(wanted)),
       `conventions.md lost the prose-cited section heading "${name}"`
     )
+  }
+})
+
+test('no shipped doc claims the retired defaults: seed 42 or a 3-round budget', () => {
+  const skillsDir = join(PLUGIN_ROOT, 'skills')
+  const docs = [
+    join(PLUGIN_ROOT, 'conventions.md'),
+    join(PLUGIN_ROOT, 'context.md'),
+    join(REPO_ROOT, 'README.md'),
+    ...readdirSync(skillsDir).map(dir => join(skillsDir, dir, 'SKILL.md')),
+  ]
+  for (const doc of docs) {
+    const content = readFileSync(doc, 'utf8')
+    assert.ok(!content.includes('defaults to 42'), `${doc} still claims a default seed of 42`)
+    assert.ok(!content.includes('bounded at 3 rounds'), `${doc} still claims a 3-round budget`)
+    assert.ok(!/budget \(3\)/.test(content), `${doc} still claims a 3-round budget`)
+    assert.ok(!/`plan_rounds`\/`code_rounds` \(3\)/.test(content), `${doc} still claims a 3-round default`)
+    assert.ok(!content.includes('the manifest, 3)'), `${doc} still claims a 3-round manifest default`)
   }
 })
 

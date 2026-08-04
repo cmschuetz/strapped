@@ -39,6 +39,8 @@ Work EXCLUSIVELY inside the worktree: ${ITEM_WORKTREE} (branch ${ITEM_BRANCH}, b
 2. Read the shared research digest: ${FIXTURE_DIR}/research.md
 3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
 
+If the plan declares a \`## Preconditions\` section, verify each stated precondition FIRST. If any is not currently satisfied, do NOT implement and do NOT improvise around it (no vendoring, stubbing, or re-creating work the precondition says must land externally first): return status "blocked" with the blocker naming the unmet precondition — the node parks with that reason and is re-kicked later once the precondition holds.
+
 Implement exactly what the plan specifies — its acceptance criteria are the contract. Write the tests the plan names (integration-style, public interfaces). Stay in scope: anything under "Out of scope" is off limits; note side-discoveries in your summary instead of fixing them.
 
 Before finishing, ALL validations must pass inside the worktree:
