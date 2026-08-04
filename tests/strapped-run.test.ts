@@ -464,7 +464,12 @@ test('implement: coordinator wave contradicting its dag paste is re-dispatched o
     }),
   })
   assert.equal(result.results.implement.allDone, true)
-  assert.equal(callsWithLabelPrefix(calls, 'coordinate:1').length, 2)
+  const coordinatorCalls = callsWithLabelPrefix(calls, 'coordinate:1')
+  assert.equal(coordinatorCalls.length, 2)
+  const retryCall = coordinatorCalls.find(c => c.opts?.label === 'coordinate:1:retry')
+  assert.ok(retryCall !== undefined)
+  assert.ok(retryCall.prompt.includes('RETRY — your previous wave was REJECTED'), 'retry prompt must explain the mismatch')
+  assert.ok(retryCall.prompt.includes("ready [D1]"), 'retry prompt must name the rejected ready set')
   assert.equal(callsWithLabelPrefix(calls, 'implement:').length, 1)
 })
 

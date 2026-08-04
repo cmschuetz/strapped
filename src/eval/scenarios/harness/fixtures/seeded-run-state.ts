@@ -12,7 +12,7 @@ export interface SeedRunState {
   files: Record<string, string>
 }
 
-function manifest(slug: string, seed: number, codeRounds: number, deliverableFile: string): string {
+function manifest(slug: string, seed: number, planRounds: number, codeRounds: number, deliverableFile: string): string {
   return `---
 slug: ${slug}
 source_plan: plans/${slug}.md
@@ -20,7 +20,7 @@ created: 2026-07-29
 status: approved
 seed: ${seed}
 budgets:
-  plan_rounds: 1
+  plan_rounds: ${planRounds}
   code_rounds: ${codeRounds}
   confidence_min: 70
 repos:
@@ -165,7 +165,7 @@ The calc fixture is a tiny bun project; validations are \`bun test\`. ${focus}
 export function implementOnlySeed(): SeedRunState {
   return {
     files: {
-      'manifest.md': manifest('implement-only', 13, 1, 'deliverables/D1-subtract.md'),
+      'manifest.md': manifest('implement-only', 13, 1, 1, 'deliverables/D1-subtract.md'),
       'deliverables/D1-subtract.md': IMPLEMENT_ONLY_DELIVERABLE,
       'research.md': research('implement-only', 'The only work is D1: add a subtract function plus its test.'),
     },
@@ -176,7 +176,7 @@ export function implementOnlySeed(): SeedRunState {
 export function zeroRoundsSeed(): SeedRunState {
   return {
     files: {
-      'manifest.md': manifest('zero-rounds', 15, 0, 'deliverables/D1-subtract.md'),
+      'manifest.md': manifest('zero-rounds', 15, 0, 0, 'deliverables/D1-subtract.md'),
       'deliverables/D1-subtract.md': ZERO_ROUNDS_DELIVERABLE,
       'research.md': research('zero-rounds', 'The only work is D1: add a subtract function plus its test. The review budget is 0 — no adversarial review runs.'),
     },
@@ -187,7 +187,7 @@ export function zeroRoundsSeed(): SeedRunState {
 export function reviewLoopSeed(): SeedRunState {
   return {
     files: {
-      'manifest.md': manifest('review-loop', 14, 2, 'deliverables/D1-fix-defects.md'),
+      'manifest.md': manifest('review-loop', 14, 1, 2, 'deliverables/D1-fix-defects.md'),
       'deliverables/D1-fix-defects.md': REVIEW_LOOP_DELIVERABLE,
       'research.md': research(
         'review-loop',

@@ -95,7 +95,9 @@ export function parseArgs(argv: readonly string[]): EvalFlags {
         flags.keepSandbox = true
         break
       case '--deployable':
-        flags.deployable = argv[++i]
+        // A missing value becomes '' so main can error instead of silently
+        // falling back to the shipped deployable (mirrors --compare's arity check).
+        flags.deployable = argv[++i] ?? ''
         break
       case '--compare':
         // Consumes the next TWO args (baseline, candidate); main validates arity.
@@ -195,6 +197,9 @@ function runCompare(flags: EvalFlags): CliResult {
 
 /** Scenario-mode dispatch: load, filter, run, report. Always report-only (exit 0). */
 async function runScenarioMode(flags: EvalFlags, deps: CliDeps): Promise<CliResult> {
+  if (flags.deployable === '') {
+    return { code: 2, output: 'eval: --deployable requires a path: --deployable <path>\n' }
+  }
   if (flags.deployable !== undefined && !existsSync(flags.deployable)) {
     return { code: 2, output: `eval: --deployable file not found: ${flags.deployable}\n` }
   }

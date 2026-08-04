@@ -258,7 +258,8 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
       }
       if (!matchesDag(wave)) {
         log(`pass ${pass}: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match dag ready [${wave.dag.ready.join(', ')}] — re-dispatching once`)
-        wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
+        const mismatchNote = `\n\nRETRY — your previous wave was REJECTED: its items [${wave.items.map(i => i.id).join(', ')}] did not match its own dag paste's ready [${wave.dag.ready.join(', ')}]. Return EXACTLY one items entry per node in the dag command's ready list — no omissions, no extras.`
+        wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes) + mismatchNote, {
           label: `coordinate:${pass}:retry`,
           phase: 'Implement',
           schema: WAVE_SCHEMA,

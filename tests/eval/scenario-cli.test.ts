@@ -164,6 +164,15 @@ test('--deployable threads the named workflow file into the scenario run', async
   rmSync(pluginDir, { recursive: true, force: true })
 })
 
+test('--deployable with a missing value errors with exit 2 instead of falling back to the shipped deployable', async () => {
+  const res = await main(['--scenarios', 'unused-dir', '--deployable'], {
+    scenarios: [planScenario()],
+    spawn: throwingSpawn(),
+  })
+  assert.equal(res.code, 2)
+  assert.match(res.output, /--deployable requires a path/)
+})
+
 test('--deployable with a missing file errors with exit 2 before any run or CLI probe', async () => {
   const res = await main(['--scenarios', 'unused-dir', '--deployable', '/definitely/not/there.js'], {
     scenarios: [planScenario()],
