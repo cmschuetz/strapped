@@ -393,6 +393,13 @@ export const WAVE_SCHEMA = {
             "type": "string"
           }
         },
+        "resumable": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "In-progress node ids from the dag's nodes list — interrupted implementations this pass may resume."
+        },
         "remaining": {
           "type": "number"
         },
@@ -421,6 +428,7 @@ export const WAVE_SCHEMA = {
       },
       "required": [
         "ready",
+        "resumable",
         "remaining",
         "blocked"
       ],

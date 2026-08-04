@@ -97,7 +97,7 @@ function item(id: string, pr: string | null = null) {
 }
 
 function wave(items: ReturnType<typeof item>[], remaining: number, blocked: { id: string; blockedOn: string[] }[] = []) {
-  return { items, dag: { ready: items.map(i => i.id), remaining, blocked }, remaining, blocked }
+  return { items, dag: { ready: items.map(i => i.id), resumable: [], remaining, blocked }, remaining, blocked }
 }
 
 const IMPLEMENTED = { status: 'implemented', summary: 'built the thing', validations_green: true, blocker: null }
@@ -516,7 +516,7 @@ test('implement: zero-progress wave terminates the loop', async () => {
 })
 
 test('implement: coordinator wave contradicting its dag paste is re-dispatched once and the retry wave is used', async () => {
-  const lyingWave = { items: [], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
@@ -537,8 +537,24 @@ test('implement: coordinator wave contradicting its dag paste is re-dispatched o
   assert.equal(callsWithLabelPrefix(calls, 'implement:').length, 1)
 })
 
+test('implement: an interrupted in-progress node is dispatchable via dag.resumable', async () => {
+  const resumeWave = { items: [item('D1')], dag: { ready: [], resumable: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] }
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': resumeWave,
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'coordinate:2': wave([], 0),
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+  assert.equal(callsWithLabelPrefix(calls, 'coordinate:1').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'implement:').length, 1)
+})
+
 test('implement: a second dag-contradicting wave is a hard error, never a fake allDone', async () => {
-  const lyingWave = { items: [], dag: { ready: ['D1'], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
   await assert.rejects(
     runWorkflow(WORKFLOW, {
       args: baseCfg({ stages: ['implement'], stageArgs: {} }),

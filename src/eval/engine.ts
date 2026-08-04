@@ -312,7 +312,10 @@ function retryStructured(req: EvalRequest, stdout: string, first: EvalResult, sp
   } catch {
     return first
   }
-  if (envelope.is_error === true || (envelope.subtype !== undefined && envelope.subtype !== 'success')) return first
+  // error_max_structured_output_retries is a FORMATTING failure with a live
+  // session — one --resume turn often lands it; other claude errors never retry.
+  const formattingError = envelope.subtype === 'error_max_structured_output_retries'
+  if (!formattingError && (envelope.is_error === true || (envelope.subtype !== undefined && envelope.subtype !== 'success'))) return first
   const sessionId = envelope.session_id
   if (typeof sessionId !== 'string' || sessionId === '') return first
 

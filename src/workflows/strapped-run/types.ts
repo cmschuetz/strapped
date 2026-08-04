@@ -208,6 +208,8 @@ export interface BlockedNode {
 /** `ready`/`remaining`/`blocked` copied verbatim from `state.mjs dag` output. */
 export interface DagSnapshot {
   ready: string[]
+  /** In-progress node ids from the dag's nodes list — interrupted implementations this pass may resume. */
+  resumable: string[]
   remaining: number
   blocked: BlockedNode[]
 }

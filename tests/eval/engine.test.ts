@@ -286,6 +286,18 @@ test('the retry runs at most once; a still-bad result keeps the original error w
   assert.equal(result.cost, 0.75)
 })
 
+test('error_max_structured_output_retries IS retried via --resume — it is a formatting failure with a live session', () => {
+  const first = errorEnvelope('error_max_structured_output_retries')
+  first.session_id = 'sess-fmt'
+  const second = successEnvelope({ answer: 4 })
+  const calls: string[][] = []
+  const result = runClaude(baseReq(), { spawn: sequencedSpawn([first, second], calls) })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.output, { answer: 4 })
+  assert.equal(calls.length, 2)
+  assert.equal((calls[1] ?? [])[((calls[1] ?? []).indexOf('--resume')) + 1], 'sess-fmt')
+})
+
 test('no retry without a session_id, and none on an envelope-level claude error', () => {
   const noSession = successEnvelope({ answer: 0 }, { structured: false })
   noSession.result = 'No JSON and no session to resume.'
