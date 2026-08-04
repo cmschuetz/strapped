@@ -8,7 +8,9 @@
 //     implementer's narrow job per the seeded deliverable;
 //   - src/report.ts (branch): 5 guideline violations of the fixture CLAUDE.md
 //     that tests do NOT catch — a comment (DR-1), `var` (DR-3), a missing
-//     return type (DR-2), string concatenation (DR-5), a dead export (DR-4).
+//     return type (DR-2), string concatenation (DR-5) — and DR-4 (smallest
+//     diff, never delete files) exists to bar the fixer from "cleaning" by
+//     deleting the module and its test, which a dead-code rule once invited.
 //     The deliverable's Out of scope FORBIDS the implementer from touching
 //     this file, so the flaws survive to review; formatReport is test-covered
 //     so the fixer cannot simply delete the file.
@@ -29,7 +31,7 @@ export const DIRTY_RULES: ScenarioRule[] = [
   { id: 'DR-1', source: 'CLAUDE.md', text: 'No code comments — source files stay comment-free and self-explanatory.' },
   { id: 'DR-2', source: 'CLAUDE.md', text: 'Every exported function declares an explicit return type.' },
   { id: 'DR-3', source: 'CLAUDE.md', text: 'Use const or let — never var.' },
-  { id: 'DR-4', source: 'CLAUDE.md', text: 'No dead code: every export is used by the app or covered by a test; delete leftovers.' },
+  { id: 'DR-4', source: 'CLAUDE.md', text: 'Smallest possible diff: never delete existing files or tests; fix flaws in place.' },
   { id: 'DR-5', source: 'CLAUDE.md', text: 'Use template literals — never string concatenation with +.' },
   { id: 'DR-6', source: 'CLAUDE.md', text: 'bun test must pass before any work is considered done.' },
 ]
@@ -81,10 +83,6 @@ export function formatReport(name: string, total: number) {
   reportCount = reportCount + 1
   return "Report for " + name + ": " + total
 }
-
-export function legacyFormat(): number {
-  return reportCount
-}
 `
 
 /**
@@ -96,7 +94,6 @@ export const FLAW_PROBES: Record<string, (report: string) => boolean> = {
   'DR-3 var removed': report => !/\bvar\s/.test(report),
   'DR-2 formatReport return type': report => /export function formatReport\([^)]*\): string/.test(report),
   'DR-5 concatenation removed': report => !/["']\s*\+/.test(report) && !/\+\s*["']/.test(report),
-  'DR-4 dead export removed': report => !report.includes('legacyFormat'),
 }
 
 /** Declarative file map of the dirty fixture repo (path → content). */

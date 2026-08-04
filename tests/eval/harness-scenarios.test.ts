@@ -784,17 +784,13 @@ export function formatReport(name: string, total: number): string {
 }
 `
 
-/** Report test green but the guideline flaws (comment, var, dead export, …) remain. */
+/** Report test green but the guideline flaws (comment, var, …) remain. */
 const HALF_CLEANED_DIRTY_REPORT = `// TODO: tidy before shipping
 var reportCount = 0
 
 export function formatReport(name: string, total: number) {
   reportCount = reportCount + 1
   return "Report for " + name + ": " + total
-}
-
-export function legacyFormat(): number {
-  return reportCount
 }
 `
 
