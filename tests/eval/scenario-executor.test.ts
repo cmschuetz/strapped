@@ -121,7 +121,8 @@ const FULL_CHAIN_HANDLERS = {
   'review:D1:b:r1': NO_FINDINGS,
   'verify:D1:r1': EMPTY_VERIFY,
   'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-  'coordinate:2': { items: [], dag: { ready: [], resumable: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
+  // No coordinate:2: the deterministic wrap-up computes remaining 0 from the
+  // pass-1 dag paste and dispatches no confirming coordinator.
   'pr-create': PR_RESULT,
 }
 

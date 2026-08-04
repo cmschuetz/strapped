@@ -448,7 +448,8 @@ test('implement: two waves then allDone; manifest-status implementing in first c
       'coordinate:2': wave([item('D2')], 1),
       ...nodeConverges('D2'),
       'apply:2': { applied: [{ id: 'D2', status: 'done' }] },
-      'coordinate:3': wave([], 0),
+      // No coordinate:3 handler: the deterministic wrap-up computes remaining
+      // 0 from the pass-2 dag paste and never dispatches a third coordinator.
     }),
   })
   assert.equal(result.results.implement.allDone, true)
@@ -457,10 +458,10 @@ test('implement: two waves then allDone; manifest-status implementing in first c
     result.results.implement.outcomes.map(o => ({ id: o.id, outcome: o.outcome })),
     [{ id: 'D1', outcome: 'done' }, { id: 'D2', outcome: 'done' }]
   )
+  assert.equal(callsWithLabelPrefix(calls, 'coordinate:').length, 2)
   const flip = `manifest-status ${baseCfg().dir} implementing`
   assert.ok(callWithLabel(calls, 'coordinate:1').prompt.includes(flip))
   assert.ok(!callWithLabel(calls, 'coordinate:2').prompt.includes(flip))
-  assert.ok(!callWithLabel(calls, 'coordinate:3').prompt.includes(flip))
 })
 
 test('implement: node already pr-open at entry → allDone true with no implementer dispatched', async () => {

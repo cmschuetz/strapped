@@ -319,6 +319,20 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
       log(`pass ${pass}: zero newly-done progress — stopping`)
       break
     }
+
+    // Deterministic wrap-up: the pasted dag makes remaining computable, so a
+    // pass that finishes everything needs no confirming coordinator dispatch.
+    if (!addendumMode) {
+      const doneNow = waveResults.filter(r => r.outcome === 'done').length
+      const remainingAfter = wave.dag.remaining - doneNow
+      if (remainingAfter <= 0) {
+        const doneIds = new Set(waveResults.filter(r => r.outcome === 'done').map(r => r.item.id))
+        blocked = wave.dag.blocked.filter(b => !doneIds.has(b.id))
+        allDone = true
+        log(`pass ${pass}: all ${doneNow} remaining node(s) done — skipping wrap-up coordinator`)
+        break
+      }
+    }
   }
 
   return { outcomes, allDone, blocked }

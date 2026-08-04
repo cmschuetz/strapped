@@ -134,8 +134,7 @@ estimated_diff_lines: 8
 ## Context
 The branch already carries mid-flight work committed by an earlier session:
 \`add\` subtracts and \`max\` returns the smaller argument in src/calc.ts, each
-exposed by a failing test in tests/calc.test.ts. That session also committed
-src/report.ts and its test; the report work is being reviewed separately.
+exposed by a failing test in tests/calc.test.ts.
 
 ## Files to touch
 - src/calc.ts — fix the two defective lines
@@ -152,8 +151,6 @@ src/report.ts and its test; the report work is being reviewed separately.
 - tests/calc.test.ts — the existing failing tests cover AC1.
 
 ## Out of scope
-- src/report.ts and tests/report.test.ts — the earlier session's report work;
-  do NOT touch or clean them, note anything you see in your summary instead.
 - New features and new files.
 `
 

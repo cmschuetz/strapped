@@ -1420,6 +1420,17 @@ RETRY — your previous wave was REJECTED: its items [${wave.items.map((i) => i.
       log(`pass ${pass}: zero newly-done progress — stopping`);
       break;
     }
+    if (!addendumMode) {
+      const doneNow = waveResults.filter((r) => r.outcome === "done").length;
+      const remainingAfter = wave.dag.remaining - doneNow;
+      if (remainingAfter <= 0) {
+        const doneIds = new Set(waveResults.filter((r) => r.outcome === "done").map((r) => r.item.id));
+        blocked = wave.dag.blocked.filter((b) => !doneIds.has(b.id));
+        allDone = true;
+        log(`pass ${pass}: all ${doneNow} remaining node(s) done — skipping wrap-up coordinator`);
+        break;
+      }
+    }
   }
   return { outcomes, allDone, blocked };
 }
