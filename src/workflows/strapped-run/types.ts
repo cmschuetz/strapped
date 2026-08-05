@@ -55,6 +55,8 @@ export interface RunConfig {
   confidenceMin: number
   planRounds: number
   codeRounds: number
+  /** BFS research rounds INCLUDING the planner's own round 1 (default 2, min 1). */
+  researchRounds: number
   rulesByRound: RulePartition[]
   /**
    * Absolute path to `reviews/rules-snapshot.md` — the single source of rule
@@ -78,6 +80,35 @@ export interface PlanDeliverable {
 /** PLAN_SCHEMA */
 export interface PlanResult {
   deliverables: PlanDeliverable[]
+  summary: string
+}
+
+/** One research topic a planner or researcher enqueues for a later BFS round. */
+export interface ResearchRequest {
+  topic: string
+  brief: string
+}
+
+/** PLAN_LEAD_SCHEMA — the planner's result when `researchRounds > 1`. */
+export interface PlanLeadResult {
+  deliverables: PlanDeliverable[]
+  summary: string
+  /** Empty = the small-ask exit: the planner already wrote every plan artifact itself. */
+  research_requests: ResearchRequest[]
+}
+
+/** RESEARCH_SCHEMA — a delegated researcher in a non-final BFS round. */
+export interface ResearchResult {
+  topic: string
+  notes_file: string
+  summary: string
+  research_requests: ResearchRequest[]
+}
+
+/** RESEARCH_FINAL_SCHEMA — a final-round researcher (no field to enqueue more work). */
+export interface ResearchFinalResult {
+  topic: string
+  notes_file: string
   summary: string
 }
 

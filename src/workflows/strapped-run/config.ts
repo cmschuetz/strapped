@@ -33,6 +33,15 @@ function requireNumber(rec: Record<string, unknown>, key: string): number {
   return value
 }
 
+/** BFS research rounds including the planner's own round 1: absent → 2, min 1. */
+function parseResearchRounds(value: unknown): number {
+  if (value === undefined) return 2
+  if (typeof value !== 'number' || value < 1) {
+    throw new Error('config field "researchRounds" must be a number >= 1')
+  }
+  return value
+}
+
 // The four stage-validation throws below predate the TS port and are asserted
 // verbatim — never reword them.
 function parseStages(value: unknown): StageName[] {
@@ -174,6 +183,7 @@ export function parseConfig(raw: unknown): RunConfig {
     confidenceMin: requireNumber(parsed, 'confidenceMin'),
     planRounds: requireNumber(parsed, 'planRounds'),
     codeRounds: requireNumber(parsed, 'codeRounds'),
+    researchRounds: parseResearchRounds(parsed.researchRounds),
     rulesByRound,
     rulesFile: parseRulesFile(parsed.rulesFile, rulesByRound),
     stages,

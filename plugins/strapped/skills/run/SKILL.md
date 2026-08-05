@@ -18,12 +18,12 @@ Run a whole chain of strapped stages — e.g. plan → implement → pr — as O
 
 ## Arguments
 
-`$ARGUMENTS`: `<chain> <plan.md-path | slug> [--repo <path-or-name>]... [--seed N] [--plan-rounds N] [--code-rounds N] [--dry-run] [--yes]`
+`$ARGUMENTS`: `<chain> <plan.md-path | slug> [--repo <path-or-name>]... [--seed N] [--plan-rounds N] [--code-rounds N] [--research-rounds N] [--dry-run] [--yes]`
 
 - `<chain>` — a chain name: a built-in (`auto` = plan, implement, pr; `ship` = implement, pr) or one from the `chains` map of `~/.claude/strapped.json`. Always resolved via the harness script in Step 0 — never hand-rolled.
 - second argument — when the resolved chain **starts with `plan`**, the path to the source plan.md; otherwise the **slug** of an existing run.
 - `--repo <path-or-name>` — repeatable; plan-entry only; same semantics as `/strapped:plan` (never derived from cwd).
-- `--seed N`, `--plan-rounds N`, `--code-rounds N` — valid ONLY on a FRESH plan-entry run (Step 1's resume probe found no existing `manifest.md`). Defaults on a fresh run: the seed is generated truly randomly once (e.g. `python3 -c 'import random; print(random.randrange(2**32))'`) when `--seed` is omitted, and both round budgets default to 1 — `0` is legal for either and skips that review loop entirely. They set the values threaded into the stage args; the plan stage records the effective `seed`, `plan_rounds`, and `code_rounds` in the manifest, so nothing needs patching skill-side and later stages/resumes read the manifest values. On the slug path — and on a plan-entry invocation whose resume probe finds an existing `manifest.md` at ANY status — seed and both budgets come from the EXISTING manifest: if any of these flags was passed, stop with a message saying the existing manifest's values are authoritative. (The standalone skills' single `--max-rounds` flag is ambiguous across a chain that spans both review loops, so this skill splits it: `--plan-rounds` overrides the `plan_rounds` budget, `--code-rounds` overrides `code_rounds`.)
+- `--seed N`, `--plan-rounds N`, `--code-rounds N`, `--research-rounds N` — valid ONLY on a FRESH plan-entry run (Step 1's resume probe found no existing `manifest.md`). Defaults on a fresh run: the seed is generated truly randomly once (e.g. `python3 -c 'import random; print(random.randrange(2**32))'`) when `--seed` is omitted, both review-round budgets default to 1 — `0` is legal for either and skips that review loop entirely — and the research budget defaults to 2 (`--research-rounds 1` disables research delegation entirely; min 1). They set the values threaded into the stage args; the plan stage records the effective `seed`, `plan_rounds`, `code_rounds`, and `research_rounds` in the manifest, so nothing needs patching skill-side and later stages/resumes read the manifest values. On the slug path — and on a plan-entry invocation whose resume probe finds an existing `manifest.md` at ANY status — seed and every budget come from the EXISTING manifest: if any of these flags was passed, stop with a message saying the existing manifest's values are authoritative. (The standalone skills' single `--max-rounds` flag is ambiguous across a chain that spans both review loops, so this skill splits it: `--plan-rounds` overrides the `plan_rounds` budget, `--code-rounds` overrides `code_rounds`; `--research-rounds` overrides `research_rounds` symmetrically.)
 - `--dry-run` — print-only preview, evaluated in Step 0 BEFORE any prep; mutates nothing.
 - `--yes` — skip the Step 2 consent gate.
 
@@ -61,7 +61,7 @@ Perform the plan skill's Steps 1–2 exactly (`$PLUGIN_ROOT/skills/plan/SKILL.md
 
 **Chain-specific resume rule (overrides the plan skill's 1c/1e stop-on-approved):**
 
-- ANY probe hit — an existing `manifest.md` at ANY status — rejects `--seed`/`--plan-rounds`/`--code-rounds` per the flag semantics above: the existing manifest's seed and budgets are authoritative; read them from it.
+- ANY probe hit — an existing `manifest.md` at ANY status — rejects `--seed`/`--plan-rounds`/`--code-rounds`/`--research-rounds` per the flag semantics above: the existing manifest's seed and budgets are authoritative; read them from it.
 - Probe hit at `approved`/`implementing` (or later): do NOT stop, and do NOT dispatch the plan stage. **Drop `plan` from the dispatched `stages`** and continue from the next stage exactly as the slug path below would (same manifest-status preconditions, same `reviews/rules-snapshot.md` read with the re-extract fallback); report to the user that the plan stage was skipped because the run is already approved. The plan stage must NEVER run against an approved-or-later manifest — its planner unconditionally rewrites `manifest.md` and every `deliverables/*.md` to `status: pending`, clobbering in-flight/done/pr-open state.
 - Probe hit at `draft`/`in-review`: the planner re-run IS the intended resume (matching the manual plan skill) — proceed with the plan stage, taking the repos from the manifest's `repos:` map per the plan skill's 1e, with no re-inference, no re-prompt, and no re-scaffold.
 
@@ -69,7 +69,7 @@ Perform the plan skill's Steps 1–2 exactly (`$PLUGIN_ROOT/skills/plan/SKILL.md
 
 1. Run `node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>` (cwd-independent, never hand-rolled). If `exists` is `false`, stop with a helpful message pointing at `/strapped:plan`.
 2. Preconditions on the manifest status: the chain starts at `implement` → require `approved` or `implementing`; the chain starts at `pr` → require `done` nodes present (via `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>`). Otherwise stop and say why.
-3. Reject `--seed`/`--plan-rounds`/`--code-rounds` (see Arguments) — seed and both budgets come from the existing manifest (`resolve`'s `seed`/`budgets`).
+3. Reject `--seed`/`--plan-rounds`/`--code-rounds`/`--research-rounds` (see Arguments) — seed and every budget come from the existing manifest (`resolve`'s `seed`/`budgets`).
 4. Read `reviews/rules-snapshot.md` for the rule set. If it is missing, re-extract it per the conventions' **Rule extraction** and write the snapshot — the same fallback as the implement skill's Step 2; never improvise rule ids.
 5. Compute `rulesByRound` from the snapshot's rule ids with the seeded recipe (id-only pairs) for **`max(plan_rounds, code_rounds)` rounds** — mirroring the implement skill's Step 2, extended to cover both loops.
 
@@ -105,6 +105,7 @@ Invoke the Workflow tool EXACTLY ONCE with `scriptPath: $PLUGIN_ROOT/workflows/s
   "confidenceMin": 70,
   "planRounds": "<effective plan_rounds>",
   "codeRounds": "<effective code_rounds>",
+  "researchRounds": "<effective research_rounds>",
   "rulesFile": "<runRoot>/<slug>/reviews/rules-snapshot.md",
   "rulesByRound": ["<the max(plan_rounds, code_rounds) id-only per-round splits from Step 1>"]
 }

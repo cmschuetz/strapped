@@ -92,6 +92,8 @@ export interface Scenario {
   seed: number
   planRounds: number
   codeRounds: number
+  /** BFS research rounds including the planner's own round 1; defaults to 2. */
+  researchRounds?: number
   confidenceMin: number
   /** Default model for every agent call; DEFAULT_MODEL when omitted. */
   model?: string

@@ -27,6 +27,9 @@ export const SCHEMA_TYPES: ReadonlyArray<readonly [type: string, constant: strin
   ['ApproveResult', 'APPROVE_SCHEMA'],
   ['ProbeResult', 'PROBE_SCHEMA'],
   ['PrResult', 'PR_SCHEMA'],
+  ['PlanLeadResult', 'PLAN_LEAD_SCHEMA'],
+  ['ResearchResult', 'RESEARCH_SCHEMA'],
+  ['ResearchFinalResult', 'RESEARCH_FINAL_SCHEMA'],
 ]
 
 type SchemaGenerator = ReturnType<typeof createGenerator>
