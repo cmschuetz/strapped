@@ -5,7 +5,7 @@
 
 // --- run config ---------------------------------------------------------------
 
-export type StageName = 'plan' | 'feedback-synth' | 'implement' | 'pr'
+export type StageName = 'plan' | 'implement' | 'pr'
 
 /**
  * One round's seeded rule split between the two reviewers — rule IDS only.
@@ -32,21 +32,7 @@ export interface PlanStageArgs {
   repos?: RepoRef[]
 }
 
-export interface FeedbackSynthStageArgs {
-  /** The fetched PR review comments — embedded verbatim via JSON.stringify. */
-  comments?: unknown
-  repos?: RepoRef[]
-  /**
-   * Feedback-lite mode: synthesize the routed digest only — write no
-   * `## Feedback addendum` files and skip the adversarial review loop. The main
-   * agent (the lite skill's plan-mode gate) produces the user-approved plan.
-   */
-  lite?: boolean
-}
-
 export interface ImplementStageArgs {
-  addendumMode?: boolean
-  recordSuffix?: string
   only?: string
 }
 
@@ -56,7 +42,6 @@ export interface PrStageArgs {
 
 export interface StageArgsMap {
   plan?: PlanStageArgs
-  'feedback-synth'?: FeedbackSynthStageArgs
   implement?: ImplementStageArgs
   pr?: PrStageArgs
 }
@@ -123,11 +108,11 @@ export interface RuleCheck {
 }
 
 /**
- * One reviewer verdict on a single enumerated acceptance-criterion or feedback
- * addendum item. Kept as its OWN required list (not folded into
- * `rule_checklist`) so a reviewer can never silently omit the per-item AC/addendum
- * verdicts: a required, separate field is enforced by the structured-output schema
- * every round, giving ACs and addendums the same weight as guideline rules.
+ * One reviewer verdict on a single enumerated acceptance-criterion item. Kept
+ * as its OWN required list (not folded into `rule_checklist`) so a reviewer can
+ * never silently omit the per-item AC verdicts: a required, separate field is
+ * enforced by the structured-output schema every round, giving ACs the same
+ * weight as guideline rules.
  */
 export interface AcCheck {
   id: string
@@ -139,7 +124,7 @@ export interface AcCheck {
 export interface FindingsResult {
   findings: Finding[]
   rule_checklist: RuleCheck[]
-  /** Per-item AC/addendum verdicts — required (may be empty when the artifact has no enumerated section). */
+  /** Per-item AC verdicts — required (may be empty when the artifact has no enumerated section). */
   ac_checklist: AcCheck[]
 }
 
@@ -162,19 +147,6 @@ export interface VerifyResult {
   verdicts: FindingVerdict[]
   new_confirmed_ids: string[]
   duplicate_ids: string[]
-}
-
-export interface SynthAddendum {
-  deliverableId: string
-  sourcePr: string
-  crossDeliverable: boolean
-  tasks: string[]
-}
-
-/** SYNTH_SCHEMA */
-export interface SynthResult {
-  addenda: SynthAddendum[]
-  summary: string
 }
 
 /** IMPLEMENT_SCHEMA */
@@ -216,10 +188,8 @@ export interface DagSnapshot {
 
 export interface WaveResult {
   items: WaveItem[]
-  /** Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes. */
+  /** The workflow trusts this paste: `remaining`/`blocked` are read from here verbatim. */
   dag: DagSnapshot
-  remaining: number
-  blocked: BlockedNode[]
 }
 
 /** APPLY_SCHEMA */
@@ -294,23 +264,6 @@ export interface PlanStageResult {
   summary: string
 }
 
-export interface FeedbackSynthStageResult {
-  converged: boolean
-  rounds: number
-  outstanding: OutstandingFinding[]
-  addenda: SynthAddendum[]
-  summary: string
-}
-
-export type RoundsField = 'review_rounds_used' | 'feedback_rounds_used'
-
-export interface CoordinatorCtx {
-  only: string | null
-  addendumMode: boolean
-  recordSuffix: string
-  roundsField: RoundsField
-}
-
 /** A node's state after the implementer, before the review/fix loop. */
 export type NodeState =
   | { item: WaveItem; outcome: 'implemented'; roundsUsed: number; summary?: string }
@@ -355,7 +308,7 @@ export interface PrStageResult {
   summary: string
 }
 
-export type StageResult = PlanStageResult | FeedbackSynthStageResult | ImplementStageResult | PrStageResult
+export type StageResult = PlanStageResult | ImplementStageResult | PrStageResult
 
 export interface RunResult {
   slug: string

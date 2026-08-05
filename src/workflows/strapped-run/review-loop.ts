@@ -1,4 +1,4 @@
-// The shared bounded adversarial review loop (plan flow + feedback flow):
+// The bounded adversarial plan-review loop:
 // 2 rule-partitioned reviewers, then ONE verify-consolidate agent per round
 // (batch skeptical verification of every gating finding + dedup-vs-seen
 // consolidation writing reviews/<prefix>-round-<N>.md), reviser, final-round
@@ -37,18 +37,6 @@ export interface ReviewLoopOpts {
   reviserPromptFn: (newConfirmed: Finding[], roundFile: string) => string
   roundFilePrefix: string
   maxRounds: number
-  /**
-   * Human label for the artifact's own enumerated items — 'AC' for the plan
-   * flow's acceptance criteria, 'FA' for the feedback flow's addendum tasks.
-   * The reviewers enumerate items as `<label>1..<label>n`.
-   */
-  enumeratedItemsLabel: string
-  /**
-   * The Markdown heading whose items the reviewers enumerate into the
-   * `ac_checklist` — `## Acceptance criteria` for plans, `## Feedback addendum`
-   * for the feedback flow.
-   */
-  enumeratedItemsSection: string
 }
 
 // Runs the bounded adversarial review loop (2 rule-partitioned reviewers, one
@@ -84,11 +72,11 @@ These ids are your whole assignment, but they carry no text here: before reviewi
 Known findings from earlier rounds — do NOT re-report unless the revision failed to address them:
 ${digest(seen)}
 
-Enumerated ${opts.enumeratedItemsLabel} checklist — you and the other reviewer BOTH return this every round (it is NOT partitioned like the guideline rules): read EVERY artifact file's \`${opts.enumeratedItemsSection}\` section, enumerate each item in order as ${opts.enumeratedItemsLabel}1..${opts.enumeratedItemsLabel}n across the whole artifact, and return one ac_checklist entry per item ({ id: "${opts.enumeratedItemsLabel}<k>", verdict: pass|violation|na, evidence: one line }). An item the ${opts.artifactNoun} fails to satisfy, or that no step/test covers, is a BLOCKING finding carrying full guideline-rule weight — enumerating and checking these items is as load-bearing as the rule checklist. If no file has a \`${opts.enumeratedItemsSection}\` section, return \`ac_checklist: []\`.
+Enumerated AC checklist — you and the other reviewer BOTH return this every round (it is NOT partitioned like the guideline rules): read EVERY artifact file's \`## Acceptance criteria\` section, enumerate each item in order as AC1..ACn across the whole artifact, and return one ac_checklist entry per item ({ id: "AC<k>", verdict: pass|violation|na, evidence: one line }). An item the ${opts.artifactNoun} fails to satisfy, or that no step/test covers, is a BLOCKING finding carrying full guideline-rule weight — enumerating and checking these items is as load-bearing as the rule checklist. If no file has a \`## Acceptance criteria\` section, return \`ac_checklist: []\`.
 
 Severity: "blocking" = the plan as written produces wrong or missing work; "concern" = likely gap needing a fix or an explicit justification; "suggestion" = optional polish (never drives revision). Stable key format "<rule-id-or-gap>:<plan-location>". Confidence under ${cfg.confidenceMin} will be dropped.
 
-You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.join(', ')}), the ac_checklist covering every ${opts.enumeratedItemsLabel} item, plus your findings. Round: ${round}.`
+You MUST return a rule_checklist verdict (pass/violation/na + one line of evidence) for every assigned rule (${rules.join(', ')}), the ac_checklist covering every AC item, plus your findings. Round: ${round}.`
   }
 
   const seen: SeenFinding[] = []
@@ -153,7 +141,7 @@ ${JSON.stringify(suggestions, null, 2)}
 
 Rule checklists: ${JSON.stringify(checklists, null, 2)}
 
-AC/addendum checklists (per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts from each reviewer): ${JSON.stringify(acChecklists, null, 2)}
+AC/addendum checklists (per-item AC pass/violation/na verdicts from each reviewer): ${JSON.stringify(acChecklists, null, 2)}
 
 Seen digest from prior rounds:
 ${digest(seen)}
@@ -162,7 +150,7 @@ Prior round files live at ${cfg.dir}/reviews/${opts.roundFilePrefix}-*.md — re
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against this round's set and all prior rounds; a match on a prior key is a duplicate unless the prior record marks it fixed and the revision regressed.
-2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status: open|refuted|duplicate } per the conventions) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item ${opts.enumeratedItemsLabel} pass/violation/na verdicts).
+2. Write ${roundFile} with frontmatter (round: ${roundLabel}, seed_used: ${seedUsed}, reviewer_a_rules: ${JSON.stringify(rules.a)}, reviewer_b_rules: ${JSON.stringify(rules.b)}, new_confirmed: <count>, outcome: converged if zero new confirmed else revise, findings list with one entry per finding carrying { id, key, severity, verdict: confirmed|plausible|refuted, confidence, status: open|refuted|duplicate } per the conventions) and full finding bodies plus both rule checklists AND both AC/addendum checklists (the per-item AC pass/violation/na verdicts).
 3. Return your per-finding verdicts, the ids of truly-NEW confirmed findings (surviving and not duplicates), and the duplicate ids.`,
       { label: `verify:r${roundLabel}`, phase: phaseLabel, effort: 'low', schema: VERIFY_SCHEMA }
     )

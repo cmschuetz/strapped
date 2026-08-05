@@ -21,7 +21,6 @@ export const SCHEMA_TYPES: ReadonlyArray<readonly [type: string, constant: strin
   ['PlanResult', 'PLAN_SCHEMA'],
   ['FindingsResult', 'FINDINGS_SCHEMA'],
   ['VerifyResult', 'VERIFY_SCHEMA'],
-  ['SynthResult', 'SYNTH_SCHEMA'],
   ['ImplementResult', 'IMPLEMENT_SCHEMA'],
   ['WaveResult', 'WAVE_SCHEMA'],
   ['ApplyResult', 'APPLY_SCHEMA'],

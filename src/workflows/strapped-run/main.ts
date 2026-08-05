@@ -6,7 +6,6 @@
 // `return await main()` the workflow executor contract requires.
 
 import { parseConfig } from './config.ts'
-import { feedbackSynthStage } from './stages/feedback-synth.ts'
 import { implementStage } from './stages/implement.ts'
 import { planStage } from './stages/plan.ts'
 import { prStage } from './stages/pr.ts'
@@ -14,13 +13,12 @@ import type { RunConfig, RunResult, StageCtx, StageName, StageResult } from './t
 
 const STAGES: Record<StageName, (cfg: RunConfig, ctx: StageCtx) => Promise<StageResult>> = {
   plan: planStage,
-  'feedback-synth': feedbackSynthStage,
   implement: implementStage,
   pr: prStage,
 }
 
 function gateFailed(name: StageName, result: StageResult): boolean {
-  if (name === 'plan' || name === 'feedback-synth') return 'converged' in result && !result.converged
+  if (name === 'plan') return 'converged' in result && !result.converged
   if (name === 'implement') return 'allDone' in result && !result.allDone
   if (name === 'pr') return Boolean('gateFailed' in result && result.gateFailed)
   return false

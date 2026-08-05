@@ -161,9 +161,9 @@
             "evidence"
           ],
           "additionalProperties": false,
-          "description": "One reviewer verdict on a single enumerated acceptance-criterion or feedback addendum item. Kept as its OWN required list (not folded into `rule_checklist`) so a reviewer can never silently omit the per-item AC/addendum verdicts: a required, separate field is enforced by the structured-output schema every round, giving ACs and addendums the same weight as guideline rules."
+          "description": "One reviewer verdict on a single enumerated acceptance-criterion item. Kept as its OWN required list (not folded into `rule_checklist`) so a reviewer can never silently omit the per-item AC verdicts: a required, separate field is enforced by the structured-output schema every round, giving ACs the same weight as guideline rules."
         },
-        "description": "Per-item AC/addendum verdicts — required (may be empty when the artifact has no enumerated section)."
+        "description": "Per-item AC verdicts — required (may be empty when the artifact has no enumerated section)."
       }
     },
     "required": [
@@ -230,49 +230,6 @@
       "verdicts",
       "new_confirmed_ids",
       "duplicate_ids"
-    ],
-    "additionalProperties": false
-  },
-  "SYNTH_SCHEMA": {
-    "type": "object",
-    "properties": {
-      "addenda": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "deliverableId": {
-              "type": "string"
-            },
-            "sourcePr": {
-              "type": "string"
-            },
-            "crossDeliverable": {
-              "type": "boolean"
-            },
-            "tasks": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "required": [
-            "deliverableId",
-            "sourcePr",
-            "crossDeliverable",
-            "tasks"
-          ],
-          "additionalProperties": false
-        }
-      },
-      "summary": {
-        "type": "string"
-      }
-    },
-    "required": [
-      "addenda",
-      "summary"
     ],
     "additionalProperties": false
   },
@@ -420,39 +377,12 @@
           "blocked"
         ],
         "additionalProperties": false,
-        "description": "Normal passes trust this paste; `remaining`/`blocked` below are authoritative only on addendum passes."
-      },
-      "remaining": {
-        "type": "number"
-      },
-      "blocked": {
-        "type": "array",
-        "items": {
-          "type": "object",
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "blockedOn": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          "required": [
-            "id",
-            "blockedOn"
-          ],
-          "additionalProperties": false
-        }
+        "description": "The workflow trusts this paste: `remaining`/`blocked` are read from here verbatim."
       }
     },
     "required": [
       "items",
-      "dag",
-      "remaining",
-      "blocked"
+      "dag"
     ],
     "additionalProperties": false
   },

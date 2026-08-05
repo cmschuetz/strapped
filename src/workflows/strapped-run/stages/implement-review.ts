@@ -1,7 +1,7 @@
 // One adversarial code-review round for one deliverable: 2 rule-partitioned
 // reviewers, then ONE verify-consolidate agent (batch skeptical verification of
 // every gating finding + dedup-vs-seen consolidation) writing
-// reviews/<id>-code-round-<N><suffix>.md.
+// reviews/<id>-code-round-<N>.md.
 
 import { rulesFileFor, rulesForRound } from '../config.ts'
 import { digest } from '../review-loop.ts'
@@ -26,7 +26,6 @@ export interface CodeReviewRoundOpts {
   round: number
   confirmation: boolean
   seen: readonly SeenFinding[]
-  recordSuffix: string
 }
 
 export interface CodeReviewRoundResult {
@@ -38,7 +37,7 @@ export interface CodeReviewRoundResult {
 
 export async function runCodeReviewRound(
   cfg: RunConfig,
-  { item, round, confirmation, seen, recordSuffix }: CodeReviewRoundOpts
+  { item, round, confirmation, seen }: CodeReviewRoundOpts
 ): Promise<CodeReviewRoundResult> {
   const rules = rulesForRound(cfg, round)
   const rulesFile = rulesFileFor(cfg)
@@ -89,7 +88,7 @@ You MUST return a rule_checklist entry with a pass/violation/na verdict and one 
   const suggestions = allFindings.filter(f => f.severity === 'suggestion')
   log(`${item.id} round ${roundLabel}: ${gating.length} gating finding(s), ${suggestions.length} suggestion(s)`)
 
-  const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}${recordSuffix}.md`
+  const roundFile = `${cfg.dir}/reviews/${item.id}-code-round-${roundLabel}.md`
   // Zero gating findings → record-writer fast path; see review-loop.ts.
   const verification = await agent<VerifyResult>(
     gating.length === 0
@@ -126,7 +125,7 @@ AC/addendum checklists (per-item AC pass/violation/na verdicts from each reviewe
 Seen digest from prior rounds:
 ${seenDigest || '(none — first round)'}
 
-Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-code-round-*${recordSuffix}.md — read them.
+Prior round record files, if any, live in ${cfg.dir}/reviews/ named ${item.id}-code-round-*.md — read them.
 
 Consolidation tasks, over the findings that survive your verdicts:
 1. Merge same-root-cause findings by key against BOTH this round's set and all prior rounds. A finding matching a prior round's key is a duplicate unless the prior record marks it fixed and it has regressed.

@@ -9,36 +9,18 @@ import type {
   ApplyResult,
   BlockedNode,
   CodeFinding,
-  CoordinatorCtx,
   ImplementResult,
   ImplementStageResult,
   NodeOutcome,
   NodeState,
   ProcessedOutcome,
-  RoundsField,
   RunConfig,
   SeenFinding,
   WaveItem,
   WaveResult,
 } from '../types.ts'
 
-function implementPrompt(cfg: RunConfig, item: WaveItem, addendumMode: boolean): string {
-  if (addendumMode) {
-    return `You are the fix agent applying PR-review feedback to deliverable ${item.id} of strapped run "${cfg.slug}". This deliverable was ALREADY implemented on its branch; you are NOT re-implementing it from scratch.
-
-Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
-
-1. Read your deliverable plan in full: ${item.planFile} — focus on its \`## Feedback addendum\` section, which lists the concrete fix tasks synthesized from the PR review comments.
-2. Read the shared research digest: ${cfg.dir}/research.md
-3. Read the project guidelines: every CLAUDE.md that applies (repo root at minimum).
-${item.resumeNote ? `\nThis deliverable is being RESUMED. Prior state:\n${item.resumeNote}\n` : ''}
-Apply ONLY the \`## Feedback addendum\` section to the EXISTING code on this branch — a targeted change addressing the review feedback. Do NOT re-implement the deliverable from scratch and do NOT touch anything outside the addendum's scope. Note side-discoveries in your summary instead of fixing them.
-
-Before finishing, ALL validations must pass inside the worktree:
-${item.validations.map(v => `- ${v}`).join('\n')}
-
-Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} and the feedback fix in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (contradictory addendum, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
-  }
+function implementPrompt(cfg: RunConfig, item: WaveItem): string {
   return `You are the implementation agent for deliverable ${item.id} of strapped run "${cfg.slug}". You have fresh context — everything you need is in the files below.
 
 Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
@@ -57,14 +39,14 @@ ${item.validations.map(v => `- ${v}`).join('\n')}
 Commit your work on ${item.branch} with a Conventional-Commits message (\`<type>(${cfg.slug}): <description>\` — scope is the run slug, no \`${item.id}:\` title prefix; reference ${item.id} in the body). If validations pass, commit and return status "implemented" with validations_green true. If you hit a blocker you cannot resolve (missing dependency, contradictory plan, validation failure you cannot fix), commit what is safe, return status "blocked" with the blocker described — do NOT loop indefinitely.`
 }
 
-function fixPrompt(cfg: RunConfig, item: WaveItem, findings: readonly CodeFinding[], round: number, recordSuffix: string): string {
+function fixPrompt(cfg: RunConfig, item: WaveItem, findings: readonly CodeFinding[], round: number): string {
   return `You are the fix agent for deliverable ${item.id} of strapped run "${cfg.slug}", code-review round ${round}. Fresh context — everything you need is below.
 
 Work EXCLUSIVELY inside the worktree: ${item.worktree} (branch ${item.branch}, based on ${item.base}). This deliverable targets repo "${item.repo}" — never touch ${item.repoRoot} directly.
 
 1. Read the deliverable plan: ${item.planFile}
 2. Read the research digest: ${cfg.dir}/research.md
-3. Read the full round record: ${cfg.dir}/reviews/${item.id}-code-round-${round}${recordSuffix}.md
+3. Read the full round record: ${cfg.dir}/reviews/${item.id}-code-round-${round}.md
 
 Confirmed findings you must fix:
 ${JSON.stringify(findings.map(f => ({ id: f.id, key: f.key, severity: f.severity, location: f.location, what: f.what, recommendation: f.recommendation })), null, 2)}
@@ -75,8 +57,8 @@ ${item.validations.map(v => `- ${v}`).join('\n')}
 Commit the fixes on ${item.branch}. Update the round record: flip each fixed finding's status from open to fixed. Return status "implemented" with validations_green true, or "blocked" with the blocker if a finding cannot be fixed as recommended (do not silently skip it).`
 }
 
-async function implementOne(cfg: RunConfig, item: WaveItem, addendumMode: boolean): Promise<NodeState> {
-  const result = await agent<ImplementResult>(implementPrompt(cfg, item, addendumMode), {
+async function implementOne(cfg: RunConfig, item: WaveItem): Promise<NodeState> {
+  const result = await agent<ImplementResult>(implementPrompt(cfg, item), {
     label: `implement:${item.id}`,
     phase: 'Implement',
     schema: IMPLEMENT_SCHEMA,
@@ -88,7 +70,7 @@ async function implementOne(cfg: RunConfig, item: WaveItem, addendumMode: boolea
   return { item, outcome: 'implemented', summary: result.summary, roundsUsed: 0 }
 }
 
-async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: string): Promise<NodeOutcome> {
+async function reviewFixLoop(cfg: RunConfig, state: NodeState): Promise<NodeOutcome> {
   if (state.outcome === 'parked') return { ...state, suggestions: [] }
   const item = state.item
   // A 0-round code-review budget means "skip adversarial review entirely and
@@ -108,7 +90,7 @@ async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: str
   for (let round = 1; round <= cfg.codeRounds; round++) {
     roundsUsed = round
     lastRoundFixedAll = false
-    const review = await runCodeReviewRound(cfg, { item, round, confirmation: false, seen, recordSuffix })
+    const review = await runCodeReviewRound(cfg, { item, round, confirmation: false, seen })
     suggestions.push(...review.suggestions)
     if (review.converged) {
       converged = true
@@ -116,7 +98,7 @@ async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: str
     }
     for (const f of review.newConfirmed) seen.push({ ...f, round, status: 'open' })
 
-    const fix = await agent<ImplementResult>(fixPrompt(cfg, item, review.newConfirmed, round, recordSuffix), {
+    const fix = await agent<ImplementResult>(fixPrompt(cfg, item, review.newConfirmed, round), {
       label: `fix:${item.id}:r${round}`,
       phase: 'Fix',
       schema: IMPLEMENT_SCHEMA,
@@ -130,7 +112,7 @@ async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: str
   }
 
   if (!converged && !parkedReason && lastRoundFixedAll) {
-    const confirm = await runCodeReviewRound(cfg, { item, round: cfg.codeRounds, confirmation: true, seen, recordSuffix })
+    const confirm = await runCodeReviewRound(cfg, { item, round: cfg.codeRounds, confirmation: true, seen })
     suggestions.push(...confirm.suggestions)
     if (confirm.converged) {
       converged = true
@@ -156,7 +138,7 @@ async function reviewFixLoop(cfg: RunConfig, state: NodeState, recordSuffix: str
   }
 }
 
-function coordinatorPrompt(cfg: RunConfig, pass: number, { only, addendumMode, recordSuffix, roundsField }: CoordinatorCtx, processed: readonly ProcessedOutcome[] = []): string {
+function coordinatorPrompt(cfg: RunConfig, pass: number, only: string | null): string {
   const stateScript = cfg.scripts.state
   const worktreeScript = cfg.scripts.worktree
   const header = `You are the wave coordinator (pass ${pass}) of the implement stage of strapped run "${cfg.slug}". You are a mechanical executor: run exactly the commands below via Bash and return the JSON described — the scripts do all the computing, you are a pipe. Contract for every script: the "Harness scripts" section of ${cfg.conventionsFile}.
@@ -166,28 +148,6 @@ State script: node ${stateScript} <command> ...
 Worktree script: ${worktreeScript}
 ${pass === 1 ? `\nFirst pass only — flip the manifest first: run \`node ${stateScript} manifest-status ${cfg.dir} implementing\` (a same-status flip is an idempotent no-op on resume).\n` : ''}`
 
-  if (addendumMode) {
-    const doneIds = processed.filter(o => o.outcome === 'done').map(o => o.id)
-    const parkedIds = processed.filter(o => o.outcome !== 'done').map(o => o.id)
-    const ledger = processed.length
-      ? `Progress ledger — the workflow tracked these across the passes of THIS dispatch and it is the ONLY authoritative progress signal: addendum applied (done): ${JSON.stringify(doneIds)}; parked this dispatch: ${JSON.stringify(parkedIds)}. Never dispatch a ledger node again.`
-      : `Progress ledger: empty — this is the first pass of this dispatch, so treat EVERY affected node's addendum as unapplied.`
-    return `${header}
-This is a FEEDBACK (addendum) pass — the "Feedback loop" section of ${cfg.conventionsFile} is authoritative. The affected set is every deliverable whose file under ${cfg.dir}/deliverables/ contains a \`## Feedback addendum\` section${only ? ` intersected with the single node ${only}` : ''}. No new deliverables, branches, or worktrees are minted.
-
-${ledger} Never infer "addendum applied" from \`feedback_rounds_used\`, from existing ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md records, or from node statuses — all of those can be left over from a PRIOR feedback batch, and the feedback lifecycle is status-neutral (a node returns to its pre-addendum status after its fix lands).
-
-1. Run \`node ${stateScript} dag ${cfg.dir}\` for the nodes, their frontmatter, and the authoritative \`topo\` order — never hand-roll them.
-2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
-3. This pass's wave is the next topological RANK of the affected set counting ONLY nodes not in the progress ledger (parents before children — a parent's fixes must land before its children's wave). A ledger node (done or parked) is never dispatched again; a node whose current status is \`parked\` is not dispatched either.
-4. Per node in the wave:
-   - Node with an open PR (\`pr:\` frontmatter non-null — status \`pr-open\`, or \`fixing\` on resume): \`node ${stateScript} transition <deliverableFile> fixing\` (idempotent when already \`fixing\`).
-   - Pre-PR node at \`done\` whose \`pr:\` frontmatter is null (e.g. the pr stage report-and-skipped it): dispatch it WITHOUT any transition — there is no \`done>fixing\` edge, so \`transition fixing\` would fail; its addendum applies on the existing branch and the node stays \`done\`.
-   - Reuse the EXISTING worktree/branch from its frontmatter; verify with \`${worktreeScript} <repoRoot> <worktree> <branch> <base>\` (idempotent reuse; non-zero exit is a hard stop — report, don't improvise). Never create anything new.
-   - resumeNote: null unless the node was mid-fix; then compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md — open findings and what was already done.
-Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null for a pre-PR node), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from step 1's dag output plus \`resumable\` = its \`nodes\` ids at status \`in-progress\` ([] when none), NO other dag fields (recorded for auditing; the ledger-derived values below stay authoritative on feedback passes), \`remaining\` = the count of affected nodes NOT in the progress ledger's done list (undispatched and parked-this-dispatch nodes both count), and \`blocked\` = affected nodes waiting on a parked/unfinished parent as [{id, blockedOn}]. When remaining is 0, return items: [].`
-  }
-
   return `${header}
 1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ''}\` EXACTLY ONCE, FIRST — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself, and NEVER re-run dag after a transition (your paste below is THIS first output). This pass's wave = every node in \`ready\` PLUS every node whose status in the dag's \`nodes\` list is \`in-progress\` with a recorded worktree (an interrupted implementation to resume — compose its resumeNote from its frontmatter).
 2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
@@ -196,11 +156,11 @@ Return \`items\` (one per wave node: id, repo, repoRoot, validations, planFile a
    - Worktree path: <worktreeRoot>/${cfg.slug}/<id>; branch and base come from the node's frontmatter.
    - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
-   - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`${roundsField}\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*${recordSuffix}.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from your FIRST dag run's printed JSON, plus \`resumable\` = the ids from that same output's \`nodes\` list whose status is \`in-progress\` ([] when none); include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. Also return top-level \`remaining\` and \`blocked\` mirroring those same dag values. When the dag's \`remaining\` is 0, return items: [].`
+   - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`review_rounds_used\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*.md record — open findings and what was already done.
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from your FIRST dag run's printed JSON, plus \`resumable\` = the ids from that same output's \`nodes\` list whose status is \`in-progress\` ([] when none); include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. When the dag's \`remaining\` is 0, return items: [].`
 }
 
-function applyPrompt(cfg: RunConfig, pass: number, results: readonly NodeOutcome[], { addendumMode, roundsField }: { addendumMode: boolean; roundsField: RoundsField }): string {
+function applyPrompt(cfg: RunConfig, pass: number, results: readonly NodeOutcome[]): string {
   const stateScript = cfg.scripts.state
   const outcomes = results.map(r => ({
     id: r.item.id,
@@ -217,24 +177,17 @@ State script: node ${stateScript} <command> ...
 Wave outcomes:
 ${JSON.stringify(outcomes, null, 2)}
 
-Per outcome:${addendumMode ? `
-- outcome "done" (feedback fix converged) with a non-null \`pr\` in its outcome above: \`node ${stateScript} transition <deliverableFile> in-review\` then return the node to its PR state — \`node ${stateScript} transition <deliverableFile> pr-open\`.
-- outcome "done" with \`pr: null\` (pre-PR node — it was dispatched at \`done\` and never entered \`fixing\`): \`node ${stateScript} transition <deliverableFile> done\` (an idempotent no-op). Report the final status per node.
-- outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
-- always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\` — the feedback counter, NEVER review_rounds_used.` : `
+Per outcome:
 - outcome "done": \`node ${stateScript} transition <deliverableFile> done\`.
 - outcome "parked": \`node ${stateScript} transition <deliverableFile> parked\` then \`node ${stateScript} set <deliverableFile> parked_reason "<parkedReason>"\`.
-- always: \`node ${stateScript} set <deliverableFile> ${roundsField} <roundsUsed>\`.`}
+- always: \`node ${stateScript} set <deliverableFile> review_rounds_used <roundsUsed>\`.
 
 Return applied: one entry per outcome { id, status } with the final on-disk status. Do not run anything else.`
 }
 
 export async function implementStage(cfg: RunConfig): Promise<ImplementStageResult> {
   const a = stageArgsFor(cfg, 'implement')
-  const addendumMode = Boolean(a.addendumMode)
-  const recordSuffix = a.recordSuffix || ''
-  const roundsField: RoundsField = addendumMode ? 'feedback_rounds_used' : 'review_rounds_used'
-  const coordinatorCtx: CoordinatorCtx = { only: a.only || null, addendumMode, recordSuffix, roundsField }
+  const only = a.only || null
 
   const outcomes: ProcessedOutcome[] = []
   let blocked: BlockedNode[] = []
@@ -244,7 +197,7 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
 
   while (pass < maxPasses) {
     pass++
-    let wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes), {
+    let wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, only), {
       label: `coordinate:${pass}`,
       phase: 'Implement',
       schema: WAVE_SCHEMA,
@@ -252,31 +205,29 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
     if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass}`)
 
     // Trust the pasted dag, not the agent's summary; mismatch → one retry, then hard stop.
-    if (!addendumMode) {
-      const matchesDag = (w: WaveResult) => {
-        const itemIds = new Set(w.items.map(i => i.id))
-        const dispatchable = new Set([...w.dag.ready, ...w.dag.resumable])
-        return w.dag.ready.every(id => itemIds.has(id)) && [...itemIds].every(id => dispatchable.has(id))
-      }
+    const matchesDag = (w: WaveResult) => {
+      const itemIds = new Set(w.items.map(i => i.id))
+      const dispatchable = new Set([...w.dag.ready, ...w.dag.resumable])
+      return w.dag.ready.every(id => itemIds.has(id)) && [...itemIds].every(id => dispatchable.has(id))
+    }
+    if (!matchesDag(wave)) {
+      log(`pass ${pass}: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match dag ready [${wave.dag.ready.join(', ')}] — re-dispatching once`)
+      const mismatchNote = `\n\nRETRY — your previous wave was REJECTED: its items [${wave.items.map(i => i.id).join(', ')}] did not match its own dag paste's ready [${wave.dag.ready.join(', ')}]. Return EXACTLY one items entry per node in the dag command's ready list — no omissions, no extras.`
+      wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, only) + mismatchNote, {
+        label: `coordinate:${pass}:retry`,
+        phase: 'Implement',
+        schema: WAVE_SCHEMA,
+      })
+      if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass} retry`)
       if (!matchesDag(wave)) {
-        log(`pass ${pass}: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match dag ready [${wave.dag.ready.join(', ')}] — re-dispatching once`)
-        const mismatchNote = `\n\nRETRY — your previous wave was REJECTED: its items [${wave.items.map(i => i.id).join(', ')}] did not match its own dag paste's ready [${wave.dag.ready.join(', ')}]. Return EXACTLY one items entry per node in the dag command's ready list — no omissions, no extras.`
-        wave = await agent<WaveResult>(coordinatorPrompt(cfg, pass, coordinatorCtx, outcomes) + mismatchNote, {
-          label: `coordinate:${pass}:retry`,
-          phase: 'Implement',
-          schema: WAVE_SCHEMA,
-        })
-        if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass} retry`)
-        if (!matchesDag(wave)) {
-          throw new Error(
-            `implement stage: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match its own dag ready [${wave.dag.ready.join(', ')}] after a retry on pass ${pass}`
-          )
-        }
+        throw new Error(
+          `implement stage: coordinator wave [${wave.items.map(i => i.id).join(', ')}] does not match its own dag ready [${wave.dag.ready.join(', ')}] after a retry on pass ${pass}`
+        )
       }
     }
-    const remaining = addendumMode ? wave.remaining : wave.dag.remaining
+    const remaining = wave.dag.remaining
     if (pass === 1) maxPasses = remaining + 1
-    blocked = addendumMode ? wave.blocked : wave.dag.blocked
+    blocked = wave.dag.blocked
 
     if (remaining === 0) {
       allDone = true
@@ -292,12 +243,12 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
     log(`pass ${pass} wave: ${wave.items.map(i => i.id).join(', ')}`)
     const results = await pipeline(
       wave.items,
-      item => implementOne(cfg, item, addendumMode),
-      state => reviewFixLoop(cfg, state, recordSuffix)
+      item => implementOne(cfg, item),
+      state => reviewFixLoop(cfg, state)
     )
     const waveResults = results.filter(Boolean)
 
-    const applied = await agent<ApplyResult>(applyPrompt(cfg, pass, waveResults, coordinatorCtx), {
+    const applied = await agent<ApplyResult>(applyPrompt(cfg, pass, waveResults), {
       label: `apply:${pass}`,
       phase: 'Implement',
       effort: 'low',
@@ -324,25 +275,23 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
 
     // Deterministic wrap-up: the pasted dag makes remaining computable, so a
     // pass that finishes everything needs no confirming coordinator dispatch.
-    if (!addendumMode) {
-      const doneResults = waveResults.filter(r => r.outcome === 'done')
-      const remainingAfter = wave.dag.remaining - doneResults.length
-      if (remainingAfter <= 0) {
-        // Safety net: the shortcut trusts wave outcomes, so first cross-check
-        // the applier's returned per-node ON-DISK statuses. A done outcome
-        // whose transition silently failed must not yield allDone — defer to
-        // the next coordinator pass, which re-reads the real dag.
-        const appliedStatus = new Map(applied.applied.map(n => [n.id, n.status]))
-        const unapplied = doneResults.filter(r => appliedStatus.get(r.item.id) !== 'done')
-        if (unapplied.length) {
-          log(`pass ${pass}: wrap-up shortcut skipped — on-disk status disagrees with done outcome for [${unapplied.map(r => r.item.id).join(', ')}] — dispatching the next coordinator pass`)
-        } else {
-          const doneIds = new Set(doneResults.map(r => r.item.id))
-          blocked = wave.dag.blocked.filter(b => !doneIds.has(b.id))
-          allDone = true
-          log(`pass ${pass}: all ${doneResults.length} remaining node(s) done — skipping wrap-up coordinator`)
-          break
-        }
+    const doneResults = waveResults.filter(r => r.outcome === 'done')
+    const remainingAfter = wave.dag.remaining - doneResults.length
+    if (remainingAfter <= 0) {
+      // Safety net: the shortcut trusts wave outcomes, so first cross-check
+      // the applier's returned per-node ON-DISK statuses. A done outcome
+      // whose transition silently failed must not yield allDone — defer to
+      // the next coordinator pass, which re-reads the real dag.
+      const appliedStatus = new Map(applied.applied.map(n => [n.id, n.status]))
+      const unapplied = doneResults.filter(r => appliedStatus.get(r.item.id) !== 'done')
+      if (unapplied.length) {
+        log(`pass ${pass}: wrap-up shortcut skipped — on-disk status disagrees with done outcome for [${unapplied.map(r => r.item.id).join(', ')}] — dispatching the next coordinator pass`)
+      } else {
+        const doneIds = new Set(doneResults.map(r => r.item.id))
+        blocked = wave.dag.blocked.filter(b => !doneIds.has(b.id))
+        allDone = true
+        log(`pass ${pass}: all ${doneResults.length} remaining node(s) done — skipping wrap-up coordinator`)
+        break
       }
     }
   }

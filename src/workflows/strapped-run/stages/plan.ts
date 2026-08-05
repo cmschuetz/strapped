@@ -44,8 +44,6 @@ Return the deliverable list and a one-paragraph summary.`,
     verifyArtifactPhrase: 'the implementation plan',
     roundFilePrefix: 'plan-round',
     maxRounds: cfg.planRounds,
-    enumeratedItemsLabel: 'AC',
-    enumeratedItemsSection: '## Acceptance criteria',
     reviserPromptFn: (newConfirmed, roundFile) =>
       `You are the plan reviser for strapped run "${cfg.slug}". Close every confirmed review finding by editing the plan files in ${cfg.dir} (manifest.md, research.md, deliverables/*.md), keeping every file conformant to ${cfg.conventionsFile}. Original ask for reference: ${a.sourcePlan}. Target repos (fix repo assignments and cross-repo base rules against these):
 ${repoList(a.repos)}

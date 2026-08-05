@@ -56,7 +56,7 @@ const CONVENTIONS_MD = join(ROOT, 'plugins', 'strapped', 'conventions.md')
 const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
-const STAGE_ORDER = ['plan', 'feedback-synth', 'implement', 'pr']
+const STAGE_ORDER = ['plan', 'implement', 'pr']
 const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'review-loop', 'zero-rounds']
 
 const raise: Die = msg => {

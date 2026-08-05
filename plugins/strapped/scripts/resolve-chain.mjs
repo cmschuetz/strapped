@@ -35,7 +35,7 @@ function out(obj) {
 // src/scripts/resolve-chain.ts
 var die2 = (msg) => die("resolve-chain.mjs", msg);
 var VALID_STAGES = ["plan", "implement", "pr"];
-var EXCLUDED_STAGES = new Set(["feedback", "feedback-synth", "learn", "status"]);
+var EXCLUDED_STAGES = new Set(["feedback", "learn", "status"]);
 var NAME_SHAPE = /^[A-Za-z][A-Za-z0-9_-]*$/;
 var BUILTINS = {
   auto: ["plan", "implement", "pr"],
