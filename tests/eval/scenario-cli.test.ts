@@ -29,7 +29,8 @@ const PLAN = {
   summary: 'one deliverable covering the thing',
 }
 const PLAN_HANDLERS: Record<string, unknown> = {
-  planner: PLAN,
+  // The default researchRounds 2 dispatches the planner with PLAN_LEAD_SCHEMA.
+  planner: { ...PLAN, research_requests: [] },
   'plan-review:a:r1': NO_FINDINGS,
   'plan-review:b:r1': NO_FINDINGS,
   'verify:r1': { verdicts: [], new_confirmed_ids: [], duplicate_ids: [] },

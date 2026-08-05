@@ -1,7 +1,7 @@
 // Harness SCENARIO suite smoke test — fully hermetic (no real `claude`).
 //
 // Proves the scenario CONTENT is sound without spending a cent:
-//   - the CLI loads exactly the eight scenarios from the suite directory and
+//   - the CLI loads exactly the nine scenarios from the suite directory and
 //     `--filter` narrows by id and by tag (agent calls answered by a stub
 //     spawn returning error envelopes — the REAL deployable still executes);
 //   - every scenario is well-formed (unique ids, canonical stage order,
@@ -22,19 +22,20 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { test } from 'bun:test'
 import { loadScenarios, main } from '../../src/eval/cli.ts'
 import { gradeScenario, type ScenarioGrade } from '../../src/eval/scenario/grade.ts'
 import { buildSandbox, removeSandbox } from '../../src/eval/scenario/sandbox.ts'
-import type { Scenario, ScenarioOutcome, ScenarioSandbox } from '../../src/eval/scenario/types.ts'
+import type { AgentLedgerEntry, Scenario, ScenarioOutcome, ScenarioSandbox } from '../../src/eval/scenario/types.ts'
 import { scenarios } from '../../src/eval/scenarios/harness/index.ts'
 import { dirtyBranchScenario } from '../../src/eval/scenarios/harness/dirty-branch.scenario.ts'
 import { fullPipelineScenario } from '../../src/eval/scenarios/harness/full-pipeline.scenario.ts'
 import { manyRulesScenario } from '../../src/eval/scenarios/harness/many-rules.scenario.ts'
 import { planOnlyScenario } from '../../src/eval/scenarios/harness/plan-only.scenario.ts'
 import { preconditionParkScenario } from '../../src/eval/scenarios/harness/precondition-park.scenario.ts'
+import { researchFanoutScenario } from '../../src/eval/scenarios/harness/research-fanout.scenario.ts'
 import { implementOnlyScenario } from '../../src/eval/scenarios/harness/implement-only.scenario.ts'
 import { reviewLoopScenario } from '../../src/eval/scenarios/harness/review-loop.scenario.ts'
 import { zeroRoundsScenario } from '../../src/eval/scenarios/harness/zero-rounds.scenario.ts'
@@ -57,7 +58,7 @@ const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'implement', 'pr']
-const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'review-loop', 'zero-rounds']
+const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'research-fanout', 'review-loop', 'zero-rounds']
 
 const raise: Die = msg => {
   throw new Error(msg)
@@ -179,13 +180,18 @@ function patchFrontmatter(file: string, patch: Record<string, unknown>): void {
   writeFrontmatterFile(file, data, content)
 }
 
-function outcomeFor(scenario: Scenario, sandbox: ScenarioSandbox, runResult: unknown): ScenarioOutcome {
+function outcomeFor(
+  scenario: Scenario,
+  sandbox: ScenarioSandbox,
+  runResult: unknown,
+  ledger: AgentLedgerEntry[] = []
+): ScenarioOutcome {
   return {
     scenario,
     sandbox,
     runResult,
     error: null,
-    ledger: [],
+    ledger,
     wallClockMs: 0,
     totals: { costUsd: 0, turns: 0, agentCalls: 0, durationMs: 0, apiDurationMs: 0 },
     phases: [],
@@ -358,7 +364,7 @@ function stubSpawn(): Spawn {
 // --- scenario well-formedness ---------------------------------------------------
 
 test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
-  assert.equal(scenarios.length, 8)
+  assert.equal(scenarios.length, 9)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   for (const s of scenarios) {
@@ -405,11 +411,12 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.ok(manyRulesScenario.seedRunState !== undefined)
   assert.ok(dirtyBranchScenario.seedRunState !== undefined)
   assert.ok(preconditionParkScenario.seedRunState !== undefined)
+  assert.equal(researchFanoutScenario.seedRunState, undefined)
 })
 
 // --- loader + filter through the CLI --------------------------------------------
 
-test('loadScenarios loads exactly the seven harness scenarios from the suite directory', async () => {
+test('loadScenarios loads exactly the harness scenarios from the suite directory', async () => {
   const loaded = await loadScenarios(SCENARIOS_DIR)
   assert.deepEqual(loaded.map(s => s.id).sort(), ALL_IDS)
 })
@@ -423,6 +430,7 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(manyRulesScenario))
   assert.ok(scenarios.includes(dirtyBranchScenario))
   assert.ok(scenarios.includes(preconditionParkScenario))
+  assert.ok(scenarios.includes(researchFanoutScenario))
 })
 
 test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
@@ -892,6 +900,155 @@ test('dirty-branch: findings without cast verdicts fail per-finding-verdicts', (
   try {
     const graded = grade(outcome)
     assert.equal(byName(graded.adherenceGrades, 'adherence:per-finding-verdicts').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+// --- research-fanout fan-out discrimination --------------------------------------
+
+/** A canned ledger entry (only label/prompt matter to the fan-out graders). */
+function ledgerEntry(label: string, prompt: string): AgentLedgerEntry {
+  return {
+    label,
+    prompt,
+    model: 'claude-haiku-4-5',
+    ok: true,
+    error: null,
+    cost: 0.01,
+    usage: { inputTokens: 10, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    durationMs: 1000,
+    apiDurationMs: 950,
+    numTurns: 2,
+  }
+}
+
+/** A final-round researcher prompt as the harness ships it: enqueue-free. */
+const CLEAN_RESEARCHER_PROMPT =
+  'You are a delegated research agent for strapped run "research-fanout" (plan-stage research round 2 of 2). Research exactly ONE topic in this isolated context and write your findings as a fragment file.'
+
+/** A prompt a broken harness would ship on the final round (enqueue capability). */
+const ENQUEUE_RESEARCHER_PROMPT = `${CLEAN_RESEARCHER_PROMPT} You MAY enqueue further topics via research_requests.`
+
+/** The canned fan-out ledger a correct run produces. */
+function fanoutLedger(): AgentLedgerEntry[] {
+  return [
+    ledgerEntry('planner', 'lead planner prompt'),
+    ledgerEntry('researcher:svc-a-triple', CLEAN_RESEARCHER_PROMPT),
+    ledgerEntry('researcher:svc-b-strings', CLEAN_RESEARCHER_PROMPT),
+    ledgerEntry('plan-writer', 'consolidate the fragments and write the plan'),
+  ]
+}
+
+/** Canned GOOD research-fanout outcome: fragments + digest + plan artifacts + fan-out ledger. */
+function goodResearchFanout(ledger: AgentLedgerEntry[] = fanoutLedger()): {
+  sandbox: ScenarioSandbox
+  outcome: ScenarioOutcome
+} {
+  const sandbox = buildSandbox(researchFanoutScenario)
+  writeFrontmatterFile(
+    join(sandbox.runDir, 'manifest.md'),
+    {
+      slug: sandbox.slug,
+      source_plan: `plans/${sandbox.slug}.md`,
+      created: '2026-08-04',
+      status: 'in-review',
+      seed: 29,
+      budgets: { plan_rounds: 0, code_rounds: 1, research_rounds: 2, confidence_min: 70 },
+      repos: sandbox.repos.map(r => ({ name: r.name, root: r.root, config: r.configPath })),
+      deliverables: [{ id: 'D1', file: 'deliverables/D1-additions.md', deps: [] }],
+    },
+    `# ${sandbox.slug}\n\nCanned theme summary. DAG: D1.\n`
+  )
+  writeFrontmatterFile(
+    join(sandbox.runDir, 'deliverables', 'D1-additions.md'),
+    baseDeliverable('research-fanout', 'additions', { repo: 'svc-a' }),
+    '## Context\ncanned\n\n## Files to touch\n- src/core.ts\n\n## Implementation steps\n1. do it\n\n## Acceptance criteria\n- AC1: triple works\n\n## Tests\n- tests/core.test.ts\n\n## Out of scope\n- everything else\n'
+  )
+  write(
+    join(sandbox.runDir, 'research.md'),
+    '# Research digest — research-fanout\n\nConsolidated from the fragments: svc-a triple beside double() in src/core.ts; svc-b shout/clamp beside describeApp() in src/app.ts; bun test patterns in both.\n'
+  )
+  write(
+    join(sandbox.runDir, 'research', 'svc-a-triple.md'),
+    '# svc-a triple\n\nsrc/core.ts exports double(); add triple beside it, test in tests/core.test.ts.\n'
+  )
+  write(
+    join(sandbox.runDir, 'research', 'svc-b-strings.md'),
+    '# svc-b strings\n\nsrc/app.ts exports describeApp(); add shout and clamp, tests in tests/app.test.ts.\n'
+  )
+  commitState(sandbox)
+  const runResult = runResultFor(researchFanoutScenario, {
+    plan: {
+      converged: true,
+      rounds: 0,
+      deliverables: [{ id: 'D1', file: 'deliverables/D1-additions.md', title: 'Canned deliverable', deps: [] }],
+      outstanding: [],
+      summary: 'one deliverable from consolidated research',
+    },
+  })
+  return { sandbox, outcome: outcomeFor(researchFanoutScenario, sandbox, runResult, ledger) }
+}
+
+test('research-fanout: canned good (fragments + digest + fan-out ledger) grades 1/1', () => {
+  const { sandbox, outcome } = goodResearchFanout()
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('research-fanout: duplicate researcher topic labels fail topics-unique and only that grader', () => {
+  const duplicated = [
+    ledgerEntry('planner', 'lead planner prompt'),
+    ledgerEntry('researcher:svc-a-triple', CLEAN_RESEARCHER_PROMPT),
+    ledgerEntry('researcher:svc-a-triple', CLEAN_RESEARCHER_PROMPT),
+    ledgerEntry('plan-writer', 'consolidate'),
+  ]
+  const { sandbox, outcome } = goodResearchFanout(duplicated)
+  try {
+    const graded = grade(outcome)
+    assert.ok(graded.correctness < 1)
+    assert.equal(byName(graded.correctnessGrades, 'topics-unique').pass, false)
+    assert.equal(byName(graded.correctnessGrades, 'fan-out-occurred').pass, true)
+    assert.equal(byName(graded.correctnessGrades, 'final-round-no-enqueue').pass, true)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('research-fanout: enqueue language in a final-round researcher prompt fails final-round-no-enqueue', () => {
+  const leaky = [
+    ledgerEntry('planner', 'lead planner prompt'),
+    ledgerEntry('researcher:svc-a-triple', ENQUEUE_RESEARCHER_PROMPT),
+    ledgerEntry('researcher:svc-b-strings', CLEAN_RESEARCHER_PROMPT),
+    ledgerEntry('plan-writer', 'consolidate'),
+  ]
+  const { sandbox, outcome } = goodResearchFanout(leaky)
+  try {
+    const graded = grade(outcome)
+    assert.ok(graded.correctness < 1)
+    assert.equal(byName(graded.correctnessGrades, 'final-round-no-enqueue').pass, false)
+    assert.equal(byName(graded.correctnessGrades, 'topics-unique').pass, true)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('research-fanout: missing fragments fail fan-out-occurred; missing research.md fails plan-artifacts-exist', () => {
+  const { sandbox, outcome } = goodResearchFanout()
+  try {
+    rmSync(join(sandbox.runDir, 'research'), { recursive: true, force: true })
+    const noFragments = grade(outcome)
+    assert.ok(noFragments.correctness < 1)
+    assert.equal(byName(noFragments.correctnessGrades, 'fan-out-occurred').pass, false)
+
+    unlinkSync(join(sandbox.runDir, 'research.md'))
+    const noDigest = grade(outcome)
+    assert.equal(byName(noDigest.correctnessGrades, 'plan-artifacts-exist').pass, false)
   } finally {
     removeSandbox(sandbox)
   }

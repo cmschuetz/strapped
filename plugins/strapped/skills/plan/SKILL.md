@@ -18,11 +18,12 @@ Turn one large source plan document into an approved, implementation-ready DAG o
 
 ## Arguments
 
-`$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N]`
+`$ARGUMENTS`: `<path-to-plan.md> [--repo <path-or-name>]... [--seed N] [--max-rounds N] [--research-rounds N]`
 
 - `--repo <path-or-name>` — **repeatable**; names the target repo(s) the work will change (an unordered set — no repo is special). Each value is either an absolute/relative path to a repo, or a bare name resolved under the user's repo-parent convention (e.g. `$WORK_DIR_PATH/<name>`, `~/chime/<name>`). When **omitted**, the skill first checks for an existing run to resume, and only if none exists infers candidate repos from the source plan text and confirms them with the user (see Step 1). Repo identity is **never** taken from the cwd.
 - `--seed` forces the run seed. When omitted on a FRESH run, generate a truly random seed once — e.g. `python3 -c 'import random; print(random.randrange(2**32))'` — and use that; either way the planner records the effective seed in the manifest, and resumes/later stages always read the manifest value, so reviews stay reproducible.
 - `--max-rounds` defaults to the `plan_rounds` budget (1). `0` is legal and skips adversarial plan review entirely.
+- `--research-rounds` — BFS research rounds in the plan stage, counting the planner's own research as round 1 (default 2; `1` disables research delegation entirely — the planner never sees the delegation concept). On resume it defaults to the manifest's `research_rounds` budget, mirroring how `--max-rounds` defaults to `plan_rounds`.
 
 ## Step 1 — Resolve repos, config, then scaffold or resume
 
@@ -78,7 +79,7 @@ If this is a **resume** (either the 1a match on the `--repo`-omitted path, or th
 Otherwise scaffold a fresh run:
 
 ```bash
-mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques}
+mkdir -p <runRoot>/<slug>/{deliverables,reviews,critiques,research}
 touch <runRoot>/<slug>/critiques/user-critiques.md
 ```
 
@@ -113,12 +114,13 @@ Dispatch the `strapped-run` mono-workflow with a singleton stage list — invoke
   "rulesByRound": [<the id-only per-round splits from step 2>],
   "planRounds": 1,
   "codeRounds": 1,
+  "researchRounds": 2,
   "confidenceMin": 70,
   "seed": "<the effective seed — random per fresh run unless --seed forced it>"
 }
 ```
 
-`planRounds` is the `--max-rounds` value (default 1; `0` skips adversarial review); `codeRounds` is the run's code-review budget (default 1) — the planner records BOTH (plus the seed) in the manifest's `budgets:`, so overridden budgets persist on disk without skill-side patching.
+`planRounds` is the `--max-rounds` value (default 1; `0` skips adversarial review); `codeRounds` is the run's code-review budget (default 1); `researchRounds` is the `--research-rounds` value (default 2 on a fresh run, the manifest's `research_rounds` budget on resume; `1` disables research delegation) — the planner records ALL THREE (plus the seed) in the manifest's `budgets:` as `plan_rounds`/`code_rounds`/`research_rounds`, so overridden budgets persist on disk without skill-side patching.
 
 `stageArgs.plan.repos` is the full target-repo list (one entry per repo, each carrying its resolved `validations`). The planner uses it to (a) write the manifest's `repos:` map (name/root/config), (b) set each deliverable's required `repo:` field to one of `repos[].name`, and (c) verify claims across **all** target repos. The planner must also obey the conventions' **cross-repo base rule**: a deliverable's `base:` is a branch in the *same* repo as its `repo:`, and a deliverable whose parent is in a different repo bases on its own repo's `main`. A child that depends on work which must first land through some external step outside the run's control still belongs IN the DAG — it declares the prerequisite under a `## Preconditions` section and parks at implement time if unmet (the conventions' **Cross-repo deps and external preconditions** section).
 

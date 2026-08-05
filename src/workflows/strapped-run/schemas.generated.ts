@@ -515,3 +515,135 @@ export const PR_SCHEMA = {
   ],
   "additionalProperties": false
 }
+
+/** Derived from the `PlanLeadResult` interface in types.ts. */
+export const PLAN_LEAD_SCHEMA = {
+  "type": "object",
+  "properties": {
+    "deliverables": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "deps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "file",
+          "title",
+          "deps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "summary": {
+      "type": "string"
+    },
+    "research_requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "brief"
+        ],
+        "additionalProperties": false,
+        "description": "One research topic a planner or researcher enqueues for a later BFS round."
+      },
+      "description": "Empty = the small-ask exit: the planner already wrote every plan artifact itself."
+    }
+  },
+  "required": [
+    "deliverables",
+    "summary",
+    "research_requests"
+  ],
+  "additionalProperties": false
+}
+
+/** Derived from the `ResearchResult` interface in types.ts. */
+export const RESEARCH_SCHEMA = {
+  "type": "object",
+  "properties": {
+    "topic": {
+      "type": "string"
+    },
+    "notes_file": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "research_requests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic",
+          "brief"
+        ],
+        "additionalProperties": false,
+        "description": "One research topic a planner or researcher enqueues for a later BFS round."
+      }
+    }
+  },
+  "required": [
+    "topic",
+    "notes_file",
+    "summary",
+    "research_requests"
+  ],
+  "additionalProperties": false
+}
+
+/** Derived from the `ResearchFinalResult` interface in types.ts. */
+export const RESEARCH_FINAL_SCHEMA = {
+  "type": "object",
+  "properties": {
+    "topic": {
+      "type": "string"
+    },
+    "notes_file": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "topic",
+    "notes_file",
+    "summary"
+  ],
+  "additionalProperties": false
+}

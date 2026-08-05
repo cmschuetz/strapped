@@ -35,6 +35,14 @@ function requireNumber(rec, key) {
     throw new Error(`config field "${key}" must be a number`);
   return value;
 }
+function parseResearchRounds(value) {
+  if (value === undefined)
+    return 2;
+  if (typeof value !== "number" || value < 1) {
+    throw new Error('config field "researchRounds" must be a number >= 1');
+  }
+  return value;
+}
 function parseStages(value) {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`stages must be a non-empty ordered subset of [${STAGE_ORDER.join(", ")}]`);
@@ -176,6 +184,7 @@ function parseConfig(raw) {
     confidenceMin: requireNumber(parsed, "confidenceMin"),
     planRounds: requireNumber(parsed, "planRounds"),
     codeRounds: requireNumber(parsed, "codeRounds"),
+    researchRounds: parseResearchRounds(parsed.researchRounds),
     rulesByRound,
     rulesFile: parseRulesFile(parsed.rulesFile, rulesByRound),
     stages,
@@ -697,6 +706,132 @@ var PR_SCHEMA = {
   },
   required: [
     "prs",
+    "summary"
+  ],
+  additionalProperties: false
+};
+var PLAN_LEAD_SCHEMA = {
+  type: "object",
+  properties: {
+    deliverables: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: {
+            type: "string"
+          },
+          file: {
+            type: "string"
+          },
+          title: {
+            type: "string"
+          },
+          deps: {
+            type: "array",
+            items: {
+              type: "string"
+            }
+          }
+        },
+        required: [
+          "id",
+          "file",
+          "title",
+          "deps"
+        ],
+        additionalProperties: false
+      }
+    },
+    summary: {
+      type: "string"
+    },
+    research_requests: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          topic: {
+            type: "string"
+          },
+          brief: {
+            type: "string"
+          }
+        },
+        required: [
+          "topic",
+          "brief"
+        ],
+        additionalProperties: false,
+        description: "One research topic a planner or researcher enqueues for a later BFS round."
+      },
+      description: "Empty = the small-ask exit: the planner already wrote every plan artifact itself."
+    }
+  },
+  required: [
+    "deliverables",
+    "summary",
+    "research_requests"
+  ],
+  additionalProperties: false
+};
+var RESEARCH_SCHEMA = {
+  type: "object",
+  properties: {
+    topic: {
+      type: "string"
+    },
+    notes_file: {
+      type: "string"
+    },
+    summary: {
+      type: "string"
+    },
+    research_requests: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          topic: {
+            type: "string"
+          },
+          brief: {
+            type: "string"
+          }
+        },
+        required: [
+          "topic",
+          "brief"
+        ],
+        additionalProperties: false,
+        description: "One research topic a planner or researcher enqueues for a later BFS round."
+      }
+    }
+  },
+  required: [
+    "topic",
+    "notes_file",
+    "summary",
+    "research_requests"
+  ],
+  additionalProperties: false
+};
+var RESEARCH_FINAL_SCHEMA = {
+  type: "object",
+  properties: {
+    topic: {
+      type: "string"
+    },
+    notes_file: {
+      type: "string"
+    },
+    summary: {
+      type: "string"
+    }
+  },
+  required: [
+    "topic",
+    "notes_file",
     "summary"
   ],
   additionalProperties: false
@@ -1239,30 +1374,158 @@ RETRY — your previous wave was REJECTED: its items [${wave.items.map((i) => i.
 }
 
 // src/workflows/strapped-run/stages/plan.ts
-async function planStage(cfg, ctx) {
-  const a = stageArgsFor(cfg, "plan");
-  const stateScript = cfg.scripts.state;
-  const plan = await agent(`You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
-
-Source plan (the original ask): ${a.sourcePlan}
+var MAX_RESEARCH_PER_ROUND = 6;
+function slugifyTopic(topic) {
+  return topic.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+function uniqueRequests(requests, seen) {
+  const out = [];
+  const local = new Set;
+  for (const req of requests) {
+    const slug = slugifyTopic(req.topic ?? "");
+    if (slug === "" || seen.has(slug) || local.has(slug))
+      continue;
+    local.add(slug);
+    out.push({ slug, topic: req.topic, brief: req.brief ?? "" });
+  }
+  return out;
+}
+function plannerInputs(cfg, a) {
+  return `Source plan (the original ask): ${a.sourcePlan}
 Target repos (the run state is keyed by the run slug, not by any repo; the work spans these repos — an unordered set):
 ${repoList(a.repos)}
 Output directory (already scaffolded): ${cfg.dir}
-Conventions you MUST follow for every file format: ${cfg.conventionsFile}
-
-Procedure:
-1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
-2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.
-3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
+Conventions you MUST follow for every file format: ${cfg.conventionsFile}`;
+}
+function researchSteps(cfg) {
+  return `1. Read the source plan in full, then research each target repo's codebase thoroughly: architecture, the modules the ask touches, existing utilities to reuse, test patterns.
+2. Write ${cfg.dir}/research.md — a distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see.`;
+}
+function planWritingSteps(cfg) {
+  const stateScript = cfg.scripts.state;
+  return `3. Split the work into deliverables by discrete theme, forming a DAG: independent work has no deps, dependent work lists its parent deliverable ids. Keep one coherent theme in a single deliverable so a reviewer can grasp the whole change in one PR — split a theme into multiple deliverables only when its estimated meaningful diff (excluding generated code, dependency/lockfile bumps, generated clients/schemas, vendored code, and large fixtures) exceeds ~1,000 changed lines. Prefer a few cohesive, independently-shippable nodes over many fragments that scatter one theme across PRs. Assign each deliverable to exactly one target repo.
 4. Write one self-contained file per deliverable at ${cfg.dir}/deliverables/<id>-<kebab>.md per the conventions (ids are EXACTLY D1, D2, D3, ... — capital D then the ordinal, in filenames, frontmatter, branches, and deps alike) (frontmatter: id, title, deps, repo: <one of the target repo names above>, status: pending, branch: strapped/${cfg.slug}/<id>-<kebab>, base, worktree: null, pr: null, review_rounds_used: 0, feedback_rounds_used: 0, parked_reason: null, estimated_diff_lines; body sections under these EXACT verbatim headers — \`## Context\`, \`## Files to touch\`, \`## Implementation steps\`, \`## Acceptance criteria\`, \`## Tests\`, \`## Out of scope\` — the review machinery keys on the \`## Acceptance criteria\` header literally, so no case or wording variation; a deliverable covered by step 5 additionally carries a \`## Preconditions\` section). Set base per the cross-repo base rule: a deliverable's base is a parent branch WITHIN THE SAME repo, otherwise that repo's main (roots, and any cross-repo child, base on their own repo's main — you can never branch across repos). A fresh implementer seeded with ONLY this file plus research.md must be able to do the work.
 5. A deliverable MAY depend on a parent whose work must first become available to it through some external landing step outside this run's control (a cross-repo child bases on its own repo's main and never has a sibling repo's unmerged branch). Plan such work IN the DAG anyway — never push it out of the plan as an out-of-band follow-up. Record the prerequisite in the child's body under a \`## Preconditions\` section (a short note stating what must be TRUE before implementation can start — checkable, not aspirational); at implement time an unmet precondition parks the node for a later re-kick instead of blocking the plan.
-6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, budgets — record the EFFECTIVE budgets of this run: plan_rounds: ${cfg.planRounds}, code_rounds: ${cfg.codeRounds}, confidence_min: ${cfg.confidenceMin} — the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
-7. After all plan artifacts are written, run \`node ${stateScript} commit ${cfg.dir}\` via Bash so the run's state root is git-backed from birth (it git-inits the state root if absent and commits the artifacts). Best-effort: proceed even if it reports an error.
+6. Write ${cfg.dir}/manifest.md per the conventions (status: in-review, seed: ${cfg.seed}, budgets — record the EFFECTIVE budgets of this run: plan_rounds: ${cfg.planRounds}, code_rounds: ${cfg.codeRounds}, research_rounds: ${cfg.researchRounds}, confidence_min: ${cfg.confidenceMin} — the repos: map listing every target repo above per the conventions — name, root, config path (repos: is an unordered set, no repo is special); the deliverables list with ids/files/repos/deps, theme summary, ASCII DAG sketch).
+7. After all plan artifacts are written, run \`node ${stateScript} commit ${cfg.dir}\` via Bash so the run's state root is git-backed from birth (it git-inits the state root if absent and commits the artifacts). Best-effort: proceed even if it reports an error.`;
+}
+function classicPlannerPrompt(cfg, a) {
+  return `You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
 
-Return the deliverable list and a one-paragraph summary.`, { label: "planner", schema: PLAN_SCHEMA });
+${plannerInputs(cfg, a)}
+
+Procedure:
+${researchSteps(cfg)}
+${planWritingSteps(cfg)}
+
+Return the deliverable list and a one-paragraph summary.`;
+}
+function leadPlannerPrompt(cfg, a) {
+  return `You are the planning agent for strapped run "${cfg.slug}". Produce a complete, reviewable implementation plan from a large source plan document.
+
+${plannerInputs(cfg, a)}
+
+Research delegation: this run budgets ${cfg.researchRounds} BFS research rounds, counting your own research as round 1. You may enqueue research topics via research_requests; each becomes a delegated researcher agent running in its own isolated context, writing a fragment file under ${cfg.dir}/research/. Treat enqueueing a research task exactly as you would treat spawning a research subagent if you had that capability — the same judgment and the same restraint: delegation is for discrete topics that genuinely benefit from an isolated context window, and liberal delegation wastes tokens and wall clock. Most asks need no delegation at all.
+
+Procedure (steps 2–7 apply only when you return an EMPTY research_requests list):
+${researchSteps(cfg)}
+${planWritingSteps(cfg)}
+
+Delegation exit — when you return a NON-EMPTY research_requests list, replace steps 2–7 with: write ONLY your own round-1 findings as fragment files under ${cfg.dir}/research/<topic-slug>.md (lowercase kebab slug of each fragment's topic), write NO research.md, NO manifest.md, and NO deliverables/ files (a plan-writer agent consolidates every fragment and writes those after the delegated research rounds finish), and return empty deliverables plus research_requests (one { topic, brief } per delegated topic — the brief tells that researcher what to find out and why).
+
+Return the deliverable list and a one-paragraph summary (deliverables is empty on the delegation exit).`;
+}
+function researcherPrompt(cfg, a, t, otherTopics, round, isFinal) {
+  const fragment = `${cfg.dir}/research/${t.slug}.md`;
+  const ownership = otherTopics.length === 0 ? "" : `
+These topics are already owned by other researchers: ${otherTopics.join(", ")}; stay focused on your own topic — you may read their fragments under ${cfg.dir}/research/ for context, but don't duplicate their work in yours.
+`;
+  const enqueueStep = isFinal ? "" : `
+3. You MAY request further research for the next round by returning research_requests (one { topic, brief } per topic). Treat enqueueing a research task exactly as you would treat spawning a research subagent if you had that capability — the same judgment and the same restraint: most topics need no further delegation, so return an empty list unless a discrete sub-topic genuinely needs its own isolated context.`;
+  const returnLine = isFinal ? `Return { topic, notes_file, summary } — topic "${t.slug}", notes_file "${fragment}", and a one-paragraph summary of your findings.` : `Return { topic, notes_file, summary, research_requests } — topic "${t.slug}", notes_file "${fragment}", a one-paragraph summary of your findings, and research_requests (empty unless step 3 applies).`;
+  return `You are a delegated research agent for strapped run "${cfg.slug}" (plan-stage research round ${round} of ${cfg.researchRounds}). Research exactly ONE topic in this isolated context and write your findings as a fragment file.
+
+Your topic: ${t.topic}
+Brief from the lead: ${t.brief}
+
+Source plan (the original ask): ${a.sourcePlan}
+Target repos (an unordered set — the work spans these repos):
+${repoList(a.repos)}
+Run directory: ${cfg.dir}
+${ownership}
+Procedure:
+1. Research your topic thoroughly across the target repos and the source plan: architecture, the modules the topic touches, key files, existing utilities to reuse, library/API findings, pitfalls.
+2. Write ${fragment} — a distilled, self-contained fragment (~100 lines max): key files with one-line roles, findings, decisions with rationale, known pitfalls. It will be consolidated into the run's research digest, so keep it scoped to your topic.${enqueueStep}
+
+${returnLine}`;
+}
+function planWriterPrompt(cfg, a) {
+  return `You are the plan-writer for strapped run "${cfg.slug}". The planning lead and its delegated researchers have finished their research; consolidate it and produce the complete, reviewable implementation plan.
+
+${plannerInputs(cfg, a)}
+
+Procedure:
+1. Read the source plan in full, then read EVERY research fragment under ${cfg.dir}/research/ — the lead's own findings plus each delegated researcher's fragment.
+2. Write ${cfg.dir}/research.md — consolidate the fragments into one distilled digest (~300 lines max): architecture notes, key files with one-line roles, library/API findings, decisions with rationale, known pitfalls. This is the only research context implementers will ever see. Then perform steps 3–7:
+${planWritingSteps(cfg)}
+
+Return the deliverable list and a one-paragraph summary.`;
+}
+async function runResearchRounds(cfg, a, initial) {
+  const seen = new Set;
+  let pending = uniqueRequests(initial, seen);
+  for (let round = 2;round <= cfg.researchRounds && pending.length > 0; round++) {
+    const batch = pending.slice(0, MAX_RESEARCH_PER_ROUND);
+    const dropped = pending.slice(MAX_RESEARCH_PER_ROUND);
+    if (dropped.length > 0) {
+      log(`plan research round ${round}: clamped to ${MAX_RESEARCH_PER_ROUND} researchers — dropped ${dropped.map((t) => t.slug).join(", ")}`);
+    }
+    for (const t of batch)
+      seen.add(t.slug);
+    const isFinal = round === cfg.researchRounds;
+    const results = await parallel(batch.map((t) => () => {
+      const others = [...seen].filter((s) => s !== t.slug);
+      return agent(researcherPrompt(cfg, a, t, others, round, isFinal), {
+        label: `researcher:${t.slug}`,
+        schema: isFinal ? RESEARCH_FINAL_SCHEMA : RESEARCH_SCHEMA
+      });
+    }));
+    const nextRequests = [];
+    for (let i = 0;i < batch.length; i++) {
+      const t = batch[i];
+      if (t === undefined)
+        continue;
+      const result = results[i];
+      if (result === null || result === undefined) {
+        log(`plan research round ${round}: researcher ${t.slug} returned no result — skipped`);
+        continue;
+      }
+      if (!isFinal)
+        nextRequests.push(...result.research_requests ?? []);
+    }
+    pending = isFinal ? [] : uniqueRequests(nextRequests, seen);
+  }
+}
+async function planStage(cfg, ctx) {
+  const a = stageArgsFor(cfg, "plan");
+  const stateScript = cfg.scripts.state;
+  const delegating = cfg.researchRounds > 1;
+  const plan = await agent(delegating ? leadPlannerPrompt(cfg, a) : classicPlannerPrompt(cfg, a), { label: "planner", schema: delegating ? PLAN_LEAD_SCHEMA : PLAN_SCHEMA });
   if (!plan)
     throw new Error("plan stage: planner agent failed");
-  log(`plan produced: ${plan.deliverables.length} deliverable(s)`);
+  const requests = delegating ? plan.research_requests ?? [] : [];
+  let deliverables = plan.deliverables;
+  let summary = plan.summary;
+  if (requests.length > 0) {
+    log(`plan delegating research: ${requests.length} request(s)`);
+    await runResearchRounds(cfg, a, requests);
+    const written = await agent(planWriterPrompt(cfg, a), { label: "plan-writer", schema: PLAN_SCHEMA });
+    if (!written)
+      throw new Error("plan stage: plan-writer agent failed");
+    deliverables = written.deliverables;
+    summary = written.summary;
+  }
+  log(`plan produced: ${deliverables.length} deliverable(s)`);
   const review = await runReviewLoop(cfg, {
     ask: a.sourcePlan,
     repos: a.repos,
@@ -1293,9 +1556,9 @@ Return { "changed": <the command's changed field> }. Do not run anything else.`,
   return {
     converged: review.converged,
     rounds: review.rounds,
-    deliverables: plan.deliverables,
+    deliverables,
     outstanding: review.outstanding,
-    summary: plan.summary
+    summary
   };
 }
 

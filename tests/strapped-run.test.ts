@@ -14,6 +14,11 @@ import {
   callsWithLabelPrefix,
   runWorkflow,
 } from './helpers/workflow-harness.ts'
+import {
+  PLAN_SCHEMA,
+  RESEARCH_FINAL_SCHEMA,
+  RESEARCH_SCHEMA,
+} from '../src/workflows/strapped-run/schemas.generated.ts'
 
 const WORKFLOW = fileURLToPath(new URL('../plugins/strapped/workflows/strapped-run.js', import.meta.url))
 
@@ -269,6 +274,178 @@ test('planner prompt carries the preconditions/parking rule, not reject-or-restr
   assert.ok(planner.includes('parks the node'), 'unmet preconditions park at implement time')
   assert.ok(!planner.includes('Reject or restructure'), 'the reject-or-restructure rule is retired')
   assert.ok(!planner.includes('ordering-only'), 'the ordering-only framing is retired')
+})
+
+// --- plan research fan-out -------------------------------------------------------
+
+/** A final-round researcher's canned result for a topic slug. */
+function researched(slug: string) {
+  return {
+    topic: slug,
+    notes_file: `/state/runs/test-run/research/${slug}.md`,
+    summary: `notes on ${slug}`,
+  }
+}
+
+/** A delegating planner result (lead schema shape, empty deliverables). */
+function delegating(...requests: { topic: string; brief: string }[]) {
+  return { deliverables: [], summary: 'delegating research', research_requests: requests }
+}
+
+test('plan: empty research_requests keeps the single-planner path', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      planner: { ...PLAN, research_requests: [] },
+    }),
+  })
+  assert.equal(callsWithLabelPrefix(calls, 'planner').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'researcher:').length, 0)
+  assert.equal(callsWithLabelPrefix(calls, 'plan-writer').length, 0)
+  assert.equal(result.results.plan.converged, true)
+  assert.deepEqual(result.results.plan.deliverables, PLAN.deliverables)
+  assert.equal(result.results.plan.summary, PLAN.summary)
+  // The budget-recording manifest instruction is present even without delegation.
+  assert.ok(callWithLabel(calls, 'planner').prompt.includes('research_rounds: 2'))
+})
+
+test('plan: researchRounds 1 strips delegation from schema and prompt', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ researchRounds: 1 }),
+    agent: agentByLabel(planConverges()),
+  })
+  const planner = callWithLabel(calls, 'planner')
+  assert.deepEqual(planner.opts?.schema, PLAN_SCHEMA)
+  assert.ok(!JSON.stringify(planner.opts?.schema).includes('research_requests'))
+  assert.ok(!planner.prompt.includes('research_requests'))
+  assert.ok(!/enqueue/i.test(planner.prompt))
+  assert.ok(planner.prompt.includes('research_rounds: 1'))
+})
+
+test('plan: delegation dispatches deduped researchers then the plan-writer', async () => {
+  const WRITTEN = {
+    deliverables: [{ id: 'D1', file: 'deliverables/D1-writer.md', title: 'Writer thing', deps: [] }],
+    summary: 'written by the plan-writer',
+  }
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      planner: delegating(
+        { topic: 'Auth Library', brief: 'find the auth library' },
+        { topic: 'auth library', brief: 'duplicate slug of the first' },
+        { topic: 'billing', brief: 'billing flows' }
+      ),
+      'researcher:auth-library': researched('auth-library'),
+      'researcher:billing': researched('billing'),
+      'plan-writer': WRITTEN,
+    }),
+  })
+  const researchers = callsWithLabelPrefix(calls, 'researcher:')
+  assert.deepEqual(researchers.map(c => c.opts?.label).sort(), ['researcher:auth-library', 'researcher:billing'])
+  // Default researchRounds 2 makes the researchers the FINAL round: no-enqueue
+  // schema and an enqueue-free prompt.
+  for (const call of researchers) {
+    assert.deepEqual(call.opts?.schema, RESEARCH_FINAL_SCHEMA)
+    assert.ok(!call.prompt.includes('research_requests'))
+    assert.ok(!/enqueue/i.test(call.prompt))
+    assert.ok(call.prompt.includes('already owned by other researchers'))
+  }
+  assert.ok(callWithLabel(calls, 'researcher:auth-library').prompt.includes('billing'))
+  assert.ok(callWithLabel(calls, 'researcher:billing').prompt.includes('auth-library'))
+  // The plan-writer runs after every researcher and supplies the stage result.
+  assert.equal(callsWithLabelPrefix(calls, 'plan-writer').length, 1)
+  const writerIdx = calls.indexOf(callWithLabel(calls, 'plan-writer'))
+  for (const call of researchers) assert.ok(calls.indexOf(call) < writerIdx)
+  assert.deepEqual(result.results.plan.deliverables, WRITTEN.deliverables)
+  assert.equal(result.results.plan.summary, WRITTEN.summary)
+})
+
+test('plan: three rounds BFS with mid-round enqueue and hard stop', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ researchRounds: 3 }),
+    agent: agentByLabel({
+      ...planConverges(),
+      planner: delegating({ topic: 'alpha', brief: 'alpha groundwork' }),
+      'researcher:alpha': {
+        ...researched('alpha'),
+        research_requests: [
+          { topic: 'beta', brief: 'discovered in round 2' },
+          { topic: 'Alpha', brief: 'duplicate of an assigned topic' },
+        ],
+      },
+      // The round-3 stub returns an enqueue anyway — the harness must ignore it.
+      'researcher:beta': { ...researched('beta'), research_requests: [{ topic: 'gamma', brief: 'never dispatched' }] },
+      'plan-writer': PLAN,
+    }),
+  })
+  const alpha = callWithLabel(calls, 'researcher:alpha')
+  assert.deepEqual(alpha.opts?.schema, RESEARCH_SCHEMA)
+  assert.ok(alpha.prompt.includes('research_requests'), 'a non-final researcher MAY enqueue')
+  const beta = callWithLabel(calls, 'researcher:beta')
+  assert.deepEqual(beta.opts?.schema, RESEARCH_FINAL_SCHEMA)
+  assert.ok(!beta.prompt.includes('research_requests'))
+  assert.ok(!/enqueue/i.test(beta.prompt))
+  // The duplicate is never re-dispatched and round 3's enqueue goes nowhere.
+  assert.equal(callsWithLabelPrefix(calls, 'researcher:').length, 2)
+})
+
+test('plan: per-round clamp dispatches 6 researchers and logs the overflow', async () => {
+  const topics = ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']
+  const stubs = Object.fromEntries(topics.slice(0, 6).map(t => [`researcher:${t}`, researched(t)]))
+  const { calls, logs } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      planner: delegating(...topics.map(t => ({ topic: t, brief: `about ${t}` }))),
+      ...stubs,
+      'plan-writer': PLAN,
+    }),
+  })
+  assert.equal(callsWithLabelPrefix(calls, 'researcher:').length, 6)
+  assert.ok(logs.some(l => l.includes('t7') && l.includes('t8')), 'overflow topics are logged')
+})
+
+test('plan: null researcher is skipped, null plan-writer throws', async () => {
+  const { result, calls, logs } = await runWorkflow(WORKFLOW, {
+    args: baseCfg(),
+    agent: agentByLabel({
+      ...planConverges(),
+      planner: delegating({ topic: 'alpha', brief: 'a' }, { topic: 'beta', brief: 'b' }),
+      'researcher:alpha': () => null,
+      'researcher:beta': researched('beta'),
+      'plan-writer': PLAN,
+    }),
+  })
+  assert.equal(result.results.plan.converged, true)
+  assert.equal(callsWithLabelPrefix(calls, 'plan-writer').length, 1)
+  assert.ok(logs.some(l => l.includes('alpha')), 'the failed researcher is logged')
+
+  await assert.rejects(
+    runWorkflow(WORKFLOW, {
+      args: baseCfg(),
+      agent: agentByLabel({
+        planner: delegating({ topic: 'alpha', brief: 'a' }),
+        'researcher:alpha': researched('alpha'),
+        'plan-writer': () => null,
+      }),
+    }),
+    /plan-writer agent failed/
+  )
+})
+
+test('plan: planner prompt keeps the preconditions/parking contract on the classic path too', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ researchRounds: 1 }),
+    agent: agentByLabel(planConverges()),
+  })
+  const planner = callWithLabel(calls, 'planner').prompt
+  assert.ok(planner.includes('## Preconditions'))
+  assert.ok(planner.includes('Plan such work IN the DAG'))
+  assert.ok(planner.includes('parks the node'))
+  assert.ok(!planner.includes('Reject or restructure'))
+  assert.ok(!planner.includes('ordering-only'))
 })
 
 test('reviewer b checks precondition declarations instead of flagging cross-repo code deps', async () => {

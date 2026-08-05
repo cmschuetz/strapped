@@ -136,6 +136,7 @@ function composeArgs(scenario: Scenario, sandbox: ScenarioSandbox, pluginDir: st
     confidenceMin: scenario.confidenceMin,
     planRounds: scenario.planRounds,
     codeRounds: scenario.codeRounds,
+    researchRounds: scenario.researchRounds ?? 2,
     rulesByRound: splitRules(scenario.rules, scenario.seed, maxRounds),
     rulesFile: join(sandbox.runDir, 'reviews', 'rules-snapshot.md'),
     stages: scenario.stages,

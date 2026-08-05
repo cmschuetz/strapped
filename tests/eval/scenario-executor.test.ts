@@ -27,6 +27,8 @@ const PLAN = {
   deliverables: [{ id: 'D1', file: 'deliverables/D1-thing.md', title: 'Thing', deps: [] }],
   summary: 'one deliverable covering the thing',
 }
+/** The planner's shape under the default researchRounds 2 (PLAN_LEAD_SCHEMA). */
+const PLAN_LEAD = { ...PLAN, research_requests: [] }
 const IMPLEMENTED = { status: 'implemented', summary: 'built the thing', validations_green: true, blocker: null }
 const PR_RESULT = {
   prs: [{ id: 'D1', url: null, skipped: true, reason: 'dry run' }],
@@ -110,7 +112,7 @@ async function runAndClean(
 }
 
 const FULL_CHAIN_HANDLERS = {
-  planner: PLAN,
+  planner: PLAN_LEAD,
   'plan-review:a:r1': NO_FINDINGS,
   'plan-review:b:r1': NO_FINDINGS,
   'verify:r1': EMPTY_VERIFY,
@@ -202,7 +204,7 @@ test('stage subset: stages ["plan"] dispatches only the plan stage', async () =>
   const { outcome, scripted } = await runAndClean(
     baseScenario(),
     envelopes({
-      planner: PLAN,
+      planner: PLAN_LEAD,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
       'verify:r1': EMPTY_VERIFY,
@@ -239,7 +241,7 @@ test('a failed agent returns null into the workflow and still lands in the ledge
   const scenario = baseScenario({ planRounds: 3, codeRounds: 1 })
   const { outcome, scripted } = await runAndClean(scenario, {
     ...envelopes({
-      planner: PLAN,
+      planner: PLAN_LEAD,
       'plan-review:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'plan-review:b:r1': NO_FINDINGS,
       'verify:r1': CONFIRMED_VERIFY,
@@ -274,7 +276,7 @@ test('composeArgs threads rulesFile + id-only partitions: reviewer prompts carry
   const { outcome, scripted } = await runAndClean(
     baseScenario(),
     envelopes({
-      planner: PLAN,
+      planner: PLAN_LEAD,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
       'verify:r1': EMPTY_VERIFY,
@@ -327,11 +329,33 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
   assert.equal(run.stoppedAt, null)
 })
 
+test('composeArgs threads researchRounds: declared passes through, omitted defaults to 2', async () => {
+  const PLAN_STUBS = {
+    planner: PLAN_LEAD,
+    'plan-review:a:r1': NO_FINDINGS,
+    'plan-review:b:r1': NO_FINDINGS,
+    'verify:r1': EMPTY_VERIFY,
+  }
+  // The planner prompt renders the effective budget (`research_rounds: N`), so
+  // the dispatched prompt proves the composed args carried researchRounds.
+  const declared = await runAndClean(baseScenario({ researchRounds: 3 }), envelopes(PLAN_STUBS))
+  assert.deepEqual(declared.scripted.unexpected, [])
+  assert.equal(declared.outcome.error, null)
+  const declaredPrompt = declared.outcome.ledger.find(e => e.label === 'planner')?.prompt ?? ''
+  assert.ok(declaredPrompt.includes('research_rounds: 3'))
+
+  const omitted = await runAndClean(baseScenario(), envelopes(PLAN_STUBS))
+  assert.deepEqual(omitted.scripted.unexpected, [])
+  assert.equal(omitted.outcome.error, null)
+  const omittedPrompt = omitted.outcome.ledger.find(e => e.label === 'planner')?.prompt ?? ''
+  assert.ok(omittedPrompt.includes('research_rounds: 2'))
+})
+
 test('modelByLabel overrides the scenario model per agent label', async () => {
   const { outcome, scripted } = await runAndClean(
     baseScenario({ model: 'claude-sonnet-5', modelByLabel: { planner: 'claude-opus-4-8' } }),
     envelopes({
-      planner: PLAN,
+      planner: PLAN_LEAD,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
       'verify:r1': EMPTY_VERIFY,
@@ -356,7 +380,7 @@ test('the agent label travels on the spawn env for scripted dispatch', async () 
   const { scripted } = await runAndClean(
     baseScenario(),
     envelopes({
-      planner: PLAN,
+      planner: PLAN_LEAD,
       'plan-review:a:r1': NO_FINDINGS,
       'plan-review:b:r1': NO_FINDINGS,
       'verify:r1': EMPTY_VERIFY,
