@@ -65,7 +65,7 @@ test('merged flip: pr-open deliverable whose PR merged → status flipped, flip 
   assert.ok(!file.includes('status: pr-open'))
 })
 
-test('changes requested: warning + /strapped:feedback-lite hint, file unchanged, exit 0', () => {
+test('changes requested: warning + /strapped:feedback hint, file unchanged, exit 0', () => {
   const env = makeHookEnv({ gh: CHANGES_REQUESTED })
   env.addDeliverable('my-run', 'D1-thing.md', {
     id: 'D1',
@@ -77,7 +77,7 @@ test('changes requested: warning + /strapped:feedback-lite hint, file unchanged,
   const res = env.run()
   assert.equal(res.status, 0)
   assert.match(res.stdout, /my-run\/D1 PR has changes requested/)
-  assert.match(res.stdout, /\/strapped:feedback-lite my-run/)
+  assert.match(res.stdout, /\/strapped:feedback my-run/)
   assert.ok(env.readDeliverable('my-run', 'D1-thing.md').includes('status: pr-open'))
 })
 

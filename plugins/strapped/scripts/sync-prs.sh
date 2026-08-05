@@ -71,7 +71,7 @@ for f in $files; do
     *)
       if [ "${decision:-}" = "CHANGES_REQUESTED" ]; then
         echo "strapped: $slug/$id PR has changes requested — needs attention ($url)"
-        echo "strapped: $slug/$id → address via /strapped:feedback-lite $slug (or /strapped:feedback for a larger re-work)"
+        echo "strapped: $slug/$id → address via /strapped:feedback $slug"
       fi
       ;;
   esac

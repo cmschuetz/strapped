@@ -1,7 +1,8 @@
 // Consolidated tests for the strapped-run mono-workflow: stage validation,
 // the DI'd dispatch loop with gate semantics, and the transplanted stage
-// machinery (plan + review loop, implement wave loop + code review, pr,
-// feedback-synth). Replaces the retired per-workflow test files.
+// machinery (plan + review loop, implement wave loop + code review, pr).
+// Replaces the retired per-workflow test files. Config parse-error tests live
+// in tests/strapped-run-config.test.ts.
 
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -97,7 +98,7 @@ function item(id: string, pr: string | null = null) {
 }
 
 function wave(items: ReturnType<typeof item>[], remaining: number, blocked: { id: string; blockedOn: string[] }[] = []) {
-  return { items, dag: { ready: items.map(i => i.id), resumable: [], remaining, blocked }, remaining, blocked }
+  return { items, dag: { ready: items.map(i => i.id), resumable: [], remaining, blocked } }
 }
 
 const IMPLEMENTED = { status: 'implemented', summary: 'built the thing', validations_green: true, blocker: null }
@@ -593,7 +594,7 @@ test('implement: zero-progress wave terminates the loop', async () => {
 })
 
 test('implement: coordinator wave contradicting its dag paste is re-dispatched once and the retry wave is used', async () => {
-  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] } }
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
@@ -615,7 +616,7 @@ test('implement: coordinator wave contradicting its dag paste is re-dispatched o
 })
 
 test('implement: an interrupted in-progress node is dispatchable via dag.resumable', async () => {
-  const resumeWave = { items: [item('D1')], dag: { ready: [], resumable: ['D1'], remaining: 1, blocked: [] }, remaining: 1, blocked: [] }
+  const resumeWave = { items: [item('D1')], dag: { ready: [], resumable: ['D1'], remaining: 1, blocked: [] } }
   const { result, calls } = await runWorkflow(WORKFLOW, {
     args: baseCfg({ stages: ['implement'], stageArgs: {} }),
     agent: agentByLabel({
@@ -631,7 +632,7 @@ test('implement: an interrupted in-progress node is dispatchable via dag.resumab
 })
 
 test('implement: a second dag-contradicting wave is a hard error, never a fake allDone', async () => {
-  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 0, blocked: [] }
+  const lyingWave = { items: [], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] } }
   await assert.rejects(
     runWorkflow(WORKFLOW, {
       args: baseCfg({ stages: ['implement'], stageArgs: {} }),
@@ -642,145 +643,6 @@ test('implement: a second dag-contradicting wave is a hard error, never a fake a
     }),
     /does not match its own dag ready/
   )
-})
-
-test('addendumMode + recordSuffix thread through to the review-record path and feedback_rounds_used', async () => {
-  const cfg = baseCfg({
-    stages: ['implement'],
-    stageArgs: { implement: { addendumMode: true, recordSuffix: '-feedback' } },
-  })
-  const { result, calls } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({
-      'coordinate:1': wave([item('D1')], 1),
-      'implement:D1': IMPLEMENTED,
-      'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [] },
-      'review:D1:b:r1': NO_FINDINGS,
-      'verify:D1:r1': confirmedVerify('r1-a-f1'),
-      'fix:D1:r1': IMPLEMENTED,
-      'review:D1:a:r2': NO_FINDINGS,
-      'review:D1:b:r2': NO_FINDINGS,
-      'verify:D1:r2': EMPTY_VERIFY,
-      'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
-      'coordinate:2': wave([], 0),
-    }),
-  })
-  assert.equal(result.results.implement.allDone, true)
-  assert.equal(result.results.implement.outcomes[0]?.outcome, 'done')
-  assert.equal(result.results.implement.outcomes[0]?.roundsUsed, 2)
-
-  // Addendum-mode implementer prompt, not the from-scratch preamble.
-  const implement = callWithLabel(calls, 'implement:D1')
-  assert.ok(implement.prompt.includes('Feedback addendum'))
-  assert.ok(!implement.prompt.includes('You are the implementation agent'))
-
-  // recordSuffix in the round-record write path (the verify-consolidate agent)
-  // and the fix agent's read path — writer and reader agree.
-  const verify = callWithLabel(calls, 'verify:D1:r1')
-  assert.ok(verify.prompt.includes(`${cfg.dir}/reviews/D1-code-round-1-feedback.md`))
-  const fix = callWithLabel(calls, 'fix:D1:r1')
-  assert.ok(fix.prompt.includes(`${cfg.dir}/reviews/D1-code-round-1-feedback.md`))
-
-  // The outcome applier drives the feedback counter and re-entry edges.
-  const apply = callWithLabel(calls, 'apply:1')
-  assert.ok(apply.prompt.includes('feedback_rounds_used'))
-  assert.ok(!apply.prompt.includes('set <deliverableFile> review_rounds_used'))
-  assert.ok(apply.prompt.includes('pr-open'))
-
-  // The coordinator runs the feedback re-entry, not fresh worktree creation.
-  const coordinate = callWithLabel(calls, 'coordinate:1')
-  assert.ok(coordinate.prompt.includes('Feedback addendum'))
-  assert.ok(coordinate.prompt.includes('transition <deliverableFile> fixing'))
-})
-
-test('addendumMode: apply prompt carries each node\'s real pr value; done/pre-PR entry and exit contracts agree', async () => {
-  const cfg = baseCfg({
-    stages: ['implement'],
-    stageArgs: { implement: { addendumMode: true, recordSuffix: '-feedback' } },
-  })
-  const PR_URL = 'https://github.com/o/r/pull/9'
-  const { result, calls } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({
-      // One node with an open PR, one pre-PR node still at done (pr: null).
-      'coordinate:1': wave([item('D1', PR_URL), item('D2')], 2),
-      ...nodeConverges('D1'),
-      ...nodeConverges('D2'),
-      'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }, { id: 'D2', status: 'done' }] },
-      'coordinate:2': wave([], 0),
-    }),
-  })
-  assert.equal(result.results.implement.allDone, true)
-
-  // The coordinator is told to return pr from the node frontmatter, to flip
-  // fixing only for nodes with an open PR, and to dispatch a done/pre-PR node
-  // WITHOUT the (illegal) done>fixing transition instead of hard-stopping.
-  const coordinate = callWithLabel(calls, 'coordinate:1')
-  assert.ok(coordinate.prompt.includes('resumeNote, pr'))
-  assert.ok(coordinate.prompt.includes('transition <deliverableFile> fixing'))
-  assert.ok(coordinate.prompt.includes('WITHOUT any transition'))
-  assert.ok(coordinate.prompt.includes('no `done>fixing` edge'))
-
-  // The applier sees each node's REAL pr value (not unconditionally null) and
-  // keys the pr-open-vs-done exit on it; the pre-PR exit never routes through
-  // in-review (illegal from done).
-  const apply = callWithLabel(calls, 'apply:1')
-  assert.ok(apply.prompt.includes(`"pr": "${PR_URL}"`))
-  assert.ok(apply.prompt.includes('"pr": null'))
-  assert.ok(apply.prompt.includes('with a non-null `pr`'))
-  assert.ok(apply.prompt.includes('never entered `fixing`'))
-})
-
-test('addendumMode: coordinator progress ledger — pass 1 treats every addendum as unapplied, later passes carry the processed ids', async () => {
-  const cfg = baseCfg({
-    stages: ['implement'],
-    stageArgs: { implement: { addendumMode: true, recordSuffix: '-feedback' } },
-  })
-  const { result, calls } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({
-      'coordinate:1': wave([item('D1')], 3),
-      ...nodeConverges('D1'),
-      'apply:1': { applied: [{ id: 'D1', status: 'pr-open' }] },
-      'coordinate:2': wave([item('D2'), item('D3')], 2),
-      ...nodeConverges('D2'),
-      'implement:D3': BLOCKED,
-      'apply:2': { applied: [{ id: 'D2', status: 'pr-open' }, { id: 'D3', status: 'parked' }] },
-      'coordinate:3': wave([], 1),
-    }),
-  })
-
-  // Pass 1: empty ledger — every affected addendum is unapplied, and stale
-  // on-disk markers from a prior feedback batch are explicitly ruled out as
-  // progress signals.
-  const c1 = callWithLabel(calls, 'coordinate:1').prompt
-  assert.ok(c1.includes('Progress ledger: empty'))
-  assert.ok(c1.includes("treat EVERY affected node's addendum as unapplied"))
-  assert.ok(c1.includes('Never infer "addendum applied" from `feedback_rounds_used`'))
-  assert.ok(c1.includes(`${cfg.dir}/reviews/<id>-code-round-*-feedback.md`))
-  assert.ok(!c1.includes('["D1"]'))
-
-  // Pass 2 carries pass 1's processed id in the done ledger.
-  const c2 = callWithLabel(calls, 'coordinate:2').prompt
-  assert.ok(c2.includes('addendum applied (done): ["D1"]'))
-  assert.ok(c2.includes('parked this dispatch: []'))
-  assert.ok(c2.includes('Never dispatch a ledger node again'))
-
-  // Pass 3 carries both passes' outcomes, split done vs parked; remaining
-  // counts the parked node, so items:[] with remaining:1 parks (allDone false).
-  const c3 = callWithLabel(calls, 'coordinate:3').prompt
-  assert.ok(c3.includes('addendum applied (done): ["D1","D2"]'))
-  assert.ok(c3.includes('parked this dispatch: ["D3"]'))
-  assert.equal(result.results.implement.allDone, false)
-  assert.equal(result.stoppedAt, 'implement')
-
-  // The ledger is an addendum-mode construct only: the non-addendum
-  // coordinator consumes the dag's remaining verbatim instead.
-  const plain = await runWorkflow(WORKFLOW, {
-    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
-    agent: agentByLabel({ 'coordinate:1': wave([], 0) }),
-  })
-  assert.ok(!callWithLabel(plain.calls, 'coordinate:1').prompt.includes('Progress ledger'))
 })
 
 // --- pr stage -------------------------------------------------------------------
@@ -842,95 +704,4 @@ test('pr as first stage: dag probe gate blocks when a node is earlier than done'
   assert.deepEqual(result.results.pr.prs, [])
   assert.ok(result.results.pr.summary.includes('D1, D2'))
   assert.equal(callsWithLabelPrefix(calls, 'pr-create').length, 0)
-})
-
-// --- feedback-synth --------------------------------------------------------------
-
-test('feedback-synth: synthesis agent then review loop with feedback-round prefix', async () => {
-  const comments = [
-    {
-      deliverableId: 'D1',
-      pr: 'https://github.com/o/r/pull/1',
-      lineComments: [{ path: 'src/thing.js', line: 3, body: 'rename this' }],
-      reviewBodies: [{ state: 'CHANGES_REQUESTED', body: 'needs a test' }],
-      issueComments: [],
-    },
-  ]
-  const synth = {
-    addenda: [{ deliverableId: 'D1', sourcePr: 'https://github.com/o/r/pull/1', crossDeliverable: false, tasks: ['rename thing', 'add the missing test'] }],
-    summary: 'two fixes on D1',
-  }
-  const cfg = baseCfg({
-    stages: ['feedback-synth'],
-    stageArgs: { 'feedback-synth': { comments, repos: REPOS } },
-  })
-  const { result, calls } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({
-      'feedback-synth': synth,
-      'plan-review:a:r1': NO_FINDINGS,
-      'plan-review:b:r1': NO_FINDINGS,
-      'verify:r1': EMPTY_VERIFY,
-    }),
-  })
-  const stageResult = result.results['feedback-synth']
-  assert.equal(stageResult.converged, true)
-  assert.deepEqual(stageResult.addenda, synth.addenda)
-  assert.equal(stageResult.summary, synth.summary)
-  assert.deepEqual(result.completed, ['feedback-synth'])
-  assert.equal(result.stoppedAt, null)
-
-  // The synthesis agent saw the fetched comments; the review loop writes
-  // feedback-round records, distinct from plan-round.
-  const synthCall = callWithLabel(calls, 'feedback-synth')
-  assert.ok(synthCall.prompt.includes('rename this'))
-  assert.ok(synthCall.prompt.includes('Feedback addendum'))
-  const verify = callWithLabel(calls, 'verify:r1')
-  assert.ok(verify.prompt.includes(`${cfg.dir}/reviews/feedback-round-1.md`))
-})
-
-test('feedback-synth: lite mode synthesizes without the review loop', async () => {
-  const comments = [
-    {
-      deliverableId: 'D1',
-      pr: 'https://github.com/o/r/pull/1',
-      lineComments: [{ path: 'src/thing.js', line: 3, body: 'rename this' }],
-      reviewBodies: [{ state: 'CHANGES_REQUESTED', body: 'needs a test' }],
-      issueComments: [],
-    },
-  ]
-  const synth = {
-    addenda: [{ deliverableId: 'D1', sourcePr: 'https://github.com/o/r/pull/1', crossDeliverable: false, tasks: ['rename thing', 'add the missing test'] }],
-    summary: 'two fixes on D1',
-  }
-  const cfg = baseCfg({
-    stages: ['feedback-synth'],
-    stageArgs: { 'feedback-synth': { comments, repos: REPOS, lite: true } },
-  })
-  const { result, calls } = await runWorkflow(WORKFLOW, {
-    args: cfg,
-    agent: agentByLabel({ 'feedback-synth': synth }),
-  })
-  const stageResult = result.results['feedback-synth']
-  assert.deepEqual(stageResult, {
-    converged: true,
-    rounds: 0,
-    outstanding: [],
-    addenda: synth.addenda,
-    summary: synth.summary,
-  })
-  assert.deepEqual(result.completed, ['feedback-synth'])
-  assert.equal(result.stoppedAt, null)
-
-  // Lite runs the synthesis agent but NO adversarial review-loop agents.
-  assert.equal(callsWithLabelPrefix(calls, 'feedback-synth').length, 1)
-  assert.equal(callsWithLabelPrefix(calls, 'plan-review').length, 0)
-  assert.equal(callsWithLabelPrefix(calls, 'verify').length, 0)
-
-  // The lite synth prompt returns the digest only — it does NOT instruct
-  // writing `## Feedback addendum` files.
-  const synthCall = callWithLabel(calls, 'feedback-synth')
-  assert.ok(synthCall.prompt.includes('rename this'))
-  assert.ok(synthCall.prompt.includes('Return the routed digest ONLY'))
-  assert.ok(!synthCall.prompt.includes('Append a `## Feedback addendum` section'))
 })

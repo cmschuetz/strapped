@@ -36,7 +36,7 @@ interface Chain {
 
 const VALID_STAGES: readonly string[] = ['plan', 'implement', 'pr']
 // Interactive by design — never chainable (documented in conventions.md).
-const EXCLUDED_STAGES = new Set(['feedback', 'feedback-synth', 'learn', 'status'])
+const EXCLUDED_STAGES = new Set(['feedback', 'learn', 'status'])
 const NAME_SHAPE = /^[A-Za-z][A-Za-z0-9_-]*$/
 
 const BUILTINS: Record<string, string[]> = {

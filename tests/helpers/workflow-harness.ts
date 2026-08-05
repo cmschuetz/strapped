@@ -110,17 +110,10 @@ export interface PrStageResult {
   notDone?: string[]
 }
 
-export interface FeedbackSynthStageResult {
-  converged: boolean
-  addenda: unknown[]
-  summary: string
-}
-
 export interface StageResults {
   plan: PlanStageResult
   implement: ImplementStageResult
   pr: PrStageResult
-  'feedback-synth': FeedbackSynthStageResult
 }
 
 export interface WorkflowResult {

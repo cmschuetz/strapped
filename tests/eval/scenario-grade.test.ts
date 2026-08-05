@@ -417,7 +417,7 @@ test('a completed/stoppedAt mismatch fails the run-result check', () => {
 
 test('checks that do not apply to the stage subset are neutral, not failures', () => {
   const scenario = baseScenario({
-    stages: ['feedback-synth'],
+    stages: [],
     seedRunState: { files: { 'manifest.md': manifest('approved') } },
     expect: undefined,
   })
@@ -425,9 +425,9 @@ test('checks that do not apply to the stage subset are neutral, not failures', (
     const outcome = outcomeFor(scenario, sandbox, { runResult: null })
     const grades = runAdherence(outcome)
     const neutral = grades.filter(g => g.detail.startsWith('n/a'))
-    // Everything except the manifest check is n/a here: no deliverables and no
-    // stage that produces them, no review rounds, no transitioning stage, no
-    // declared expectation.
+    // With an empty stage subset everything except the manifest check is n/a:
+    // no deliverable files and no producing stage, no plan/code review rounds
+    // run, no status-transitioning stage, and no declared expectation.
     assert.equal(neutral.length, grades.length - 1)
     for (const g of neutral) {
       assert.equal(g.pass, true, `${g.name} must be neutral, got: ${g.detail}`)

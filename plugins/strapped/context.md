@@ -21,12 +21,10 @@ learning loop and a PR-feedback loop close back into planning.
   per deliverable, a fresh implementer, validations, a bounded code-review/fix loop.
 - **/strapped:pr** — create/update the stacked GitHub PRs for a run's `done`
   deliverables, each child based on its parent's branch.
-- **/strapped:feedback** — heavyweight PR-feedback cycle: synthesize review comments into
-  cross-deliverable addenda, run the adversarial plan-review loop, gate on approval, then
-  apply fixes on the existing branches. For larger re-works.
-- **/strapped:feedback-lite** — the default "chisel" polish: synthesize comments
-  off-context, plan the refactor in native plan mode, implement in the standard loop on
-  the existing branches. For quick, user-observed refinement.
+- **/strapped:feedback** — the "chisel" PR-feedback cycle: fetch review comments,
+  synthesize and route them in-band, plan the refactor in native plan mode, implement in
+  the standard loop on the existing branches. Quick, user-observed refinement — no
+  adversarial loops.
 - **/strapped:run** — compose plan → implement → pr into one autonomous chain that runs
   until complete (it substitutes the interactive gates and discloses which).
 - **/strapped:learn** — synthesize captured user critiques into proposed CLAUDE.md
@@ -58,7 +56,6 @@ that exist as levers:
 Repos · Directory layout · manifest.md · deliverables · Review round records · critiques
 · Rule extraction · Seeded rule split · Reviewer lenses · Critique loop · Config
 resolution · Harness scripts · Composable chains · Validations · Worktrees and branches ·
-PR titles and bodies · Stacked PRs · Feedback index · Feedback loop · Feedback-lite loop ·
-Cleanup recipe.
+PR titles and bodies · Stacked PRs · Feedback index · Feedback loop · Cleanup recipe.
 
 The live **state summary** below lists every run currently on disk.

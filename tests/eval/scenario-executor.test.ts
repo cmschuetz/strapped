@@ -115,7 +115,7 @@ const FULL_CHAIN_HANDLERS = {
   'plan-review:b:r1': NO_FINDINGS,
   'verify:r1': EMPTY_VERIFY,
   approve: { changed: true },
-  'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
+  'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] } },
   'implement:D1': IMPLEMENTED,
   'review:D1:a:r1': NO_FINDINGS,
   'review:D1:b:r1': NO_FINDINGS,
@@ -307,7 +307,7 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
   const { outcome, scripted } = await runAndClean(
     scenario,
     envelopes({
-      'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] }, remaining: 1, blocked: [] },
+      'coordinate:1': { items: [waveItem('D1')], dag: { ready: ['D1'], resumable: [], remaining: 1, blocked: [] } },
       'implement:D1': IMPLEMENTED,
       'review:D1:a:r1': { findings: [finding('f1')], rule_checklist: [], ac_checklist: [] },
       'review:D1:b:r1': NO_FINDINGS,
@@ -317,7 +317,7 @@ test('codeRounds > planRounds: rulesByRound covers every code-review round', asy
       'review:D1:b:r2': NO_FINDINGS,
       'verify:D1:r2': EMPTY_VERIFY,
       'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
-      'coordinate:2': { items: [], dag: { ready: [], resumable: [], remaining: 0, blocked: [] }, remaining: 0, blocked: [] },
+      'coordinate:2': { items: [], dag: { ready: [], resumable: [], remaining: 0, blocked: [] } },
     })
   )
   assert.deepEqual(scripted.unexpected, [])

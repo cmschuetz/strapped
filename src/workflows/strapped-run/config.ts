@@ -4,7 +4,6 @@
 // verbatim by tests/strapped-run.test.js.
 
 import type {
-  FeedbackSynthStageArgs,
   ImplementStageArgs,
   PlanStageArgs,
   PrStageArgs,
@@ -16,7 +15,7 @@ import type {
   StageName,
 } from './types.ts'
 
-export const STAGE_ORDER: readonly StageName[] = ['plan', 'feedback-synth', 'implement', 'pr']
+export const STAGE_ORDER: readonly StageName[] = ['plan', 'implement', 'pr']
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -127,29 +126,9 @@ function parsePlanArgs(value: unknown): PlanStageArgs {
   return parsed
 }
 
-function parseFeedbackSynthArgs(value: unknown): FeedbackSynthStageArgs {
-  if (!isRecord(value)) throw new Error('config: stageArgs["feedback-synth"] must be an object')
-  const parsed: FeedbackSynthStageArgs = {}
-  if (value.comments !== undefined) parsed.comments = value.comments
-  if (value.repos !== undefined) parsed.repos = parseRepos(value.repos, 'stageArgs["feedback-synth"].repos')
-  if (value.lite !== undefined) {
-    if (typeof value.lite !== 'boolean') throw new Error('config: stageArgs["feedback-synth"].lite must be a boolean')
-    parsed.lite = value.lite
-  }
-  return parsed
-}
-
 function parseImplementArgs(value: unknown): ImplementStageArgs {
   if (!isRecord(value)) throw new Error('config: stageArgs.implement must be an object')
   const parsed: ImplementStageArgs = {}
-  if (value.addendumMode !== undefined) {
-    if (typeof value.addendumMode !== 'boolean') throw new Error('config: stageArgs.implement.addendumMode must be a boolean')
-    parsed.addendumMode = value.addendumMode
-  }
-  if (value.recordSuffix !== undefined) {
-    if (typeof value.recordSuffix !== 'string') throw new Error('config: stageArgs.implement.recordSuffix must be a string')
-    parsed.recordSuffix = value.recordSuffix
-  }
   if (value.only !== undefined && value.only !== null) {
     if (typeof value.only !== 'string') throw new Error('config: stageArgs.implement.only must be a string')
     parsed.only = value.only
@@ -172,7 +151,6 @@ function parseStageArgsMap(value: unknown): StageArgsMap {
   if (!isRecord(value)) throw new Error('config field "stageArgs" must be an object')
   const parsed: StageArgsMap = {}
   if (value.plan !== undefined) parsed.plan = parsePlanArgs(value.plan)
-  if (value['feedback-synth'] !== undefined) parsed['feedback-synth'] = parseFeedbackSynthArgs(value['feedback-synth'])
   if (value.implement !== undefined) parsed.implement = parseImplementArgs(value.implement)
   if (value.pr !== undefined) parsed.pr = parsePrArgs(value.pr)
   return parsed
@@ -204,13 +182,9 @@ export function parseConfig(raw: unknown): RunConfig {
 }
 
 export function stageArgsFor(cfg: RunConfig, name: 'plan'): PlanStageArgs
-export function stageArgsFor(cfg: RunConfig, name: 'feedback-synth'): FeedbackSynthStageArgs
 export function stageArgsFor(cfg: RunConfig, name: 'implement'): ImplementStageArgs
 export function stageArgsFor(cfg: RunConfig, name: 'pr'): PrStageArgs
-export function stageArgsFor(
-  cfg: RunConfig,
-  name: StageName
-): PlanStageArgs | FeedbackSynthStageArgs | ImplementStageArgs | PrStageArgs {
+export function stageArgsFor(cfg: RunConfig, name: StageName): PlanStageArgs | ImplementStageArgs | PrStageArgs {
   return cfg.stageArgs[name] || {}
 }
 
