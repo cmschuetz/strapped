@@ -1,15 +1,6 @@
 ---
 name: plan
 description: Turn a large plans/<name>.md ask into a converged DAG implementation plan — research, adversarial rule-partitioned plan review loop, then interactive final review with the user
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Workflow
-  - AskUserQuestion
 ---
 
 Turn one large source plan document into an approved, implementation-ready DAG of deliverables.
@@ -129,11 +120,11 @@ The plan stage runs the planner (which writes `research.md`, `manifest.md`, and 
 ## Step 4 — Handle the outcome
 
 - **Converged**: proceed to step 5.
-- **Not converged** (budget exhausted): do not proceed silently. Present the `outstanding` findings to the user with the round files as reference. Work through them with the user directly (main agent, no subagents) — either fix the plan yourself per their guidance or get their explicit okay to proceed despite a finding. Only then continue.
+- **Not converged** (budget exhausted): do not proceed silently. Present the `outstanding` findings to the user with the round files as reference. Work through them with the user directly — either fix the plan yourself per their guidance or get their explicit okay to proceed despite a finding. Only then continue.
 
 ## Step 5 — Interactive final review with the user
 
-Walk the user through the plan: theme summary, the DAG (render it), then each deliverable briefly. Apply their tweaks directly with Edit — **no subagents in this step**. For every substantive correction the user makes (anything expressible as a general guideline, not just a plan-specific tweak), append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
+Walk the user through the plan: theme summary, the DAG (render it), then each deliverable briefly. Apply their tweaks directly with Edit. For every substantive correction the user makes (anything expressible as a general guideline, not just a plan-specific tweak), append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
 
 ## Step 6 — Approve
 

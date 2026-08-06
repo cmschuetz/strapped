@@ -208,6 +208,34 @@ test('no shipped doc claims the retired defaults: seed 42 or a 3-round budget', 
   }
 })
 
+test('no shipped doc prohibits subagents and no skill restricts tools via allowed-tools', () => {
+  const skillsDir = join(PLUGIN_ROOT, 'skills')
+  const skillFiles = readdirSync(skillsDir).map(dir => join(skillsDir, dir, 'SKILL.md'))
+  const docs = [
+    join(PLUGIN_ROOT, 'conventions.md'),
+    join(PLUGIN_ROOT, 'context.md'),
+    join(REPO_ROOT, 'README.md'),
+    ...skillFiles,
+  ]
+  for (const doc of docs) {
+    const content = readFileSync(doc, 'utf8')
+    assert.ok(!content.includes('no subagent'), `${doc} still prohibits subagents ("no subagent")`)
+    assert.ok(
+      !content.includes('no synthesis subagent'),
+      `${doc} still prohibits subagents ("no synthesis subagent")`
+    )
+  }
+  for (const skill of skillFiles) {
+    const src = readFileSync(skill, 'utf8')
+    const frontmatter = src.match(/^---\n([\s\S]*?)\n---/)
+    assert.ok(frontmatter, `${skill} has no frontmatter`)
+    assert.ok(
+      !/^allowed-tools:/m.test(frontmatter[1] ?? ''),
+      `${skill} frontmatter restricts tools via allowed-tools`
+    )
+  }
+})
+
 test('workflow meta.names are unique and every referenced workflow name resolves', () => {
   const workflowsDir = join(PLUGIN_ROOT, 'workflows')
   const files = readdirSync(workflowsDir).filter(f => f.endsWith('.js'))

@@ -1,16 +1,6 @@
 ---
 name: feedback
 description: The "chisel" refinement cycle for a strapped run's PR feedback — fetch review comments via gh, synthesize and route them in-band, plan a cross-deliverable refactor in native plan mode (asking questions, presenting via ExitPlanMode for your approval), then implement it on the existing branches with no adversarial loops, and offer the --update cascade
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - AskUserQuestion
-  - EnterPlanMode
-  - ExitPlanMode
 ---
 
 Drive PR review comments back into a strapped run as a light, user-observed refinement — the "chisel" pass. It **runs no adversarial loops** (no addenda plan-review loop, no per-node code-review/fix loop) and puts you in the loop via Claude's **native plan mode**: the main agent fetches the comments, synthesizes and routes the cross-deliverable fix plan itself inside plan mode, gates on your ExitPlanMode approval, then implements the approved plan directly on the existing branches. It mints NO new deliverables/branches/worktrees and never force-pushes or merges — shipping stays a user-approved `/strapped:pr <slug> --update`.
@@ -97,7 +87,7 @@ If `gh` is unauthenticated, stop and tell the user to `gh auth login`. If no in-
 
 **Call `EnterPlanMode` FIRST — before reading anything or asking anything.** This is a required step of this skill, not optional: once plan mode is active, Claude Code's harness blocks every mutating tool (Edit/Write/etc.) until `ExitPlanMode`, so the user's gate is real *while you are in it*. Be honest about the boundary of that guarantee, though — entering plan mode is the model's own action (there is no hook forcing it), so treat "call `EnterPlanMode` before touching anything" as a hard rule you follow, not a wall the harness erects for you. Invoking `/strapped:feedback` IS the entry consent — the whole command is a plan-then-implement gate — so enter without deliberating over it.
 
-With plan mode engaged, YOU synthesize the feedback **in-band** — no subagent and no workflow dispatch. Read the unaddressed comment records from the Step 2 scratch file, every in-scope deliverable plan under `<runDir>/deliverables/`, and the existing code across the affected worktrees, then produce ONE consolidated, cross-deliverable fix plan yourself:
+With plan mode engaged, YOU synthesize the feedback **in-band** — no workflow dispatch. Read the unaddressed comment records from the Step 2 scratch file, every in-scope deliverable plan under `<runDir>/deliverables/`, and the existing code across the affected worktrees, then produce ONE consolidated, cross-deliverable fix plan yourself:
 
 - **Route each comment (or cluster of related comments) to the EXISTING deliverable that owns the fix**: match the comment's anchored `path` against each deliverable's `## Files to touch` map — a comment left on one PR may belong on a different node. A `review:` entry's CHANGES_REQUESTED body states the overarching problem: fold its implied fixes into the owning node(s); `issue:` entries route the same way. Every unaddressed comment gets exactly one target node — you need that per-node routing for the Step 5 index marking.
 - **Plan the fix per routed node**: concrete, in-scope, testable changes to the existing code (a targeted change, not a re-implementation).
@@ -106,7 +96,7 @@ Resolve any ambiguity fast by asking the user with **AskUserQuestion** (routing 
 
 ## Step 4 — Approve
 
-The user tweaks/approves the plan. Apply the user's tweaks directly with Edit — **no subagents in this step**, same as `/strapped:plan` final review. For every generalizable correction, append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
+The user tweaks/approves the plan. Apply the user's tweaks directly with Edit, same as `/strapped:plan` final review. For every generalizable correction, append an entry to `critiques/user-critiques.md` per the conventions format with `synthesized: false`.
 
 **With `--dry-run`:** stop HERE after presenting the plan and the commands that WOULD run. Mutate nothing — no `state.mjs` transitions, no implementation, no branch changes.
 

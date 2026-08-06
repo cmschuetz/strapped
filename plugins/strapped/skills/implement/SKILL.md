@@ -1,15 +1,6 @@
 ---
 name: implement
 description: Execute an approved strapped DAG wave-by-wave — persistent worktree per deliverable, fresh implementer, validations, bounded adversarial code-review/fix loop, park-don't-spin
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Workflow
-  - AskUserQuestion
 ---
 
 Implement an approved strapped plan.
