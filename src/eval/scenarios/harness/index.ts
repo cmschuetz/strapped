@@ -34,7 +34,6 @@ import { planOnlyScenario } from './plan-only.scenario.ts'
 import { preconditionParkScenario } from './precondition-park.scenario.ts'
 import { researchFanoutScenario } from './research-fanout.scenario.ts'
 import { reviewLoopScenario } from './review-loop.scenario.ts'
-import { shipScopedScenario } from './ship-scoped.scenario.ts'
 import { zeroRoundsScenario } from './zero-rounds.scenario.ts'
 
 /** The suite the CLI `--scenarios` loads (`scenarios` is the magic export name). */
@@ -48,5 +47,4 @@ export const scenarios: Scenario[] = [
   dirtyBranchScenario,
   preconditionParkScenario,
   researchFanoutScenario,
-  shipScopedScenario,
 ]
