@@ -1,15 +1,6 @@
 ---
 name: run
 description: Compose strapped skills into one workflow that runs until complete — resolve a built-in or config-defined chain of stages (plan, implement, pr), disclose the interactive gates it skips, then dispatch the whole chain as a single autonomous mono-workflow run
-allowed-tools:
-  - Read
-  - Write
-  - Edit
-  - Bash
-  - Glob
-  - Grep
-  - Workflow
-  - AskUserQuestion
 ---
 
 Run a whole chain of strapped stages — e.g. plan → implement → pr — as ONE autonomous dispatch that runs until complete (or stops loudly at the first failed gate).
