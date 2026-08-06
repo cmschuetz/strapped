@@ -26,7 +26,8 @@ learning loop and a PR-feedback loop close back into planning.
   the standard loop on the existing branches. Quick, user-observed refinement — no
   adversarial loops.
 - **/strapped:run** — compose plan → implement → pr into one autonomous chain that runs
-  until complete (it substitutes the interactive gates and discloses which).
+  until complete (it substitutes the interactive gates and discloses which), optionally
+  scoped to one deliverable (`--only <Did>`, plan-less chains only).
 - **/strapped:learn** — synthesize captured user critiques into proposed CLAUDE.md
   guideline additions, presented as a diff for approval.
 - **/strapped:status** — read-only dashboard of runs: DAG, per-deliverable statuses,

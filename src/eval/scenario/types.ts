@@ -34,12 +34,13 @@ export interface ScenarioRepo {
 
 /**
  * Extra stage args a scenario may pass through to the workflow config.
- * Deliberately NARROW: `pr` args are not expressible here — the executor
- * always forces `pr: { dryRun: true }`, so a scenario spec can never cause
- * the pr stage to push or open real PRs.
+ * Deliberately NARROW: `pr` overrides merge UNDER a forced `dryRun: true` —
+ * the executor always wins that key, so a scenario spec can never cause the
+ * pr stage to push or open real PRs.
  */
 export interface ScenarioStageArgs {
   implement?: Record<string, unknown>
+  pr?: Record<string, unknown>
 }
 
 /** Expected end-state of one deliverable's on-disk frontmatter. */

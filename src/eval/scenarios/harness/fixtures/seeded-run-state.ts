@@ -193,6 +193,106 @@ comments, explicit return types on exports, every export tested.
 - Anything beyond the subtract function and its test.
 `
 
+/** Two-node manifest (D2 depends on D1) for the scoped-ship scenario. */
+const SHIP_SCOPED_MANIFEST = `---
+slug: ship-scoped
+source_plan: plans/ship-scoped.md
+created: 2026-08-05
+status: approved
+seed: 21
+budgets:
+  plan_rounds: 1
+  code_rounds: 1
+  confidence_min: 70
+repos:
+  - { name: calc, root: {{repoRoot:calc}}, config: {{configPath:calc}} }
+deliverables:
+  - { id: D1, file: deliverables/D1-subtract.md, deps: [] }
+  - { id: D2, file: deliverables/D2-multiply.md, deps: [D1] }
+---
+# ship-scoped
+
+Two deliverables over the calc fixture repo. DAG: D1 (no deps) → D2 (deps [D1]).
+The dispatch is scoped to D1: implement it and run its PR pass while D2 stays pending.
+`
+
+const SHIP_SCOPED_D1 = `---
+id: D1
+title: Add a subtract function to the calc fixture
+deps: []
+repo: calc
+status: pending
+branch: strapped/ship-scoped/D1-subtract
+base: main
+worktree: null
+pr: null
+review_rounds_used: 0
+feedback_rounds_used: 0
+parked_reason: null
+estimated_diff_lines: 10
+---
+## Context
+The calc fixture is a tiny bun project: src/calc.ts exports \`add\`, covered by
+tests/calc.test.ts (\`bun test\`). The repo CLAUDE.md rules apply: no code
+comments, explicit return types on exports, every export tested.
+
+## Files to touch
+- src/calc.ts — add the subtract function
+- tests/calc.test.ts — add its covering test
+
+## Implementation steps
+1. Export \`subtract(a: number, b: number): number\` returning \`a - b\` from src/calc.ts.
+2. Add a test asserting \`subtract(5, 3)\` returns 2.
+
+## Acceptance criteria
+- AC1: the exported \`subtract(5, 3)\` returns 2.
+- AC2: \`bun test\` passes in the worktree.
+
+## Tests
+- tests/calc.test.ts — "subtract subtracts" covering AC1/AC2.
+
+## Out of scope
+- Anything beyond the subtract function and its test.
+`
+
+const SHIP_SCOPED_D2 = `---
+id: D2
+title: Add a multiply function to the calc fixture
+deps: [D1]
+repo: calc
+status: pending
+branch: strapped/ship-scoped/D2-multiply
+base: strapped/ship-scoped/D1-subtract
+worktree: null
+pr: null
+review_rounds_used: 0
+feedback_rounds_used: 0
+parked_reason: null
+estimated_diff_lines: 10
+---
+## Context
+Follows D1 on the calc fixture. NOT in scope for the scoped dispatch — this
+node must stay pending and untouched.
+
+## Files to touch
+- src/calc.ts — add the multiply function
+- tests/calc.test.ts — add its covering test
+
+## Implementation steps
+1. Export \`multiply(a: number, b: number): number\` returning \`a * b\` from src/calc.ts.
+2. Add a test asserting \`multiply(4, 3)\` returns 12.
+
+## Acceptance criteria
+- AC1: the exported \`multiply(4, 3)\` returns 12.
+- AC2: \`bun test\` passes in the worktree.
+
+## Tests
+- tests/calc.test.ts — "multiply multiplies" covering AC1/AC2.
+
+## Out of scope
+- Anything beyond the multiply function and its test.
+`
+
 function research(slug: string, focus: string): string {
   return `# Research digest — ${slug}
 
@@ -207,6 +307,21 @@ export function implementOnlySeed(): SeedRunState {
       'manifest.md': manifest('implement-only', 13, 1, 1, 'deliverables/D1-subtract.md'),
       'deliverables/D1-subtract.md': IMPLEMENT_ONLY_DELIVERABLE,
       'research.md': research('implement-only', 'The only work is D1: add a subtract function plus its test.'),
+    },
+  }
+}
+
+/** Approved two-node manifest (D2 deps [D1]) + research stub for the scoped-ship scenario. */
+export function shipScopedSeed(): SeedRunState {
+  return {
+    files: {
+      'manifest.md': SHIP_SCOPED_MANIFEST,
+      'deliverables/D1-subtract.md': SHIP_SCOPED_D1,
+      'deliverables/D2-multiply.md': SHIP_SCOPED_D2,
+      'research.md': research(
+        'ship-scoped',
+        'The dispatch is scoped to D1 (add subtract plus its test); D2 (multiply) stays pending and untouched.'
+      ),
     },
   }
 }

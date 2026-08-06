@@ -882,3 +882,194 @@ test('pr as first stage: dag probe gate blocks when a node is earlier than done'
   assert.ok(result.results.pr.summary.includes('D1, D2'))
   assert.equal(callsWithLabelPrefix(calls, 'pr-create').length, 0)
 })
+
+// --- per-deliverable scoping (--only) -------------------------------------------
+
+test('implement --only: scoped remaining yields allDone with other nodes pending', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: { implement: { only: 'D1' } } }),
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+  assert.equal(result.stoppedAt, null)
+  assert.ok(callWithLabel(calls, 'coordinate:1').prompt.includes('--only D1'))
+})
+
+test('ship-style chain [implement, pr] scoped to D1 runs pr without a gate probe', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      stages: ['implement', 'pr'],
+      stageArgs: { implement: { only: 'D1' }, pr: { dryRun: true, only: 'D1' } },
+    }),
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  assert.deepEqual(result.completed, ['implement', 'pr'])
+  assert.equal(result.stoppedAt, null)
+  assert.equal(callsWithLabelPrefix(calls, 'pr-gate').length, 0)
+  const create = callWithLabel(calls, 'pr-create').prompt
+  assert.ok(create.includes('restricted to deliverable D1'), 'scoped create restriction present')
+  assert.ok(create.includes('without a `pr:` URL'), 'not-yet-PR\'d done ancestors stay in scope')
+})
+
+test('pr --only as first stage: probe uses dag --only and gates on scoped remaining', async () => {
+  const open = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['pr'], stageArgs: { pr: { only: 'D1' } } }),
+    agent: agentByLabel({
+      'pr-gate': { remaining: 0, notDone: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  const probe = callWithLabel(open.calls, 'pr-gate').prompt
+  assert.ok(probe.includes('dag /state/runs/test-run --only D1'))
+  assert.ok(probe.includes('the scope is D1 alone'))
+  assert.equal(open.result.stoppedAt, null)
+  assert.equal(callsWithLabelPrefix(open.calls, 'pr-create').length, 1)
+
+  const gated = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['pr'], stageArgs: { pr: { only: 'D1' } } }),
+    agent: agentByLabel({
+      'pr-gate': { remaining: 1, notDone: ['D1'] },
+    }),
+  })
+  assert.equal(gated.result.results.pr.gateFailed, true)
+  assert.deepEqual(gated.result.results.pr.notDone, ['D1'])
+  assert.equal(callsWithLabelPrefix(gated.calls, 'pr-create').length, 0)
+})
+
+test('pr after implement with mismatched scopes re-probes', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      stages: ['implement', 'pr'],
+      stageArgs: { implement: { only: 'D1' }, pr: { only: 'D2' } },
+    }),
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+      'pr-gate': { remaining: 1, notDone: ['D2'] },
+    }),
+  })
+  assert.equal(callsWithLabelPrefix(calls, 'pr-gate').length, 1, 'a mismatched-scope chain must re-probe')
+  assert.ok(callWithLabel(calls, 'pr-gate').prompt.includes('--only D2'))
+  assert.equal(result.results.pr.gateFailed, true)
+  assert.equal(result.stoppedAt, 'pr')
+})
+
+test('pr-create prompt states the merged-parent base rule', async () => {
+  const stubs = {
+    'pr-gate': { remaining: 0, notDone: [] },
+    'pr-create': PR_RESULT,
+  }
+  const unscoped = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['pr'], stageArgs: { pr: { dryRun: true } } }),
+    agent: agentByLabel(stubs),
+  })
+  const scoped = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['pr'], stageArgs: { pr: { dryRun: true, only: 'D1' } } }),
+    agent: agentByLabel(stubs),
+  })
+  for (const { calls } of [unscoped, scoped]) {
+    const prompt = callWithLabel(calls, 'pr-create').prompt
+    assert.ok(prompt.includes('MERGED-PARENT CARVE-OUT'))
+    assert.ok(prompt.includes('fetch origin main'))
+    assert.ok(prompt.includes('rebase --onto origin/main <parent-branch>'))
+    assert.ok(prompt.includes('NEVER `git rebase main <branch>` from outside the worktree'))
+    assert.ok(prompt.includes('headRefOid'))
+    assert.ok(prompt.includes('--force-with-lease'))
+    assert.ok(prompt.includes('Parents at `done`/`pr-open` keep the parent-branch base'))
+  }
+})
+
+test('coordinator prompt overrides the base for a merged same-repo parent', async () => {
+  const { calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: {} }),
+    agent: agentByLabel({
+      'coordinate:1': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+    }),
+  })
+  const prompt = callWithLabel(calls, 'coordinate:1').prompt
+  assert.ok(prompt.includes('Effective base'), 'the worktree step names an effective base')
+  assert.ok(prompt.includes('has status `merged`'))
+  assert.ok(prompt.includes('fetch origin main'))
+  assert.ok(prompt.includes('use the repo\'s **main** as the effective base'))
+  assert.ok(prompt.includes('set <deliverableFile> base main'), 'the effective base is written back to frontmatter')
+  assert.ok(prompt.includes('Parents at done/pr-open keep the frontmatter `base:` unchanged'))
+  assert.ok(prompt.includes('<effectiveBase>'), 'ensure-worktree receives the effective base')
+})
+
+test('implement --only scopes the resume sweep and rejects an out-of-scope sweep', async () => {
+  const outOfScopeWave = {
+    items: [item('D1'), item('D2')],
+    dag: { ready: ['D1'], resumable: ['D2'], remaining: 1, blocked: [] },
+  }
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({ stages: ['implement'], stageArgs: { implement: { only: 'D1' } } }),
+    agent: agentByLabel({
+      'coordinate:1': outOfScopeWave,
+      'coordinate:1:retry': wave([item('D1')], 1),
+      ...nodeConverges('D1'),
+      'apply:1': { applied: [{ id: 'D1', status: 'done' }] },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, true)
+  assert.equal(callsWithLabelPrefix(calls, 'coordinate:1').length, 2, 'the out-of-scope wave is rejected and retried')
+  assert.equal(callsWithLabelPrefix(calls, 'implement:').length, 1)
+  assert.equal(callsWithLabelPrefix(calls, 'implement:D2').length, 0, 'the out-of-scope node is never dispatched')
+  const prompt = callWithLabel(calls, 'coordinate:1').prompt
+  assert.ok(prompt.includes('SCOPED to D1'), 'the resume sweep is scoped to the named id')
+  assert.ok(prompt.includes('`resumable` = [D1]'), 'resumable covers only the scoped id')
+})
+
+test('implement --only: out-of-scope done cannot fake allDone and a chained pr does not run', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      stages: ['implement', 'pr'],
+      stageArgs: { implement: { only: 'D1' }, pr: { only: 'D1' } },
+    }),
+    agent: agentByLabel({
+      // A lying sweep pulls in-progress D2 into a D1-scoped wave; the retry
+      // returns the honest scoped wave, whose only node then parks.
+      'coordinate:1': {
+        items: [item('D1'), item('D2')],
+        dag: { ready: ['D1'], resumable: ['D2'], remaining: 1, blocked: [] },
+      },
+      'coordinate:1:retry': wave([item('D1')], 1),
+      'implement:D1': BLOCKED,
+      'apply:1': { applied: [{ id: 'D1', status: 'parked' }] },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, false, 'a parked scoped node must not report allDone')
+  assert.equal(result.stoppedAt, 'implement')
+  assert.equal(callsWithLabelPrefix(calls, 'implement:D2').length, 0, 'no out-of-scope done can exist')
+  assert.equal(callsWithLabelPrefix(calls, 'pr-').length, 0, 'the chained pr stage does not run')
+})
+
+test('implement --only on a blocked node stops loudly and a chained pr does not run', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: baseCfg({
+      stages: ['implement', 'pr'],
+      stageArgs: { implement: { only: 'D2' }, pr: { only: 'D2' } },
+    }),
+    agent: agentByLabel({
+      'coordinate:1': {
+        items: [],
+        dag: { ready: [], resumable: [], remaining: 1, blocked: [{ id: 'D2', blockedOn: ['D1'] }] },
+      },
+    }),
+  })
+  assert.equal(result.results.implement.allDone, false)
+  assert.deepEqual(result.results.implement.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
+  assert.equal(result.stoppedAt, 'implement')
+  assert.equal(callsWithLabelPrefix(calls, 'pr-').length, 0)
+})

@@ -146,7 +146,9 @@ function composeArgs(scenario: Scenario, sandbox: ScenarioSandbox, pluginDir: st
         repos: sandbox.repos.map(r => ({ name: r.name, root: r.root })),
       },
       implement: scenario.stageArgs?.implement ?? {},
-      pr: { dryRun: true },
+      // Scenario pr args pass through, but dryRun: true ALWAYS wins — a
+      // scenario can never push or open real PRs.
+      pr: { ...scenario.stageArgs?.pr, dryRun: true },
     },
   }
 }

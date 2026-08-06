@@ -9,12 +9,13 @@ Run a whole chain of strapped stages — e.g. plan → implement → pr — as O
 
 ## Arguments
 
-`$ARGUMENTS`: `<chain> <plan.md-path | slug> [--repo <path-or-name>]... [--seed N] [--plan-rounds N] [--code-rounds N] [--research-rounds N] [--dry-run] [--yes]`
+`$ARGUMENTS`: `<chain> <plan.md-path | slug> [--only <Did>] [--repo <path-or-name>]... [--seed N] [--plan-rounds N] [--code-rounds N] [--research-rounds N] [--dry-run] [--yes]`
 
 - `<chain>` — a chain name: a built-in (`auto` = plan, implement, pr; `ship` = implement, pr) or one from the `chains` map of `~/.claude/strapped.json`. Always resolved via the harness script in Step 0 — never hand-rolled.
 - second argument — when the resolved chain **starts with `plan`**, the path to the source plan.md; otherwise the **slug** of an existing run.
 - `--repo <path-or-name>` — repeatable; plan-entry only; same semantics as `/strapped:plan` (never derived from cwd).
 - `--seed N`, `--plan-rounds N`, `--code-rounds N`, `--research-rounds N` — valid ONLY on a FRESH plan-entry run (Step 1's resume probe found no existing `manifest.md`). Defaults on a fresh run: the seed is generated truly randomly once (e.g. `python3 -c 'import random; print(random.randrange(2**32))'`) when `--seed` is omitted, both review-round budgets default to 1 — `0` is legal for either and skips that review loop entirely — and the research budget defaults to 2 (`--research-rounds 1` disables research delegation entirely; min 1). They set the values threaded into the stage args; the plan stage records the effective `seed`, `plan_rounds`, `code_rounds`, and `research_rounds` in the manifest, so nothing needs patching skill-side and later stages/resumes read the manifest values. On the slug path — and on a plan-entry invocation whose resume probe finds an existing `manifest.md` at ANY status — seed and every budget come from the EXISTING manifest: if any of these flags was passed, stop with a message saying the existing manifest's values are authoritative. (The standalone skills' single `--max-rounds` flag is ambiguous across a chain that spans both review loops, so this skill splits it: `--plan-rounds` overrides the `plan_rounds` budget, `--code-rounds` overrides `code_rounds`; `--research-rounds` overrides `research_rounds` symmetrically.)
+- `--only <Did>` — scope the implementation-phase stages to ONE deliverable id (e.g. ship just D1: implement it and open its PR while other nodes stay pending). Valid ONLY when the DISPATCHED stages exclude `plan` — the plan stage is run-wide by design (it produces the deliverables). Note the resume rule below can DROP `plan` from a plan-entry chain (probe hit at `approved`+), which makes such an invocation eligible; when the dispatched stages still include `plan`, stop with a clear message that `--only` cannot scope a plan-bearing chain. Threads the same id into BOTH `stageArgs.implement.only` and `stageArgs.pr.only` in Step 3. A scoped node with incomplete deps stops loudly (blocked/parked) — `--only` never pulls parents into the wave.
 - `--dry-run` — print-only preview, evaluated in Step 0 BEFORE any prep; mutates nothing.
 - `--yes` — skip the Step 2 consent gate.
 
@@ -59,7 +60,7 @@ Perform the plan skill's Steps 1–2 exactly (`$PLUGIN_ROOT/skills/plan/SKILL.md
 ### Chain starts at `implement` or `pr` — the second argument is a slug
 
 1. Run `node $PLUGIN_ROOT/scripts/state.mjs resolve <slug>` (cwd-independent, never hand-rolled). If `exists` is `false`, stop with a helpful message pointing at `/strapped:plan`.
-2. Preconditions on the manifest status: the chain starts at `implement` → require `approved` or `implementing`; the chain starts at `pr` → require `done` nodes present (via `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>`). Otherwise stop and say why.
+2. Preconditions on the manifest status: the chain starts at `implement` → require `approved` or `implementing`; the chain starts at `pr` → require `done` nodes present (via `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir>`) — with `--only <Did>`, require instead that the SCOPED node is done-or-later: probe `node $PLUGIN_ROOT/scripts/state.mjs dag <runDir> --only <Did>` and require its scoped `remaining` to be 0. Otherwise stop and say why.
 3. Reject `--seed`/`--plan-rounds`/`--code-rounds`/`--research-rounds` (see Arguments) — seed and every budget come from the existing manifest (`resolve`'s `seed`/`budgets`).
 4. Read `reviews/rules-snapshot.md` for the rule set. If it is missing, re-extract it per the conventions' **Rule extraction** and write the snapshot — the same fallback as the implement skill's Step 2; never improvise rule ids.
 5. Compute `rulesByRound` from the snapshot's rule ids with the seeded recipe (id-only pairs) for **`max(plan_rounds, code_rounds)` rounds** — mirroring the implement skill's Step 2, extended to cover both loops.
@@ -87,8 +88,8 @@ Invoke the Workflow tool EXACTLY ONCE with `scriptPath: $PLUGIN_ROOT/workflows/s
       "sourcePlan": "<abs path to the source plan.md>",
       "repos": [{ "name": "<repo>", "root": "<abs root>", "config": "<abs config path>", "validations": ["<from that repo's config>"] }]
     },
-    "implement": { "only": null },
-    "pr": { "dryRun": false }
+    "implement": { "only": "<the --only Did, else null>" },
+    "pr": { "dryRun": false, "only": "<the --only Did, else null>" }
   },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
@@ -106,7 +107,7 @@ Include a `stageArgs.plan` entry only when the `plan` stage is actually dispatch
 
 ## Step 4 — Report
 
-The workflow returns `{ slug, stages, completed, stoppedAt, results }`. The effective seed and budgets were recorded in the manifest by the plan stage — nothing to patch skill-side. Report:
+The workflow returns `{ slug, stages, completed, stoppedAt, results }`. The effective seed and budgets were recorded in the manifest by the plan stage — nothing to patch skill-side. When `--only <Did>` was given, gate outcomes are SCOPE-relative: implement's `allDone` and the pr gate mean the scoped node alone is done — say so in the report rather than implying the whole run finished. Report:
 
 - the stages completed, and — when the chain stopped early — `stoppedAt` plus why:
   - `plan` gate failed: the `outstanding` findings with the `reviews/plan-round-<N>.md` files as reference; next command: `/strapped:plan <plan.md>` to work them interactively;

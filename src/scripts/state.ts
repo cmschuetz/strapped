@@ -377,10 +377,25 @@ function cmdDag(runDir: string, only: string | null): void {
     ready = ready.filter(id => id === only)
   }
   ready.sort()
-  const blocked = nodes
+  let blocked = nodes
     .filter(n => n.status === 'pending' && !depsMet(n))
     .map(n => ({ id: n.id, blockedOn: n.deps.filter(dep => !complete(dep)) }))
-  const remaining = nodes.filter(n => !COMPLETE_STATUSES.has(n.status)).length
+  let remaining = nodes.filter(n => !COMPLETE_STATUSES.has(n.status)).length
+  if (only) {
+    // Scoped semantics: remaining/blocked are computed over the named node
+    // ALONE (consumers read both verbatim, so the implement gate, its
+    // maxPasses, the wrap-up shortcut, and the pr probe all become
+    // scope-correct at the source). A not-complete scoped node with unmet
+    // deps surfaces as blocked regardless of its status — a readmitted
+    // parked/in-progress node must not vanish silently.
+    const node = byId.get(only)
+    const incomplete = node !== undefined && !COMPLETE_STATUSES.has(node.status)
+    remaining = incomplete ? 1 : 0
+    blocked =
+      node !== undefined && incomplete && !depsMet(node)
+        ? [{ id: node.id, blockedOn: node.deps.filter(dep => !complete(dep)) }]
+        : []
+  }
 
   out({
     manifest: { status: mfm.status ?? null, seed: mfm.seed ?? null, budgets: mfm.budgets ?? null },

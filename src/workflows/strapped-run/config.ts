@@ -152,6 +152,10 @@ function parsePrArgs(value: unknown): PrStageArgs {
     if (typeof value.dryRun !== 'boolean') throw new Error('config: stageArgs.pr.dryRun must be a boolean')
     parsed.dryRun = value.dryRun
   }
+  if (value.only !== undefined && value.only !== null) {
+    if (typeof value.only !== 'string') throw new Error('config: stageArgs.pr.only must be a string')
+    parsed.only = value.only
+  }
   return parsed
 }
 

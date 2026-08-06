@@ -1,6 +1,6 @@
 {
   "name": "strapped",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Adversarial plan → implement → stacked-PR coding harness: rule-partitioned reviewers, batch verify-consolidate passes, DAG deliverables in persistent worktrees, CLAUDE.md learning loop",
   "author": {
     "name": "Christian Schuetz",

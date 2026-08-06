@@ -1,7 +1,7 @@
 // Harness SCENARIO suite smoke test — fully hermetic (no real `claude`).
 //
 // Proves the scenario CONTENT is sound without spending a cent:
-//   - the CLI loads exactly the nine scenarios from the suite directory and
+//   - the CLI loads exactly the ten scenarios from the suite directory and
 //     `--filter` narrows by id and by tag (agent calls answered by a stub
 //     spawn returning error envelopes — the REAL deployable still executes);
 //   - every scenario is well-formed (unique ids, canonical stage order,
@@ -38,6 +38,7 @@ import { preconditionParkScenario } from '../../src/eval/scenarios/harness/preco
 import { researchFanoutScenario } from '../../src/eval/scenarios/harness/research-fanout.scenario.ts'
 import { implementOnlyScenario } from '../../src/eval/scenarios/harness/implement-only.scenario.ts'
 import { reviewLoopScenario } from '../../src/eval/scenarios/harness/review-loop.scenario.ts'
+import { shipScopedScenario } from '../../src/eval/scenarios/harness/ship-scoped.scenario.ts'
 import { zeroRoundsScenario } from '../../src/eval/scenarios/harness/zero-rounds.scenario.ts'
 import { CHURN_THRESHOLD_LINES, NIT_SITES } from '../../src/eval/scenarios/harness/fixtures/defect-repo.ts'
 import { FLAW_PROBES } from '../../src/eval/scenarios/harness/fixtures/dirty-repo.ts'
@@ -58,7 +59,7 @@ const CLAUDE_MD = join(ROOT, 'CLAUDE.md')
 const CONTRIBUTING_MD = join(ROOT, 'CONTRIBUTING.md')
 
 const STAGE_ORDER = ['plan', 'implement', 'pr']
-const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'research-fanout', 'review-loop', 'zero-rounds']
+const ALL_IDS = ['dirty-branch', 'full-pipeline', 'implement-only', 'many-rules', 'plan-only', 'precondition-park', 'research-fanout', 'review-loop', 'ship-scoped', 'zero-rounds']
 
 const raise: Die = msg => {
   throw new Error(msg)
@@ -364,7 +365,7 @@ function stubSpawn(): Spawn {
 // --- scenario well-formedness ---------------------------------------------------
 
 test('every scenario is well-formed: ids, tags, canonical stages, ask, rules, graders, fixtures', () => {
-  assert.equal(scenarios.length, 9)
+  assert.equal(scenarios.length, 10)
   const ids = scenarios.map(s => s.id)
   assert.equal(new Set(ids).size, ids.length, 'ids are unique')
   for (const s of scenarios) {
@@ -411,6 +412,7 @@ test('stage-scoped scenarios seed run state; plan-bearing scenarios do not', () 
   assert.ok(manyRulesScenario.seedRunState !== undefined)
   assert.ok(dirtyBranchScenario.seedRunState !== undefined)
   assert.ok(preconditionParkScenario.seedRunState !== undefined)
+  assert.ok(shipScopedScenario.seedRunState !== undefined)
   assert.equal(researchFanoutScenario.seedRunState, undefined)
 })
 
@@ -431,6 +433,7 @@ test('the imported scenario objects are identical to the suite export', () => {
   assert.ok(scenarios.includes(dirtyBranchScenario))
   assert.ok(scenarios.includes(preconditionParkScenario))
   assert.ok(scenarios.includes(researchFanoutScenario))
+  assert.ok(scenarios.includes(shipScopedScenario))
 })
 
 test('the CLI loads the suite directory and --filter narrows by id and by tag', async () => {
@@ -624,6 +627,107 @@ for (const scenario of [implementOnlyScenario, reviewLoopScenario, zeroRoundsSce
     }
   })
 }
+
+// --- ship-scoped scoped-ship discrimination --------------------------------------
+
+test('ship-scoped: the seeded two-node runDir is accepted by state.mjs dag, and --only scopes remaining/blocked', () => {
+  const sandbox = buildSandbox(shipScopedScenario)
+  try {
+    const res = spawnSync(NODE, [STATE_MJS, 'dag', sandbox.runDir], { encoding: 'utf8' })
+    assert.equal(res.status, 0, res.stderr)
+    const dag = JSON.parse(res.stdout) as {
+      manifest: { status: string }
+      ready: unknown[]
+      remaining: number
+      blocked: unknown[]
+    }
+    assert.deepEqual(dag.ready, ['D1'])
+    assert.equal(dag.remaining, 2, 'unscoped remaining counts both pending nodes')
+    assert.deepEqual(dag.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
+    assert.equal(dag.manifest.status, 'approved')
+
+    // Scoped to D1: remaining/blocked cover the named node alone.
+    const scoped = spawnSync(NODE, [STATE_MJS, 'dag', sandbox.runDir, '--only', 'D1'], { encoding: 'utf8' })
+    assert.equal(scoped.status, 0, scoped.stderr)
+    const scopedDag = JSON.parse(scoped.stdout) as { ready: unknown[]; remaining: number; blocked: unknown[] }
+    assert.deepEqual(scopedDag.ready, ['D1'])
+    assert.equal(scopedDag.remaining, 1)
+    assert.deepEqual(scopedDag.blocked, [])
+
+    // Scoped to the blocked child: it surfaces as blocked, not ready.
+    const child = spawnSync(NODE, [STATE_MJS, 'dag', sandbox.runDir, '--only', 'D2'], { encoding: 'utf8' })
+    assert.equal(child.status, 0, child.stderr)
+    const childDag = JSON.parse(child.stdout) as { ready: unknown[]; remaining: number; blocked: unknown[] }
+    assert.deepEqual(childDag.ready, [])
+    assert.equal(childDag.remaining, 1)
+    assert.deepEqual(childDag.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+/** Canned GOOD ship-scoped outcome: D1 shipped scoped, D2 untouched pending. */
+function goodShipScoped(): { sandbox: ScenarioSandbox; outcome: ScenarioOutcome } {
+  const sandbox = buildSandbox(shipScopedScenario)
+  const wt = addWorktree(sandbox, 'strapped/ship-scoped/D1-subtract')
+  write(join(wt, 'src', 'calc.ts'), GOOD_CALC)
+  write(join(wt, 'tests', 'calc.test.ts'), GOOD_CALC_TEST)
+  commitWorktree(wt, 'feat(ship-scoped): add subtract')
+  markImplemented(sandbox, 'D1-subtract.md', wt)
+  const runResult = runResultFor(shipScopedScenario, {
+    implement: IMPLEMENT_RESULT,
+    pr: { dryRun: true, prs: [{ id: 'D1', url: null, skipped: true, reason: 'dry run' }], summary: 'dry run' },
+  })
+  return { sandbox, outcome: outcomeFor(shipScopedScenario, sandbox, runResult) }
+}
+
+test('ship-scoped: canned good (D1 done + pr dry-run, D2 pending) grades 1/1', () => {
+  const { sandbox, outcome } = goodShipScoped()
+  try {
+    const good = grade(outcome)
+    assert.equal(good.correctness, 1, describeGrades(good.correctnessGrades))
+    assert.equal(good.adherence, 1, describeGrades(good.adherenceGrades))
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('ship-scoped: a touched out-of-scope node fails out-of-scope-untouched and the end-state check', () => {
+  const { sandbox, outcome } = goodShipScoped()
+  try {
+    patchFrontmatter(join(sandbox.runDir, 'deliverables', 'D2-multiply.md'), {
+      status: 'in-progress',
+      worktree: '/tmp/somewhere',
+    })
+    const bad = grade(outcome)
+    assert.ok(bad.correctness < 1)
+    assert.equal(byName(bad.correctnessGrades, 'out-of-scope-untouched').pass, false)
+    assert.equal(byName(bad.correctnessGrades, 'scoped-node-done-with-commit').pass, true)
+    assert.ok(bad.adherence < 1)
+    assert.equal(byName(bad.adherenceGrades, 'adherence:deliverable-end-state').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
+
+test('ship-scoped: a dispatch that stopped at implement fails the gate and pr graders', () => {
+  const { sandbox, outcome } = goodShipScoped()
+  try {
+    const stopped = runResultFor(shipScopedScenario, {
+      implement: { allDone: false, outcomes: [], blocked: [] },
+    }) as { completed: string[]; stoppedAt: string | null }
+    stopped.completed = []
+    stopped.stoppedAt = 'implement'
+    const bad = grade(outcomeFor(shipScopedScenario, sandbox, stopped))
+    assert.ok(bad.correctness < 1)
+    assert.equal(byName(bad.correctnessGrades, 'scoped-gate-reports-alldone').pass, false)
+    assert.equal(byName(bad.correctnessGrades, 'pr-stage-ran-dry').pass, false)
+    assert.ok(bad.adherence < 1)
+    assert.equal(byName(bad.adherenceGrades, 'adherence:run-result').pass, false)
+  } finally {
+    removeSandbox(sandbox)
+  }
+})
 
 // --- review-loop anti-saturation discrimination ----------------------------------
 

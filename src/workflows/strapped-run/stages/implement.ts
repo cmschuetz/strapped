@@ -148,16 +148,23 @@ State script: node ${stateScript} <command> ...
 Worktree script: ${worktreeScript}
 ${pass === 1 ? `\nFirst pass only — flip the manifest first: run \`node ${stateScript} manifest-status ${cfg.dir} implementing\` (a same-status flip is an idempotent no-op on resume).\n` : ''}`
 
+  const sweepRule = only
+    ? `PLUS ${only} when its status in the dag's \`nodes\` list is \`in-progress\` with a recorded worktree (an interrupted implementation to resume — compose its resumeNote from its frontmatter). This dispatch is SCOPED to ${only}: never sweep any other in-progress node into the wave.`
+    : `PLUS every node whose status in the dag's \`nodes\` list is \`in-progress\` with a recorded worktree (an interrupted implementation to resume — compose its resumeNote from its frontmatter).`
+  const resumableRule = only
+    ? `\`resumable\` = [${only}] when that same output's \`nodes\` entry for ${only} has status \`in-progress\`, else [] — never any other id (the scope is ${only} alone)`
+    : `\`resumable\` = the ids from that same output's \`nodes\` list whose status is \`in-progress\` ([] when none)`
   return `${header}
-1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ''}\` EXACTLY ONCE, FIRST — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself, and NEVER re-run dag after a transition (your paste below is THIS first output). This pass's wave = every node in \`ready\` PLUS every node whose status in the dag's \`nodes\` list is \`in-progress\` with a recorded worktree (an interrupted implementation to resume — compose its resumeNote from its frontmatter).
+1. Run \`node ${stateScript} dag ${cfg.dir}${only ? ` --only ${only}` : ''}\` EXACTLY ONCE, FIRST — its \`ready\`, \`topo\`, \`blocked\`, and \`remaining\` fields are authoritative; consume them verbatim, never recompute readiness or remaining yourself, and NEVER re-run dag after a transition (your paste below is THIS first output). This pass's wave = every node in \`ready\` ${sweepRule}
 2. Run \`node ${stateScript} resolve ${cfg.slug}\` for the repos map (per repo: root, validations, worktreeRoot, provisioning).
 3. For EACH node in \`ready\` (this pass's wave):
    - Look up its repo's { root, validations, worktreeRoot, provisioning } via the node's \`repo\` field.
-   - Worktree path: <worktreeRoot>/${cfg.slug}/<id>; branch and base come from the node's frontmatter.
-   - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <base>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
+   - Worktree path: <worktreeRoot>/${cfg.slug}/<id>; branch comes from the node's frontmatter.
+   - Effective base: the node's frontmatter \`base:\` — EXCEPT when a same-repo parent (a dep whose \`repo\` equals the node's) has status \`merged\` in the dag's \`nodes\`: that parent's work is already in main and its pre-merge branch is a dead tip, so run \`git -C <repoRoot> fetch origin main\` and use the repo's **main** as the effective base, then record it back with \`node ${stateScript} set <deliverableFile> base main\` (the pr stage bases the child's PR consistently off the recorded value). Parents at done/pr-open keep the frontmatter \`base:\` unchanged.
+   - Run \`${worktreeScript} <repoRoot> <worktreePath> <branch> <effectiveBase>\` (idempotent: reuses a matching worktree, re-attaches an existing branch, otherwise creates from base; a non-zero exit is a hard stop — report it, don't improvise). Apply the repo's \`provisioning\` instructions only to a FRESH worktree (\`created: true\`), placeholder values only, never real secrets.
    - Record: \`node ${stateScript} set <deliverableFile> worktree <worktreePath>\` then \`node ${stateScript} transition <deliverableFile> in-progress\` (a \`parked\` node readmitted via --only flips parked → in-progress; in-progress → in-progress is an idempotent no-op).
    - resumeNote: null for a fresh (\`pending\`) node. For a re-dispatched node (was \`in-progress\` or \`parked\`), compose a short string from its frontmatter (\`parked_reason\`, \`review_rounds_used\`) and the latest ${cfg.dir}/reviews/<id>-code-round-*.md record — open findings and what was already done.
-Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from your FIRST dag run's printed JSON, plus \`resumable\` = the ids from that same output's \`nodes\` list whose status is \`in-progress\` ([] when none); include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. When the dag's \`remaining\` is 0, return items: [].`
+Return \`items\` (one per ready node: id, repo, repoRoot, validations, planFile as the ABSOLUTE deliverable file path, worktree, branch, base — the EFFECTIVE base from step 3, resumeNote, pr — the node's \`pr:\` frontmatter URL, null when none), \`dag\` = an object with EXACTLY four keys — \`ready\`, \`remaining\`, \`blocked\` copied unchanged from your FIRST dag run's printed JSON, plus ${resumableRule}; include NO other dag fields (nodes, topo, manifest are rejected by the schema). The workflow validates your wave against this paste — a wave that omits a ready node is rejected. When the dag's \`remaining\` is 0, return items: [].`
 }
 
 function applyPrompt(cfg: RunConfig, pass: number, results: readonly NodeOutcome[]): string {
@@ -204,10 +211,13 @@ export async function implementStage(cfg: RunConfig): Promise<ImplementStageResu
     })
     if (!wave) throw new Error(`implement stage: coordinator agent failed on pass ${pass}`)
 
-    // Trust the pasted dag, not the agent's summary; mismatch → one retry, then hard stop.
+    // Trust the pasted dag, not the agent's summary; mismatch → one retry, then
+    // hard stop. Under a scope, an out-of-scope id in the paste's resumable is
+    // NOT dispatchable (ready is already scoped at the state.ts source), so a
+    // wave sweeping in unrelated interrupted work is rejected here.
     const matchesDag = (w: WaveResult) => {
       const itemIds = new Set(w.items.map(i => i.id))
-      const dispatchable = new Set([...w.dag.ready, ...w.dag.resumable])
+      const dispatchable = new Set([...w.dag.ready, ...w.dag.resumable].filter(id => only === null || id === only))
       return w.dag.ready.every(id => itemIds.has(id)) && [...itemIds].every(id => dispatchable.has(id))
     }
     if (!matchesDag(wave)) {

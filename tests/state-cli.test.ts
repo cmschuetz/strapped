@@ -249,6 +249,53 @@ test('dag: --only readmits an in-progress node', () => {
   assert.deepEqual(parse<DagJson>(res).ready, ['D2'])
 })
 
+test('dag: --only scopes remaining and blocked to the named node', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [
+    { id: 'D1', status: 'done' },
+    { id: 'D2', deps: ['D1'], status: 'pending' },
+    { id: 'D3', status: 'pending' },
+  ])
+  // Scoped to a done node: remaining 0 and no blocked, though D2/D3 are pending.
+  const done = env.runState(['dag', dir, '--only', 'D1'])
+  assert.equal(done.status, 0, done.stderr)
+  const doneJson = parse<DagJson>(done)
+  assert.equal(doneJson.remaining, 0)
+  assert.deepEqual(doneJson.blocked, [])
+  assert.deepEqual(doneJson.ready, [])
+
+  // Scoped to a pending node whose dep is pending: remaining 1, blocked names it.
+  const blockedDir = env.writeRun('blocked-run', [
+    { id: 'D1', status: 'pending' },
+    { id: 'D2', deps: ['D1'], status: 'pending' },
+  ])
+  const res = env.runState(['dag', blockedDir, '--only', 'D2'])
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<DagJson>(res)
+  assert.equal(json.remaining, 1)
+  assert.deepEqual(json.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
+  assert.deepEqual(json.ready, [])
+
+  // Unscoped output over the same run is unchanged run-wide math.
+  const unscoped = parse<DagJson>(env.runState(['dag', dir]))
+  assert.equal(unscoped.remaining, 2)
+  assert.deepEqual(unscoped.blocked, [])
+})
+
+test('dag: --only on a readmitted parked node with unmet deps reports it blocked', () => {
+  const env = makeStateEnv()
+  const dir = env.writeRun('my-run', [
+    { id: 'D1', status: 'pending' },
+    { id: 'D2', deps: ['D1'], status: 'parked', parked_reason: 'validation failure' },
+  ])
+  const res = env.runState(['dag', dir, '--only', 'D2'])
+  assert.equal(res.status, 0, res.stderr)
+  const json = parse<DagJson>(res)
+  assert.deepEqual(json.ready, [], 'unmet deps keep the readmitted node out of ready')
+  assert.deepEqual(json.blocked, [{ id: 'D2', blockedOn: ['D1'] }])
+  assert.equal(json.remaining, 1)
+})
+
 test('dag: unknown dep / cycle → exit 1 naming the offender', () => {
   const env = makeStateEnv()
   const unknownDir = env.writeRun('unknown-dep', [

@@ -45,6 +45,51 @@ test('pr: the /strapped:pr singleton config omits rulesByRound entirely and stil
   assert.deepEqual(result.results.pr, { prs: PR_RESULT.prs, summary: PR_RESULT.summary, dryRun: false })
 })
 
+function prOnlyCfg(prArgs: Record<string, unknown>) {
+  return {
+    slug: 'test-run',
+    dir: '/state/runs/test-run',
+    conventionsFile: '/plugin/conventions.md',
+    scripts: { state: '/plugin/scripts/state.mjs', worktree: '/plugin/scripts/ensure-worktree.sh' },
+    seed: 42,
+    confidenceMin: 70,
+    planRounds: 3,
+    codeRounds: 3,
+    stages: ['pr'],
+    stageArgs: { pr: prArgs },
+  }
+}
+
+test('stageArgs.pr.only: a string is accepted and threads into the scoped gate probe', async () => {
+  const { result, calls } = await runWorkflow(WORKFLOW, {
+    args: prOnlyCfg({ dryRun: true, only: 'D1' }),
+    agent: agentByLabel({
+      'pr-gate': { remaining: 0, notDone: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  const probe = calls.find(c => c.kind === 'agent' && c.opts?.label === 'pr-gate')
+  assert.ok(probe !== undefined && probe.kind === 'agent')
+  assert.ok(probe.prompt.includes('dag /state/runs/test-run --only D1'))
+  assert.deepEqual(result.results.pr.prs, PR_RESULT.prs)
+})
+
+test('stageArgs.pr.only: null is ignored and a non-string is rejected at config parse', async () => {
+  const { result } = await runWorkflow(WORKFLOW, {
+    args: prOnlyCfg({ dryRun: true, only: null }),
+    agent: agentByLabel({
+      'pr-gate': { remaining: 0, notDone: [] },
+      'pr-create': PR_RESULT,
+    }),
+  })
+  assert.deepEqual(result.completed, ['pr'])
+
+  await assert.rejects(
+    runWorkflow(WORKFLOW, { args: prOnlyCfg({ dryRun: true, only: 7 }), agent: agentByLabel({}) }),
+    /config: stageArgs\.pr\.only must be a string/
+  )
+})
+
 function planOnlyCfg(overrides: Record<string, unknown> = {}) {
   return {
     slug: 'test-run',
