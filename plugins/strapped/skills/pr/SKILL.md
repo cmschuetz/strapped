@@ -7,8 +7,9 @@ Create/update stacked PRs for `done` deliverables of one strapped run. Formats a
 
 ## Arguments
 
-`$ARGUMENTS`: `<slug> [--dry-run] [--no-push] [--update]`
+`$ARGUMENTS`: `<slug> [--only <Did>] [--dry-run] [--no-push] [--update]`
 
+- `--only <Did>`: create mode only — scope the create pass to ONE deliverable: thread the id into `stageArgs.pr.only` in the dispatch below (the stage's gate probes `dag <runDir> --only <Did>` and its candidates are the scoped node plus its not-yet-PR'd done ancestors, per the conventions' **Stacked PRs** scoped-create rule). Combined with `--update` → stop with a message: scoped update is not supported (the rebase cascade stays run-wide).
 - `--dry-run`: print every git/gh command and every PR body; execute nothing.
 - `--no-push`: prepare bodies and print commands but skip `git push` and `gh pr create` (alias-level equivalent of `--dry-run`; both mean nothing leaves this machine).
 - `--update`: instead of creating PRs, propagate parent-branch changes down the stack (see below).
@@ -38,7 +39,7 @@ Dispatch the mono-workflow with a singleton stage list — invoke the Workflow t
   "slug": "<slug>",
   "dir": "<runRoot>/<slug>",
   "stages": ["pr"],
-  "stageArgs": { "pr": { "dryRun": false } },
+  "stageArgs": { "pr": { "dryRun": false, "only": "<the --only Did, else omit>" } },
   "scripts": { "state": "$PLUGIN_ROOT/scripts/state.mjs", "worktree": "$PLUGIN_ROOT/scripts/ensure-worktree.sh" },
   "conventionsFile": "$PLUGIN_ROOT/conventions.md",
   "seed": "<the manifest seed>", "confidenceMin": 70, "planRounds": 1, "codeRounds": 1
@@ -46,7 +47,7 @@ Dispatch the mono-workflow with a singleton stage list — invoke the Workflow t
 ```
 
 - With `--dry-run` or `--no-push`, set `stageArgs.pr.dryRun` to `true`: the agent prints every would-be git/gh/state command and full PR bodies, executes nothing that mutates, and changes no frontmatter.
-- The stage is gated on every node being done-or-later: dispatched alone, it probes `state.mjs dag` first and stops (returning `gateFailed: true` with the not-done nodes) when any node is earlier than `done`.
+- The stage is gated on every in-scope node being done-or-later: dispatched alone, it probes `state.mjs dag` (with `--only <Did>` when scoped) first and stops (returning `gateFailed: true` with the not-done nodes) when any in-scope node is earlier than `done`.
 - Read `results.pr` from the return — `{prs: [{id, url, skipped, reason}], summary, dryRun}` — and report created vs skipped PRs (with reasons) to the user.
 
 ## Update mode (`--update`)

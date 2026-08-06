@@ -38,6 +38,8 @@ export interface ImplementStageArgs {
 
 export interface PrStageArgs {
   dryRun?: boolean
+  /** Scope the create pass (and its gate probe) to one deliverable id. */
+  only?: string
 }
 
 export interface StageArgsMap {

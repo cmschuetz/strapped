@@ -3492,8 +3492,14 @@ function cmdDag(runDir, only) {
     ready = ready.filter((id) => id === only);
   }
   ready.sort();
-  const blocked = nodes.filter((n) => n.status === "pending" && !depsMet(n)).map((n) => ({ id: n.id, blockedOn: n.deps.filter((dep) => !complete(dep)) }));
-  const remaining = nodes.filter((n) => !COMPLETE_STATUSES.has(n.status)).length;
+  let blocked = nodes.filter((n) => n.status === "pending" && !depsMet(n)).map((n) => ({ id: n.id, blockedOn: n.deps.filter((dep) => !complete(dep)) }));
+  let remaining = nodes.filter((n) => !COMPLETE_STATUSES.has(n.status)).length;
+  if (only) {
+    const node = byId.get(only);
+    const incomplete = node !== undefined && !COMPLETE_STATUSES.has(node.status);
+    remaining = incomplete ? 1 : 0;
+    blocked = node !== undefined && incomplete && !depsMet(node) ? [{ id: node.id, blockedOn: node.deps.filter((dep) => !complete(dep)) }] : [];
+  }
   out({
     manifest: { status: mfm.status ?? null, seed: mfm.seed ?? null, budgets: mfm.budgets ?? null },
     nodes,
