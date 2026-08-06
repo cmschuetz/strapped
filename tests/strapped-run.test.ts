@@ -983,6 +983,11 @@ test('pr-create prompt states the merged-parent base rule', async () => {
     assert.ok(prompt.includes('fetch origin main'))
     assert.ok(prompt.includes('rebase --onto origin/main <parent-branch>'))
     assert.ok(prompt.includes('NEVER `git rebase main <branch>` from outside the worktree'))
+    assert.ok(
+      prompt.includes("resolve `<parent-branch>` from the merged PARENT node's `branch:`"),
+      'parent branch comes from the parent node, not the rewritten child base'
+    )
+    assert.ok(prompt.includes("NEVER from the child's frontmatter `base:`"))
     assert.ok(prompt.includes('headRefOid'))
     assert.ok(prompt.includes('--force-with-lease'))
     assert.ok(prompt.includes('Parents at `done`/`pr-open` keep the parent-branch base'))
